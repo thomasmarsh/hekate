@@ -8,7 +8,12 @@ publish.workspace = true
 description = "Scenario source schema, validation, and compiled scenario for Tangle."
 
 [dependencies]
+glam.workspace = true
+schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+serde_json5.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

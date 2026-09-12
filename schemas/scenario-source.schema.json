@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ScenarioSource",
+  "description": "A hand-authored scenario document before validation or compilation.",
+  "type": "object",
+  "properties": {
+    "coordinate_system": {
+      "description": "Human-facing names for the two world axes.",
+      "$ref": "#/$defs/CoordinateSystem"
+    },
+    "id": {
+      "description": "Stable scenario identifier recorded in run provenance.",
+      "type": "string"
+    },
+    "paths": {
+      "description": "Guide paths agents travel along.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PathSource"
+      }
+    },
+    "population": {
+      "description": "Walking-skeleton population tuning.",
+      "$ref": "#/$defs/PopulationSource",
+      "default": {
+        "vehicle_count": 6,
+        "vehicle_length_m": 4.5,
+        "vehicle_spacing_m": 20.0,
+        "vehicle_speed_mps": 12.0,
+        "vehicle_width_m": 1.8
+      }
+    },
+    "portals": {
+      "description": "Entry and exit points attached to path ends.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PortalSource"
+      }
+    },
+    "schema_version": {
+      "description": "Schema version the document was written against.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "coordinate_system",
+    "paths",
+    "portals"
+  ],
+  "$defs": {
+    "CoordinateSystem": {
+      "description": "Human-facing names for the world coordinate axes.",
+      "type": "object",
+      "properties": {
+        "x": {
+          "description": "Name of the positive x axis, for example `east_m`.",
+          "type": "string"
+        },
+        "y": {
+          "description": "Name of the positive y axis, for example `north_m`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "PathEnd": {
+      "description": "Which end of a path a portal is attached to.",
+      "oneOf": [
+        {
+          "description": "The first vertex of the path.",
+          "type": "string",
+          "const": "start"
+        },
+        {
+          "description": "The last vertex of the path.",
+          "type": "string",
+          "const": "end"
+        }
+      ]
+    },
+    "PathSource": {
+      "description": "One authored guide path as an ordered polyline.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable path identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "points": {
+          "description": "Ordered vertices of the guide path.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PointSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "points"
+      ]
+    },
+    "PointSource": {
+      "description": "A world-space vertex in metres.",
+      "type": "object",
+      "properties": {
+        "x": {
+          "description": "East/north coordinate in metres.",
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "description": "East/north coordinate in metres.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "PopulationSource": {
+      "description": "Walking-skeleton population tuning.",
+      "type": "object",
+      "properties": {
+        "vehicle_count": {
+          "description": "Number of vehicles introduced on the guide path.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vehicle_length_m": {
+          "description": "Vehicle body length in metres.",
+          "type": "number",
+          "format": "double"
+        },
+        "vehicle_spacing_m": {
+          "description": "Longitudinal gap between adjacent vehicles in metres.",
+          "type": "number",
+          "format": "double"
+        },
+        "vehicle_speed_mps": {
+          "description": "Constant vehicle speed in metres per second.",
+          "type": "number",
+          "format": "double"
+        },
+        "vehicle_width_m": {
+          "description": "Vehicle body width in metres.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "vehicle_count",
+        "vehicle_speed_mps",
+        "vehicle_spacing_m",
+        "vehicle_length_m",
+        "vehicle_width_m"
+      ]
+    },
+    "PortalSource": {
+      "description": "An entry or exit point attached to one end of a path.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "description": "Which end of the path the portal marks.",
+          "$ref": "#/$defs/PathEnd"
+        },
+        "id": {
+          "description": "Stable portal identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Identifier of the path this portal belongs to.",
+          "type": "string"
+        },
+        "width_m": {
+          "description": "Traversable width of the portal in metres.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "end",
+        "width_m"
+      ]
+    }
+  }
+}
