@@ -40,6 +40,13 @@
 //! the closest vertex-to-box distance; otherwise the penetration depth is the
 //! least projection overlap.
 //!
+//! [`body_contact_normal`] is the direction that goes with that clearance: the
+//! unit vector from the first body toward the second along which the second
+//! body separates with the least motion. For disjoint bodies it is the exact
+//! direction of the clearance query's steepest increase; for overlapping bodies
+//! it is the minimum-translation direction. [`crate::swept`] uses it as the
+//! direction the clearance changes along over a tick.
+//!
 //! ## Tolerance
 //!
 //! The projection arithmetic of the separating-axis test can read a touching
@@ -153,6 +160,27 @@ impl BodyShape {
         }
     }
 
+    /// The shape translated by `offset_m` metres, keeping its orientation.
+    pub(crate) fn translated(&self, offset_m: DVec2) -> Self {
+        match *self {
+            Self::Circle { centre, radius_m } => Self::Circle {
+                centre: centre + offset_m,
+                radius_m,
+            },
+            Self::Box {
+                centre,
+                heading_rad,
+                length_m,
+                width_m,
+            } => Self::Box {
+                centre: centre + offset_m,
+                heading_rad,
+                length_m,
+                width_m,
+            },
+        }
+    }
+
     /// The tight axis-aligned box around the body, in world metres.
     pub fn bounds(&self) -> Aabb {
         match *self {
@@ -249,6 +277,82 @@ pub fn bodies_intersect(first: &BodyShape, second: &BodyShape) -> bool {
     body_clearance_m(first, second) < 0.0
 }
 
+/// The unit contact normal between two bodies, pointing from `first` toward
+/// `second`.
+///
+/// The normal is the direction that separates the two shapes with the least
+/// motion of the second body, and the direction the signed clearance changes
+/// fastest along:
+///
+/// - when the shapes are disjoint (`body_clearance_m(first, second) > 0.0`) it
+///   is the exact separation direction: the unit vector from the closest point
+///   of `first` to the closest point of `second`, so translating `second` by
+///   `epsilon * normal` increases the clearance at rate `epsilon`;
+/// - when they overlap or touch it is the minimum-translation direction: the
+///   least-overlap axis of two boxes, the centre-to-centre direction of two
+///   circles, or the nearest surface direction of a box to a circle.
+///
+/// Several directions can separate equally, so the tie-breaks are explicit:
+///
+/// - two boxes: the face axis with the strictly least projection overlap wins,
+///   scanned in the order `first`'s length axis, `first`'s width axis,
+///   `second`'s length axis, `second`'s width axis; the axis is oriented from
+///   `first` toward `second` by the sign of the centre-to-centre projection, and
+///   an exactly zero projection keeps the axis's own direction;
+/// - two boxes that are disjoint: an exact tie between closest-feature
+///   candidates keeps the first in ring order, `first`'s corners before
+///   `second`'s;
+/// - a circle and a box with the circle's centre inside the box: the nearer face
+///   wins, a centre equidistant from the two face pairs keeps the length axis,
+///   and a centre exactly on a face line keeps that axis's positive direction;
+/// - two circles with coincident centres, where no direction is defined:
+///   [`DVec2::X`].
+///
+/// The result is a unit vector. Swapping the arguments mirrors it,
+/// `body_contact_normal(second, first) == -body_contact_normal(first, second)`,
+/// except where several directions tie exactly and the tie-break order above
+/// names a different axis for the swapped pair.
+pub fn body_contact_normal(first: &BodyShape, second: &BodyShape) -> DVec2 {
+    match (first, second) {
+        (
+            BodyShape::Circle {
+                centre: first_centre,
+                ..
+            },
+            BodyShape::Circle {
+                centre: second_centre,
+                ..
+            },
+        ) => unit_or_x(*second_centre - *first_centre),
+        (BodyShape::Circle { centre, .. }, box_body @ BodyShape::Box { .. }) => {
+            -box_circle_contact_normal(box_body, *centre)
+        }
+        (box_body @ BodyShape::Box { .. }, BodyShape::Circle { centre, .. }) => {
+            box_circle_contact_normal(box_body, *centre)
+        }
+        (first @ BodyShape::Box { .. }, second @ BodyShape::Box { .. }) => {
+            box_box_contact_normal(first, second)
+        }
+    }
+}
+
+/// A unit vector, or [`DVec2::X`] when `vector` is zero and no direction is
+/// defined.
+fn unit_or_x(vector: DVec2) -> DVec2 {
+    let length = vector.length();
+    if length > 0.0 {
+        vector / length
+    } else {
+        DVec2::X
+    }
+}
+
+/// The local direction of a unit positive axis: `-1.0` for a negative
+/// coordinate, `+1.0` for a zero or positive one.
+fn forward_sign(coordinate: f64) -> f64 {
+    if coordinate < 0.0 { -1.0 } else { 1.0 }
+}
+
 /// A body-local box frame: centre, unit axes, and half extents.
 struct BoxFrame {
     centre: DVec2,
@@ -291,27 +395,43 @@ fn box_corners(frame: &BoxFrame) -> [DVec2; 4] {
     ]
 }
 
-/// Distance in metres from a point to the closed box frame.
-fn point_to_box_distance(point: DVec2, frame: &BoxFrame) -> f64 {
+/// The coordinates of a point in a box frame's local axes: along the length
+/// axis then along the width axis.
+fn local_offset(point: DVec2, frame: &BoxFrame) -> DVec2 {
     let offset = point - frame.centre;
-    let local = DVec2::new(offset.dot(frame.forward), offset.dot(frame.left));
-    let clamped = DVec2::new(
+    DVec2::new(offset.dot(frame.forward), offset.dot(frame.left))
+}
+
+/// The local coordinates clamped into the box frame: the local coordinates of
+/// the closest point on the box.
+fn clamped_offset(local: DVec2, frame: &BoxFrame) -> DVec2 {
+    DVec2::new(
         local.x.clamp(-frame.half_length, frame.half_length),
         local.y.clamp(-frame.half_width, frame.half_width),
-    );
-    (local - clamped).length()
+    )
+}
+
+/// The world vector of a vector given in a box frame's local axes.
+fn world_offset(local: DVec2, frame: &BoxFrame) -> DVec2 {
+    frame.forward * local.x + frame.left * local.y
+}
+
+/// The closest point on a box frame to `point`, in world metres.
+fn closest_point_on_box(point: DVec2, frame: &BoxFrame) -> DVec2 {
+    let local = local_offset(point, frame);
+    frame.centre + world_offset(clamped_offset(local, frame), frame)
+}
+
+/// Distance in metres from a point to the closed box frame.
+fn point_to_box_distance(point: DVec2, frame: &BoxFrame) -> f64 {
+    (point - closest_point_on_box(point, frame)).length()
 }
 
 /// Signed clearance in metres between a circle and a box.
 fn circle_box_clearance_m(centre: DVec2, radius_m: f64, box_body: &BodyShape) -> f64 {
     let frame = box_frame(box_body);
-    let offset = centre - frame.centre;
-    let local = DVec2::new(offset.dot(frame.forward), offset.dot(frame.left));
-    let clamped = DVec2::new(
-        local.x.clamp(-frame.half_length, frame.half_length),
-        local.y.clamp(-frame.half_width, frame.half_width),
-    );
-    let outside_distance = (local - clamped).length();
+    let local = local_offset(centre, &frame);
+    let outside_distance = (local - clamped_offset(local, &frame)).length();
     if outside_distance > 0.0 {
         // The centre is outside the box, so the shapes overlap when the radius
         // reaches the nearest surface.
@@ -325,6 +445,30 @@ fn circle_box_clearance_m(centre: DVec2, radius_m: f64, box_body: &BodyShape) ->
     }
 }
 
+/// The unit direction from a box toward a circle centre.
+///
+/// Outside the box it is the closest-feature direction, the exact direction the
+/// circle/box clearance increases along; inside, it is the nearer face normal,
+/// the minimum translation that carries the circle clear. A centre exactly on a
+/// face line keeps that axis's positive direction; an equidistant centre keeps
+/// the length axis.
+fn box_circle_contact_normal(box_body: &BodyShape, centre: DVec2) -> DVec2 {
+    let frame = box_frame(box_body);
+    let local = local_offset(centre, &frame);
+    let gap = local - clamped_offset(local, &frame);
+    if gap.length_squared() > 0.0 {
+        unit_or_x(world_offset(gap, &frame))
+    } else {
+        let to_length_face = frame.half_length - local.x.abs();
+        let to_width_face = frame.half_width - local.y.abs();
+        if to_length_face <= to_width_face {
+            frame.forward * forward_sign(local.x)
+        } else {
+            frame.left * forward_sign(local.y)
+        }
+    }
+}
+
 /// The interval a box frame spans when projected onto `axis`.
 fn box_projection(frame: &BoxFrame, axis: DVec2) -> (f64, f64) {
     let centre = frame.centre.dot(axis);
@@ -333,31 +477,78 @@ fn box_projection(frame: &BoxFrame, axis: DVec2) -> (f64, f64) {
     (centre - radius, centre + radius)
 }
 
+/// The face axis of least projection overlap between two box frames, with that
+/// overlap, or `None` when a separating axis exists.
+///
+/// The first axis of `[first.forward, first.left, second.forward, second.left]`
+/// wins an exact tie, so the axis is a pure function of the two boxes.
+fn box_box_least_overlap_axis(first: &BoxFrame, second: &BoxFrame) -> Option<(DVec2, f64)> {
+    let mut least: Option<(DVec2, f64)> = None;
+    for axis in [first.forward, first.left, second.forward, second.left] {
+        let (first_min, first_max) = box_projection(first, axis);
+        let (second_min, second_max) = box_projection(second, axis);
+        let overlap = first_max.min(second_max) - first_min.max(second_min);
+        if overlap < 0.0 {
+            return None;
+        }
+        if least.is_none_or(|(_, best)| overlap < best) {
+            least = Some((axis, overlap));
+        }
+    }
+    least
+}
+
 /// Signed clearance in metres between two boxes, by separating-axis test.
 fn box_box_clearance_m(first: &BodyShape, second: &BodyShape) -> f64 {
     let first_frame = box_frame(first);
     let second_frame = box_frame(second);
-    let mut least_overlap = f64::INFINITY;
-    for axis in [
-        first_frame.forward,
-        first_frame.left,
-        second_frame.forward,
-        second_frame.left,
-    ] {
-        let (first_min, first_max) = box_projection(&first_frame, axis);
-        let (second_min, second_max) = box_projection(&second_frame, axis);
-        let overlap = first_max.min(second_max) - first_min.max(second_min);
-        if overlap < 0.0 {
-            // A separating axis exists, so the boxes are disjoint and the exact
-            // distance is the closest vertex-to-box distance.
-            return box_box_distance_m(&first_frame, &second_frame);
-        }
-        least_overlap = least_overlap.min(overlap);
+    match box_box_least_overlap_axis(&first_frame, &second_frame) {
+        // A separating axis exists, so the boxes are disjoint and the exact
+        // distance is the closest vertex-to-box distance.
+        None => box_box_distance_m(&first_frame, &second_frame),
+        Some((_, least_overlap)) if least_overlap <= CONTACT_EPSILON_M => 0.0,
+        Some((_, least_overlap)) => -least_overlap,
     }
-    if least_overlap <= CONTACT_EPSILON_M {
-        0.0
+}
+
+/// The exact separation direction between two disjoint boxes: the unit vector
+/// from the closest point of the first to the closest point of the second.
+///
+/// For disjoint convex polygons the closest pair has a vertex of one box as an
+/// endpoint, so scanning each box's corners against the other box covers it. An
+/// exact tie keeps the first candidate in ring order, the first box's corners
+/// before the second box's.
+fn box_box_separation_direction(first: &BoxFrame, second: &BoxFrame) -> DVec2 {
+    let mut nearest = f64::INFINITY;
+    let mut direction = DVec2::ZERO;
+    for corner in box_corners(first) {
+        let candidate = closest_point_on_box(corner, second) - corner;
+        if candidate.length() < nearest {
+            nearest = candidate.length();
+            direction = candidate;
+        }
+    }
+    for corner in box_corners(second) {
+        let candidate = corner - closest_point_on_box(corner, first);
+        if candidate.length() < nearest {
+            nearest = candidate.length();
+            direction = candidate;
+        }
+    }
+    unit_or_x(direction)
+}
+
+/// The unit contact normal between two boxes.
+fn box_box_contact_normal(first: &BodyShape, second: &BodyShape) -> DVec2 {
+    let first_frame = box_frame(first);
+    let second_frame = box_frame(second);
+    let Some((axis, _)) = box_box_least_overlap_axis(&first_frame, &second_frame) else {
+        return box_box_separation_direction(&first_frame, &second_frame);
+    };
+    if axis.dot(second_frame.centre - first_frame.centre) < 0.0 {
+        -axis
     } else {
-        -least_overlap
+        axis
     }
 }
 
@@ -454,6 +645,93 @@ mod tests {
         // Rotating the horizontal body to the left axis clears the origin.
         let offset = box_body(0.0, 3.0, 0.0, 4.0, 0.5);
         assert!(body_clearance_m(&horizontal, &offset) > 0.0);
+    }
+
+    #[test]
+    fn circle_circle_normal_points_from_the_first_toward_the_second() {
+        let near = circle(0.0, 0.0, 1.0);
+        let far = circle(3.0, 0.0, 1.0);
+        assert_eq!(body_contact_normal(&near, &far), DVec2::X);
+        assert_eq!(body_contact_normal(&far, &near), DVec2::NEG_X);
+        // Overlapping circles: the same centre-to-centre minimum translation.
+        let overlapping = circle(1.5, 0.0, 1.0);
+        assert_eq!(body_contact_normal(&near, &overlapping), DVec2::X);
+        // Coincident centres, where no direction is defined: the documented
+        // tie-break.
+        assert_eq!(body_contact_normal(&near, &circle(0.0, 0.0, 1.0)), DVec2::X);
+    }
+
+    #[test]
+    fn the_normal_separates_the_bodies() {
+        // Translating the second body by a small step along the normal
+        // increases a disjoint pair's clearance at unit rate, and translating
+        // it by the penetration depth leaves an overlapping pair exactly
+        // touching.
+        const STEP_M: f64 = 1e-6;
+        let first = box_body(0.0, 0.0, 0.3, 4.0, 2.0);
+        let disjoint = circle(3.7, 1.6, 0.4);
+        let clearance = body_clearance_m(&first, &disjoint);
+        assert!(clearance > 0.0);
+        let normal = body_contact_normal(&first, &disjoint);
+        let stepped = body_clearance_m(&first, &disjoint.translated(normal * STEP_M));
+        assert!((stepped - (clearance + STEP_M)).abs() < 1e-9);
+
+        let overlapping = circle(2.0, 0.0, 0.6);
+        let penetration = -body_clearance_m(&first, &overlapping);
+        assert!(penetration > 0.0);
+        let normal = body_contact_normal(&first, &overlapping);
+        let separated = body_clearance_m(&first, &overlapping.translated(normal * penetration));
+        assert!(
+            separated.abs() < 1e-9,
+            "clearance after separation {separated}"
+        );
+    }
+
+    #[test]
+    fn box_box_normal_prefers_the_least_overlap_axis() {
+        // Two 2 m squares overlapping 0.5 m on x and 1.5 m on y: the least
+        // overlap is the x axis, oriented from the first toward the second.
+        let first = box_body(0.0, 0.0, 0.0, 2.0, 2.0);
+        let second = box_body(1.5, 0.0, 0.0, 2.0, 2.0);
+        assert_eq!(body_contact_normal(&first, &second), DVec2::X);
+        assert_eq!(body_contact_normal(&second, &first), DVec2::NEG_X);
+        // A pair offset on both axes picks the axis whose overlap is least, so
+        // the reported direction separates with the least motion.
+        let diagonal = box_body(1.2, 0.2, 0.0, 2.0, 2.0);
+        let normal = body_contact_normal(&first, &diagonal);
+        let penetration = -body_clearance_m(&first, &diagonal);
+        assert!(body_clearance_m(&first, &diagonal.translated(normal * penetration)).abs() < 1e-9);
+        // Disjoint boxes: the normal is the closest-feature direction, which for
+        // corner-to-corner proximity is not a face axis.
+        let corner = box_body(2.5, 2.5, 0.0, 2.0, 2.0);
+        let normal = body_contact_normal(&first, &corner);
+        let expected = DVec2::new(1.0, 1.0).normalize();
+        assert!(
+            (normal - expected).length() < 1e-12,
+            "corner-to-corner normal {normal:?}"
+        );
+        // Stepping along it increases the clearance at unit rate.
+        const STEP_M: f64 = 1e-6;
+        let clearance = body_clearance_m(&first, &corner);
+        let stepped = body_clearance_m(&first, &corner.translated(normal * STEP_M));
+        assert!((stepped - (clearance + STEP_M)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn circle_box_normal_uses_the_nearest_face_inside_the_box() {
+        // A 6 m by 2 m box: half length 3, half width 1. The centre below the
+        // box is nearest the width face, so the normal is minus the left axis.
+        let body = box_body(0.0, 0.0, 0.0, 6.0, 2.0);
+        let below = circle(0.0, -1.5, 0.25);
+        assert_eq!(body_contact_normal(&body, &below), DVec2::NEG_Y);
+        assert_eq!(body_contact_normal(&below, &body), DVec2::Y);
+        // A centre inside the box close to the length face separates along it.
+        let inside = circle(2.5, 0.0, 0.25);
+        assert_eq!(body_contact_normal(&body, &inside), DVec2::X);
+        // A circle outside near a corner separates corner-wise.
+        let corner = circle(4.0, 2.0, 0.25);
+        let expected = DVec2::new(1.0, 1.0).normalize();
+        assert!((body_contact_normal(&body, &corner) - expected).length() < 1e-12);
     }
 
     #[test]

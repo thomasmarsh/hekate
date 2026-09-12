@@ -15,6 +15,12 @@
 //! and box/circle queries, and the signed-clearance tolerance live in
 //! [`crate::query`]; this module only bounds and orders candidates.
 //!
+//! [`SweptBroadPhase`] is the swept variant of the same grid: it indexes each
+//! body's tick-swept bound instead of its start bound, so a fast body that
+//! crosses another between two ticks is still a candidate pair. The swept
+//! bounds come from [`SweptBody`] and the time-of-impact cast a caller runs on
+//! the pairs lives in [`crate::swept`].
+//!
 //! ## Determinism
 //!
 //! [`BroadPhase`] stores its cells in a `Vec` sorted by integer cell coordinate
@@ -43,6 +49,7 @@ use glam::DVec2;
 
 use crate::agent::{AgentId, AgentStore};
 use crate::query::{self, Aabb, BodyShape};
+use crate::swept::SweptBody;
 
 /// Edge length in metres of one uniform-grid cell.
 ///
@@ -229,6 +236,146 @@ impl BroadPhase {
         Cell {
             x: (position.x / self.cell_size_m).floor() as i32,
             y: (position.y / self.cell_size_m).floor() as i32,
+        }
+    }
+}
+
+/// A deterministic uniform-grid broad phase over the swept volumes of bodies
+/// moving through one tick.
+///
+/// It composes [`BroadPhase`]: the grid indexes each body's start centre, and
+/// the bound stored per body is its tick-swept bound from
+/// [`SweptBody::swept_bounds`] rather than its start bound. A query is widened
+/// by the largest swept reach among the indexed bodies and every candidate is
+/// then filtered by its own swept bound, so
+/// [`Self::candidates_overlapping`] returns exactly the bodies whose swept bound
+/// overlaps the query box.
+///
+/// That is the tunnelling protection the static broad phase cannot give: a fast
+/// body leaves one side of a thin body and appears on the other with no overlap
+/// at either tick endpoint, so a start-bound index never pairs them, while both
+/// swept bounds cover the crossing point.
+///
+/// Ordering matches [`BroadPhase`]: a rebuild is a pure function of the indexed
+/// bodies, candidates are ascending and unique by [`AgentId`], and pairs are
+/// ascending `(AgentId, AgentId)` with `first < second`, each appearing once.
+#[derive(Debug, Clone)]
+pub struct SweptBroadPhase {
+    grid: BroadPhase,
+    /// Tick-swept bound of every indexed body, in ascending [`AgentId`] order.
+    swept: Vec<(AgentId, Aabb)>,
+    /// Reused start-shape buffer, so a rebuild does not allocate after warmup.
+    shapes: Vec<(AgentId, BodyShape)>,
+    /// Largest swept reach in metres, the uniform bound a query widens by.
+    max_reach_m: f64,
+}
+
+impl Default for SweptBroadPhase {
+    fn default() -> Self {
+        Self::new(GRID_CELL_SIZE_M)
+    }
+}
+
+impl SweptBroadPhase {
+    /// A swept broad phase with the given cell edge length in metres.
+    ///
+    /// A non-finite or non-positive edge falls back to [`GRID_CELL_SIZE_M`], so
+    /// the broad phase is always well defined.
+    pub fn new(cell_size_m: f64) -> Self {
+        Self {
+            grid: BroadPhase::new(cell_size_m),
+            swept: Vec::new(),
+            shapes: Vec::new(),
+            max_reach_m: 0.0,
+        }
+    }
+
+    /// The cell edge length in metres.
+    pub fn cell_size_m(&self) -> f64 {
+        self.grid.cell_size_m()
+    }
+
+    /// The largest indexed swept reach in metres, the query-widening bound.
+    /// Zero when no body is indexed.
+    pub fn max_reach_m(&self) -> f64 {
+        self.max_reach_m
+    }
+
+    /// Number of indexed bodies.
+    pub fn len(&self) -> usize {
+        self.swept.len()
+    }
+
+    /// Whether no body is indexed.
+    pub fn is_empty(&self) -> bool {
+        self.swept.is_empty()
+    }
+
+    /// Rebuild from a set of uniquely identified swept bodies, in any input
+    /// order.
+    ///
+    /// A rebuild is a pure function of the bodies, so rebuilding at the start of
+    /// a tick gives every swept query that tick one consistent view.
+    pub fn rebuild(&mut self, bodies: &[(AgentId, SweptBody)]) {
+        self.max_reach_m = bodies
+            .iter()
+            .map(|(_, body)| body.swept_reach_m())
+            .fold(0.0, f64::max);
+        self.shapes.clear();
+        self.shapes
+            .extend(bodies.iter().map(|(id, body)| (*id, body.shape)));
+        self.grid.rebuild(&self.shapes);
+        self.swept.clear();
+        self.swept
+            .extend(bodies.iter().map(|(id, body)| (*id, body.swept_bounds())));
+        self.swept.sort_by_key(|(id, _)| *id);
+        debug_assert!(
+            self.swept.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "SweptBroadPhase requires unique AgentIds"
+        );
+    }
+
+    /// The tick-swept bound of one indexed body, in world metres.
+    pub fn swept_bounds_of(&self, id: AgentId) -> Option<Aabb> {
+        self.swept
+            .binary_search_by_key(&id, |(indexed, _)| *indexed)
+            .ok()
+            .map(|position| self.swept[position].1)
+    }
+
+    /// The bodies whose tick-swept bound overlaps `bounds`, in ascending
+    /// [`AgentId`] order.
+    ///
+    /// The result replaces `out`; `out` is only cleared and re-filled, so a
+    /// caller can reuse one buffer across a tick. The swept query of one body's
+    /// whole motion is this query on that body's [`SweptBody::swept_bounds`].
+    pub fn candidates_overlapping(&self, bounds: Aabb, out: &mut Vec<AgentId>) {
+        self.grid
+            .candidates_in_aabb(bounds.expand(self.max_reach_m), out);
+        out.retain(|id| {
+            self.swept_bounds_of(*id)
+                .is_some_and(|swept| swept.overlaps(&bounds))
+        });
+    }
+
+    /// Every unordered candidate pair `(first, second)`, `first < second`, whose
+    /// tick-swept bounds overlap, in ascending `(AgentId, AgentId)` order.
+    ///
+    /// The pair set is a superset of every pair that touches during the tick: a
+    /// caller applies [`time_of_impact`](crate::swept::time_of_impact) or an
+    /// exact static query to each pair. Each unordered pair appears once and no
+    /// pair repeats.
+    pub fn candidate_pairs(&self, out: &mut Vec<(AgentId, AgentId)>) {
+        out.clear();
+        let mut candidates: Vec<AgentId> = Vec::new();
+        for (first, first_bounds) in &self.swept {
+            self.candidates_overlapping(*first_bounds, &mut candidates);
+            for second in &candidates {
+                if second.index() <= first.index() {
+                    continue;
+                }
+                out.push((*first, *second));
+            }
         }
     }
 }
@@ -539,6 +686,130 @@ mod tests {
         assert_eq!(out, vec![AgentId::from_index(0)]);
         // The tight query, by contrast, misses a body whose centre is outside.
         phase.candidates_in_aabb(bounds, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn the_swept_phase_pairs_a_crossing_body_the_static_phase_misses() {
+        // Body 0 crosses body 1 entirely: no overlap at either tick endpoint,
+        // so an index of the start bounds never pairs them.
+        let start_bodies = vec![
+            (AgentId::from_index(0), body(0.0, 0.0, 0.5)),
+            (AgentId::from_index(1), body(5.0, 0.0, 0.5)),
+        ];
+        let mut static_phase = BroadPhase::default();
+        static_phase.rebuild(&start_bodies);
+        let mut pairs = Vec::new();
+        static_phase.candidate_pairs(&mut pairs);
+        assert!(
+            pairs.is_empty(),
+            "a start-bound index cannot pair a crossing body"
+        );
+
+        let swept = vec![
+            (
+                AgentId::from_index(0),
+                SweptBody {
+                    shape: body(0.0, 0.0, 0.5),
+                    displacement_m: DVec2::new(10.0, 0.0),
+                },
+            ),
+            (
+                AgentId::from_index(1),
+                SweptBody {
+                    shape: body(5.0, 0.0, 0.5),
+                    displacement_m: DVec2::ZERO,
+                },
+            ),
+        ];
+        let mut phase = SweptBroadPhase::default();
+        phase.rebuild(&swept);
+        assert_eq!(phase.len(), 2);
+        assert!((phase.max_reach_m() - 10.5).abs() < 1e-12);
+        phase.candidate_pairs(&mut pairs);
+        assert_eq!(
+            pairs,
+            vec![(AgentId::from_index(0), AgentId::from_index(1))]
+        );
+    }
+
+    #[test]
+    fn swept_candidates_are_ascending_unique_and_input_order_independent() {
+        let forward = vec![
+            (
+                AgentId::from_index(0),
+                SweptBody {
+                    shape: body(0.0, 0.0, 0.5),
+                    displacement_m: DVec2::new(1.0, 0.0),
+                },
+            ),
+            (
+                AgentId::from_index(1),
+                SweptBody {
+                    shape: body(1.0, 0.0, 0.5),
+                    displacement_m: DVec2::ZERO,
+                },
+            ),
+            (
+                AgentId::from_index(2),
+                SweptBody {
+                    shape: body(50.0, 0.0, 0.5),
+                    displacement_m: DVec2::ZERO,
+                },
+            ),
+        ];
+        let mut shuffled = forward.clone();
+        shuffled.reverse();
+        let mut first_phase = SweptBroadPhase::default();
+        first_phase.rebuild(&forward);
+        let mut second_phase = SweptBroadPhase::default();
+        second_phase.rebuild(&shuffled);
+
+        let mut first_pairs = Vec::new();
+        let mut second_pairs = Vec::new();
+        first_phase.candidate_pairs(&mut first_pairs);
+        second_phase.candidate_pairs(&mut second_pairs);
+        assert_eq!(first_pairs, second_pairs);
+        assert_eq!(
+            first_pairs,
+            vec![(AgentId::from_index(0), AgentId::from_index(1))]
+        );
+
+        let query = Aabb::new(DVec2::new(-1.0, -1.0), DVec2::new(2.0, 1.0));
+        let mut candidates = vec![AgentId::from_index(9)];
+        first_phase.candidates_overlapping(query, &mut candidates);
+        assert_eq!(
+            candidates,
+            vec![AgentId::from_index(0), AgentId::from_index(1)]
+        );
+        assert_eq!(
+            first_phase.swept_bounds_of(AgentId::from_index(2)),
+            Some(body(50.0, 0.0, 0.5).bounds())
+        );
+        assert_eq!(first_phase.swept_bounds_of(AgentId::from_index(9)), None);
+    }
+
+    #[test]
+    fn a_swept_candidate_covers_a_body_whose_centre_is_outside_the_query() {
+        let query = Aabb::new(DVec2::new(-1.0, -1.0), DVec2::new(1.0, 1.0));
+        let crossing = SweptBody {
+            shape: body(-6.0, 0.0, 0.5),
+            displacement_m: DVec2::new(12.0, 0.0),
+        };
+        let mut phase = SweptBroadPhase::default();
+        phase.rebuild(&[(AgentId::from_index(0), crossing)]);
+        let mut out = Vec::new();
+        phase.candidates_overlapping(query, &mut out);
+        assert_eq!(out, vec![AgentId::from_index(0)]);
+
+        // The same start centre without the crossing motion is not a candidate.
+        let still = SweptBody {
+            shape: body(-6.0, 0.0, 0.5),
+            displacement_m: DVec2::ZERO,
+        };
+        let mut still_phase = SweptBroadPhase::default();
+        still_phase.rebuild(&[(AgentId::from_index(0), still)]);
+        still_phase.candidates_overlapping(query, &mut out);
         assert!(out.is_empty());
     }
 
