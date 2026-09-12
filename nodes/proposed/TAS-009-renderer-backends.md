@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T13:22:00Z
+updated: 2026-09-12T14:06:20Z
 summary: Render one simulation through interchangeable GUI and terminal renderer backends.
-next: Add capability probing and fallback for the opt-in Kitty backend ([[TAS-014-terminal-capability-detection]]).
+next: Implement the opt-in Kitty graphics backend behind the shared contract ([[TAS-013-terminal-viewer-kitty]]).
 ---
 
 # Outcome

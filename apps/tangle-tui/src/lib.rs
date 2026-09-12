@@ -7,16 +7,29 @@
 //! backend-agnostic `SceneFrame` into a colored character grid written to any
 //! [`std::io::Write`] sink.
 //!
+//! Backend selection is capability-gated: [`capability`] probes the terminal
+//! and only ever selects the opt-in Kitty backend behind the bounded lifecycle
+//! mandated by `DEC-002-terminal-backend-strategy`, and [`fallback`] restores
+//! the terminal and continues in character cells if it fails.
+//!
 //! `tangle-tui` is the only crate permitted to depend on a terminal library
 //! (`crossterm`); the shared layer and the kernel stay terminal-free.
 
 mod backend;
+pub mod capability;
+pub mod fallback;
 mod grid;
 mod palette;
 mod raster;
 mod session;
+pub mod terminal;
 
 pub use backend::{CellBackend, RunInfo};
+pub use capability::{
+    BackendKind, BackendRequest, CapabilityResponder, CapabilityVerdict, Detection,
+    EnvironmentHints, TerminalResponder,
+};
+pub use fallback::BackendFallback;
 pub use grid::{Cell, CellGrid};
 pub use palette::{ColorDepth, Rgb, ansi256_color, to_ansi16, to_ansi256};
 pub use raster::{
@@ -24,3 +37,4 @@ pub use raster::{
     VECTOR_COLOR,
 };
 pub use session::TuiSession;
+pub use terminal::{RealTerminal, TerminalModes};

@@ -4,27 +4,36 @@
 //! shared presentation controller, and the kernel is stepped exactly as the
 //! headless CLI and the Bevy viewer step it, so the terminal cannot change
 //! which ticks the simulation visits.
+//!
+//! The `--backend` flag selects the renderer. `auto` (the default) probes the
+//! terminal and only selects the opt-in Kitty backend for a positive reply;
+//! `ascii` and `kitty` override detection.
 
-use std::io::{self, Stdout, Write};
+use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::cursor;
 use crossterm::event::{
     self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use crossterm::execute;
-use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{self, Clear, ClearType};
 use glam::DVec2;
 use tangle_model::CompiledScenario;
 use tangle_present::{Overlay, RestartMode, Speed, ViewCommand, load_scenario};
+use tangle_tui::capability::{
+    self, BackendKind, BackendRequest, EnvironmentHints, TerminalResponder,
+};
+use tangle_tui::terminal::{RealTerminal, TerminalModes};
 use tangle_tui::{CELL_ASPECT, ColorDepth, TuiSession};
 
 /// Scenario used when no path is passed on the command line.
 const DEFAULT_SCENARIO: &str = "scenarios/walking/walking_guide_v1.json5";
 /// Target presentation period, so the terminal does not spin at full speed.
 const FRAME_BUDGET: Duration = Duration::from_millis(16);
+/// How long the capability probe waits for the terminal's reply.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// World cells a single pan key moves the viewport.
 const PAN_CELLS: f64 = 4.0;
 /// Zoom factor for one zoom-in key press.
@@ -32,19 +41,52 @@ const ZOOM_IN: f64 = 0.8;
 /// Zoom factor for one zoom-out key press.
 const ZOOM_OUT: f64 = 1.25;
 
+/// Command-line help.
+const USAGE: &str = "\
+usage: tangle-tui [--backend ascii|kitty|auto] [scenario] [seed]
+
+  --backend auto    probe the terminal and prefer Kitty graphics when it
+                    answers the support probe (default)
+  --backend ascii   force the character-cell backend
+  --backend kitty   force the Kitty graphics backend
+";
+
 /// Errors from the event loop are boxed so kernel and terminal errors share a
 /// single return type.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-fn main() -> Result<(), BoxError> {
-    let mut args = std::env::args().skip(1);
-    let path = PathBuf::from(args.next().unwrap_or_else(|| DEFAULT_SCENARIO.to_owned()));
-    let seed: u64 = args
-        .next()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
+/// Parsed command-line options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Options {
+    scenario: PathBuf,
+    seed: u64,
+    backend: BackendRequest,
+}
 
-    let scenario: Arc<CompiledScenario> = match load_scenario(&path) {
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            scenario: PathBuf::from(DEFAULT_SCENARIO),
+            seed: 0,
+            backend: BackendRequest::Auto,
+        }
+    }
+}
+
+fn main() -> Result<(), BoxError> {
+    if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
+        print!("{USAGE}");
+        return Ok(());
+    }
+    let options = match parse_options(std::env::args().skip(1)) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("error: {error}\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
+
+    let scenario: Arc<CompiledScenario> = match load_scenario(&options.scenario) {
         Ok(scenario) => Arc::new(scenario),
         Err(error) => {
             eprintln!("error: {error}");
@@ -52,8 +94,16 @@ fn main() -> Result<(), BoxError> {
         }
     };
 
+    let kind = select_backend(options.backend);
+    if kind == BackendKind::Kitty {
+        eprintln!(
+            "note: the Kitty graphics backend is not built in this revision; \
+             using character cells"
+        );
+    }
+
     let depth = ColorDepth::detect();
-    let mut session = match TuiSession::new(scenario, seed, io::stdout(), depth) {
+    let mut session = match TuiSession::new(scenario, options.seed, io::stdout(), depth) {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: cannot start simulation: {error}");
@@ -61,11 +111,71 @@ fn main() -> Result<(), BoxError> {
         }
     };
 
+    let mut terminal = RealTerminal;
     install_panic_hook();
-    enter_terminal()?;
+    terminal.enter()?;
     let result = run(&mut session);
-    leave_terminal()?;
+    terminal.restore()?;
     result
+}
+
+/// Parse command-line arguments. Flags may appear before or after positional
+/// arguments and `--backend` accepts either `--backend VALUE` or
+/// `--backend=VALUE`.
+fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> {
+    let mut options = Options::default();
+    let mut positionals = 0;
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--backend=") {
+            options.backend = parse_backend(value)?;
+        } else if arg == "--backend" {
+            let value = args.next().ok_or("--backend needs a value")?;
+            options.backend = parse_backend(&value)?;
+        } else if arg.starts_with('-') && arg != "-" {
+            return Err(format!("unknown option '{arg}'"));
+        } else if positionals == 0 {
+            options.scenario = PathBuf::from(arg);
+            positionals += 1;
+        } else if positionals == 1 {
+            options.seed = arg.parse().map_err(|_| format!("invalid seed '{arg}'"))?;
+            positionals += 1;
+        } else {
+            return Err(format!("unexpected argument '{arg}'"));
+        }
+    }
+    Ok(options)
+}
+
+/// Parse one `--backend` value.
+fn parse_backend(value: &str) -> Result<BackendRequest, String> {
+    BackendRequest::from_flag(value)
+        .ok_or_else(|| format!("unknown backend '{value}'; expected ascii, kitty, or auto"))
+}
+
+/// Resolve the requested backend against the terminal's proven capabilities.
+///
+/// `ascii` and `kitty` are explicit overrides and never probe. `auto` consults
+/// environment hints and, when they do not already rule graphics out, the
+/// terminal's own query; it selects Kitty only for the one positive verdict,
+/// and treats every ambiguous or missing reply as unsupported.
+fn select_backend(request: BackendRequest) -> BackendKind {
+    match request {
+        BackendRequest::Ascii => BackendKind::Ascii,
+        BackendRequest::Kitty => BackendKind::Kitty,
+        BackendRequest::Auto => {
+            let hints = EnvironmentHints::capture();
+            match capability::detect(&hints, &mut TerminalResponder, PROBE_TIMEOUT) {
+                Ok(detection) => BackendKind::resolve(request, detection.verdict),
+                Err(error) => {
+                    eprintln!(
+                        "note: terminal capability probe failed ({error}); using character cells"
+                    );
+                    BackendKind::Ascii
+                }
+            }
+        }
+    }
 }
 
 /// Drive the session from terminal events until the user quits.
@@ -135,29 +245,49 @@ fn pan(session: &mut TuiSession<Stdout>, x: f64, y: f64) {
     )));
 }
 
-/// Enter the alternate screen with raw input and no autowrap.
-fn enter_terminal() -> io::Result<()> {
-    terminal::enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
-    // Autowrap off, so writing the bottom-right cell cannot scroll the screen.
-    stdout.write_all(b"\x1b[?7l")?;
-    stdout.flush()
-}
-
-/// Restore the primary screen and cooked input.
-fn leave_terminal() -> io::Result<()> {
-    let mut stdout = io::stdout();
-    stdout.write_all(b"\x1b[?7h")?;
-    execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
-    terminal::disable_raw_mode()
-}
-
 /// Restore the terminal before the default panic output, so a panic is legible.
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = leave_terminal();
+        let mut terminal = RealTerminal;
+        let _ = terminal.restore();
         default_hook(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Options, String> {
+        parse_options(args.iter().map(|arg| (*arg).to_owned()))
+    }
+
+    #[test]
+    fn defaults_to_auto_backend_and_the_walking_scenario() {
+        let options = parse(&[]).expect("parses");
+        assert_eq!(options.backend, BackendRequest::Auto);
+        assert_eq!(options.scenario, PathBuf::from(DEFAULT_SCENARIO));
+        assert_eq!(options.seed, 0);
+    }
+
+    #[test]
+    fn parses_backend_flag_before_and_after_positionals() {
+        let options = parse(&["--backend", "ascii", "scenarios/x.json5", "9"]).expect("parses");
+        assert_eq!(options.backend, BackendRequest::Ascii);
+        assert_eq!(options.scenario, PathBuf::from("scenarios/x.json5"));
+        assert_eq!(options.seed, 9);
+
+        let options = parse(&["scenarios/x.json5", "--backend=kitty"]).expect("parses");
+        assert_eq!(options.backend, BackendRequest::Kitty);
+        assert_eq!(options.scenario, PathBuf::from("scenarios/x.json5"));
+    }
+
+    #[test]
+    fn rejects_unknown_backends_and_flags() {
+        assert!(parse(&["--backend", "pixels"]).is_err());
+        assert!(parse(&["--backend"]).is_err());
+        assert!(parse(&["--frobnicate"]).is_err());
+        assert!(parse(&["a", "1", "extra"]).is_err());
+    }
 }

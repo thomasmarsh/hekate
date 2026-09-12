@@ -5302,6 +5302,7 @@ version = "0.0.0"
 dependencies = [
  "crossterm",
  "glam 0.33.7",
+ "mio",
  "tangle-model",
  "tangle-present",
  "tangle-sim",
