@@ -61,6 +61,13 @@ SceneFrame {
                 width_m: 3.5,
             },
         ],
+        boundaries: [],
+        regions: [],
+        movements: [],
+        crossings: [],
+        conflict_regions: [],
+        rules: [],
+        signals: [],
         bounds: Some(
             (
                 DVec2(

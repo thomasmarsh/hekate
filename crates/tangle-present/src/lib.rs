@@ -27,5 +27,7 @@ pub use controller::{Applied, PresentationController};
 pub use scenario::{LoadError, load_scenario};
 pub use scene::{
     BodyKind, DEFAULT_BODY_LENGTH_M, DEFAULT_BODY_WIDTH_M, FrameStatus, Overlay, Overlays,
-    SELECT_RADIUS_PIXELS, SceneBody, SceneFrame, SceneGeometry, ScenePath, ScenePortal, Viewport,
+    SELECT_RADIUS_PIXELS, SceneBody, SceneBoundary, SceneConflictRegion, SceneCrossing, SceneFrame,
+    SceneGeometry, SceneMovement, ScenePath, ScenePortal, SceneRegion, SceneRule, SceneSignal,
+    SceneSignalHead, Viewport,
 };

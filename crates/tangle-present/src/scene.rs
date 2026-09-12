@@ -8,7 +8,10 @@
 use std::sync::Arc;
 
 use glam::DVec2;
-use tangle_model::{CompiledScenario, PathId, PortalId};
+use tangle_model::{
+    BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, MovementId, PathId, PortalId,
+    RegionId, RuleId, RuleKind, SignalId,
+};
 use tangle_sim::AgentSample;
 
 use crate::clock::Speed;
@@ -156,11 +159,214 @@ impl ScenePortal {
     }
 }
 
+/// A boundary polygon as drawn by a backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneBoundary {
+    id: BoundaryId,
+    points: Vec<DVec2>,
+}
+
+impl SceneBoundary {
+    /// Dense identifier of the source boundary.
+    pub const fn id(&self) -> BoundaryId {
+        self.id
+    }
+
+    /// Ring vertices in order; the last connects back to the first.
+    pub fn points(&self) -> &[DVec2] {
+        &self.points
+    }
+}
+
+/// A traversable region as drawn by a backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneRegion {
+    id: RegionId,
+    points: Vec<DVec2>,
+}
+
+impl SceneRegion {
+    /// Dense identifier of the source region.
+    pub const fn id(&self) -> RegionId {
+        self.id
+    }
+
+    /// Ring vertices in order; the last connects back to the first.
+    pub fn points(&self) -> &[DVec2] {
+        &self.points
+    }
+}
+
+/// A movement connector as drawn by a backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneMovement {
+    id: MovementId,
+    points: Vec<DVec2>,
+    entry: DVec2,
+    exit: DVec2,
+}
+
+impl SceneMovement {
+    /// Dense identifier of the source movement.
+    pub const fn id(&self) -> MovementId {
+        self.id
+    }
+
+    /// Polyline vertices of the movement's guide path.
+    pub fn points(&self) -> &[DVec2] {
+        &self.points
+    }
+
+    /// World position of the entry endpoint in metres.
+    pub const fn entry(&self) -> DVec2 {
+        self.entry
+    }
+
+    /// World position of the exit endpoint in metres.
+    pub const fn exit(&self) -> DVec2 {
+        self.exit
+    }
+}
+
+/// A pedestrian crossing as drawn by a backend; its ring is the region it
+/// occupies.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneCrossing {
+    id: CrossingId,
+    points: Vec<DVec2>,
+}
+
+impl SceneCrossing {
+    /// Dense identifier of the source crossing.
+    pub const fn id(&self) -> CrossingId {
+        self.id
+    }
+
+    /// Ring vertices of the occupied region, in order.
+    pub fn points(&self) -> &[DVec2] {
+        &self.points
+    }
+}
+
+/// A conflict region as drawn by a backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneConflictRegion {
+    id: ConflictRegionId,
+    points: Vec<DVec2>,
+}
+
+impl SceneConflictRegion {
+    /// Dense identifier of the source conflict region.
+    pub const fn id(&self) -> ConflictRegionId {
+        self.id
+    }
+
+    /// Ring vertices in order; the last connects back to the first.
+    pub fn points(&self) -> &[DVec2] {
+        &self.points
+    }
+}
+
+/// A control rule as drawn by a backend: a marker at the governed movement's
+/// entry endpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneRule {
+    id: RuleId,
+    kind: RuleKind,
+    movement: MovementId,
+    position: DVec2,
+    heading: f64,
+}
+
+impl SceneRule {
+    /// Dense identifier of the source rule.
+    pub const fn id(&self) -> RuleId {
+        self.id
+    }
+
+    /// Kind of control the rule applies.
+    pub const fn kind(&self) -> RuleKind {
+        self.kind
+    }
+
+    /// Movement the rule governs.
+    pub const fn movement(&self) -> MovementId {
+        self.movement
+    }
+
+    /// World position of the marker in metres.
+    pub const fn position(&self) -> DVec2 {
+        self.position
+    }
+
+    /// Heading of the marker in radians.
+    pub const fn heading(&self) -> f64 {
+        self.heading
+    }
+}
+
+/// One signal head as drawn by a backend, placed at its movement's entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneSignalHead {
+    movement: MovementId,
+    position: DVec2,
+    heading: f64,
+}
+
+impl SceneSignalHead {
+    /// Movement this head controls.
+    pub const fn movement(&self) -> MovementId {
+        self.movement
+    }
+
+    /// World position of the head in metres.
+    pub const fn position(&self) -> DVec2 {
+        self.position
+    }
+
+    /// Heading of the head in radians.
+    pub const fn heading(&self) -> f64 {
+        self.heading
+    }
+}
+
+/// A fixed-time signal controller as drawn by a backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneSignal {
+    id: SignalId,
+    cycle_s: f64,
+    heads: Vec<SceneSignalHead>,
+}
+
+impl SceneSignal {
+    /// Dense identifier of the source signal.
+    pub const fn id(&self) -> SignalId {
+        self.id
+    }
+
+    /// Total cycle length in seconds.
+    pub const fn cycle_s(&self) -> f64 {
+        self.cycle_s
+    }
+
+    /// Heads controlled together, in dense-index order.
+    pub fn heads(&self) -> &[SceneSignalHead] {
+        &self.heads
+    }
+}
+
 /// Static geometry a scenario contributes to every frame.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SceneGeometry {
     paths: Vec<ScenePath>,
     portals: Vec<ScenePortal>,
+    boundaries: Vec<SceneBoundary>,
+    regions: Vec<SceneRegion>,
+    movements: Vec<SceneMovement>,
+    crossings: Vec<SceneCrossing>,
+    conflict_regions: Vec<SceneConflictRegion>,
+    rules: Vec<SceneRule>,
+    signals: Vec<SceneSignal>,
     bounds: Option<(DVec2, DVec2)>,
 }
 
@@ -185,6 +391,86 @@ impl SceneGeometry {
                 width_m: portal.width_m(),
             })
             .collect();
+        let boundaries: Vec<SceneBoundary> = scenario
+            .boundaries()
+            .iter()
+            .map(|boundary| SceneBoundary {
+                id: boundary.id(),
+                points: boundary.polygon().ring().to_vec(),
+            })
+            .collect();
+        let regions: Vec<SceneRegion> = scenario
+            .regions()
+            .iter()
+            .map(|region| SceneRegion {
+                id: region.id(),
+                points: region.polygon().ring().to_vec(),
+            })
+            .collect();
+        let movements: Vec<SceneMovement> = scenario
+            .movements()
+            .iter()
+            .map(|movement| SceneMovement {
+                id: movement.id(),
+                points: scenario
+                    .path(movement.path())
+                    .map_or_else(Vec::new, |path| path.points().to_vec()),
+                entry: movement.entry(),
+                exit: movement.exit(),
+            })
+            .collect();
+        let crossings: Vec<SceneCrossing> = scenario
+            .crossings()
+            .iter()
+            .map(|crossing| SceneCrossing {
+                id: crossing.id(),
+                points: scenario
+                    .region(crossing.region())
+                    .map_or_else(Vec::new, |region| region.polygon().ring().to_vec()),
+            })
+            .collect();
+        let conflict_regions: Vec<SceneConflictRegion> = scenario
+            .conflict_regions()
+            .iter()
+            .map(|conflict| SceneConflictRegion {
+                id: conflict.id(),
+                points: conflict.polygon().ring().to_vec(),
+            })
+            .collect();
+        let rules: Vec<SceneRule> = scenario
+            .rules()
+            .iter()
+            .map(|rule| {
+                let movement = scenario.movement(rule.movement());
+                SceneRule {
+                    id: rule.id(),
+                    kind: rule.kind(),
+                    movement: rule.movement(),
+                    position: movement.map_or(DVec2::ZERO, |movement| movement.entry()),
+                    heading: movement.map_or(0.0, |movement| movement.entry_heading()),
+                }
+            })
+            .collect();
+        let signals: Vec<SceneSignal> = scenario
+            .signals()
+            .iter()
+            .map(|signal| SceneSignal {
+                id: signal.id(),
+                cycle_s: signal.cycle_s(),
+                heads: signal
+                    .heads()
+                    .iter()
+                    .map(|head| {
+                        let movement = scenario.movement(head.movement());
+                        SceneSignalHead {
+                            movement: head.movement(),
+                            position: movement.map_or(DVec2::ZERO, |movement| movement.entry()),
+                            heading: movement.map_or(0.0, |movement| movement.entry_heading()),
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
 
         let mut min = DVec2::splat(f64::INFINITY);
         let mut max = DVec2::splat(f64::NEG_INFINITY);
@@ -202,10 +488,43 @@ impl SceneGeometry {
         for portal in &portals {
             include(portal.position, portal.width_m * 0.5);
         }
+        for ring in boundaries
+            .iter()
+            .map(|shape| &shape.points)
+            .chain(regions.iter().map(|shape| &shape.points))
+            .chain(crossings.iter().map(|shape| &shape.points))
+            .chain(conflict_regions.iter().map(|shape| &shape.points))
+        {
+            for &point in ring {
+                include(point, 0.0);
+            }
+        }
+        for movement in &movements {
+            for &point in &movement.points {
+                include(point, 0.0);
+            }
+            include(movement.entry, 0.0);
+            include(movement.exit, 0.0);
+        }
+        for rule in &rules {
+            include(rule.position, 0.0);
+        }
+        for signal in &signals {
+            for head in &signal.heads {
+                include(head.position, 0.0);
+            }
+        }
 
         Self {
             paths,
             portals,
+            boundaries,
+            regions,
+            movements,
+            crossings,
+            conflict_regions,
+            rules,
+            signals,
             bounds: any.then_some((min, max)),
         }
     }
@@ -220,8 +539,43 @@ impl SceneGeometry {
         &self.portals
     }
 
-    /// World-space bounds of every path vertex and portal, padded by portal
-    /// width, or `None` when the scenario has no drawable geometry.
+    /// Boundary polygons in dense-index order.
+    pub fn boundaries(&self) -> &[SceneBoundary] {
+        &self.boundaries
+    }
+
+    /// Traversable regions in dense-index order.
+    pub fn regions(&self) -> &[SceneRegion] {
+        &self.regions
+    }
+
+    /// Movement connectors in dense-index order.
+    pub fn movements(&self) -> &[SceneMovement] {
+        &self.movements
+    }
+
+    /// Pedestrian crossings in dense-index order.
+    pub fn crossings(&self) -> &[SceneCrossing] {
+        &self.crossings
+    }
+
+    /// Conflict regions in dense-index order.
+    pub fn conflict_regions(&self) -> &[SceneConflictRegion] {
+        &self.conflict_regions
+    }
+
+    /// Control rules in dense-index order.
+    pub fn rules(&self) -> &[SceneRule] {
+        &self.rules
+    }
+
+    /// Fixed-time signals in dense-index order.
+    pub fn signals(&self) -> &[SceneSignal] {
+        &self.signals
+    }
+
+    /// World-space bounds of every drawable point, padded by portal width, or
+    /// `None` when the scenario has no drawable geometry.
     pub const fn bounds(&self) -> Option<(DVec2, DVec2)> {
         self.bounds
     }
@@ -484,5 +838,54 @@ mod tests {
         assert_eq!(body.position, DVec2::new(5.0, 0.0));
         // Wrapping across pi must not rotate the long way around.
         assert!(body.heading_rad.abs() > 3.0);
+    }
+
+    fn signalized() -> CompiledScenario {
+        let source = parse_scenario_source(
+            "{ schema_version: 1, id: 'four_leg', \
+             coordinate_system: { x: 'east_m', y: 'north_m' }, \
+             paths: [ { id: 'ew', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] }, \
+             { id: 'ns', points: [ { x: 0, y: -20 }, { x: 0, y: 20 } ] } ], \
+             portals: [ { id: 'west', path: 'ew', end: 'start', width_m: 3.5 }, \
+             { id: 'east', path: 'ew', end: 'end', width_m: 3.5 }, \
+             { id: 'south', path: 'ns', end: 'start', width_m: 3.5 }, \
+             { id: 'north', path: 'ns', end: 'end', width_m: 3.5 } ], \
+             boundaries: [ { id: 'world', points: [ { x: -30, y: -30 }, { x: 30, y: -30 }, \
+             { x: 30, y: 30 }, { x: -30, y: 30 } ] } ], \
+             regions: [ { id: 'area', points: [ { x: -3, y: -3 }, { x: 3, y: -3 }, \
+             { x: 3, y: 3 }, { x: -3, y: 3 } ] } ], \
+             movements: [ { id: 'ew_through', from: 'west', to: 'east', path: 'ew', priority: 0 }, \
+             { id: 'ns_through', from: 'south', to: 'north', path: 'ns', priority: 1 } ], \
+             crossings: [ { id: 'cross', region: 'area', movements: [ 'ew_through' ] } ], \
+             conflict_regions: [ { id: 'center', points: [ { x: -1, y: -1 }, { x: 1, y: -1 }, \
+             { x: 1, y: 1 }, { x: -1, y: 1 } ], movements: [ 'ew_through', 'ns_through' ] } ], \
+             rules: [ { id: 'r_ew', movement: 'ew_through', kind: 'signal', signal: 'main' } ], \
+             signals: [ { id: 'main', heads: [ { id: 'ew', movement: 'ew_through' } ], \
+             phases: [ { duration_s: 20.0, states: [ { head: 'ew', color: 'green' } ] } ] } ] }",
+        )
+        .expect("scenario parses");
+        CompiledScenario::compile(source).expect("scenario compiles")
+    }
+
+    #[test]
+    fn geometry_projects_every_general_primitive() {
+        let geometry = SceneGeometry::from_scenario(&signalized());
+        assert_eq!(geometry.boundaries().len(), 1);
+        assert_eq!(geometry.boundaries()[0].points().len(), 4);
+        assert_eq!(geometry.regions().len(), 1);
+        assert_eq!(geometry.movements().len(), 2);
+        assert_eq!(geometry.movements()[0].points().len(), 2);
+        assert_eq!(geometry.crossings().len(), 1);
+        assert_eq!(geometry.crossings()[0].points().len(), 4);
+        assert_eq!(geometry.conflict_regions().len(), 1);
+        assert_eq!(geometry.rules().len(), 1);
+        assert_eq!(geometry.rules()[0].kind(), RuleKind::Signal);
+        assert_eq!(geometry.signals().len(), 1);
+        assert_eq!(geometry.signals()[0].heads().len(), 1);
+        assert!((geometry.signals()[0].cycle_s() - 20.0).abs() < 1e-9);
+        // World bounds cover the authored boundary ring.
+        let (min, max) = geometry.bounds().expect("bounds");
+        assert_eq!(min, DVec2::new(-30.0, -30.0));
+        assert_eq!(max, DVec2::new(30.0, 30.0));
     }
 }

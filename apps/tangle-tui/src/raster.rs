@@ -25,6 +25,20 @@ pub const BACKGROUND: Rgb = Rgb::new(10, 13, 18);
 pub const PATH_COLOR: Rgb = Rgb::new(61, 209, 112);
 /// Portal gate and arrow color.
 pub const PORTAL_COLOR: Rgb = Rgb::new(245, 189, 56);
+/// Boundary polygon color.
+pub const BOUNDARY_COLOR: Rgb = Rgb::new(110, 118, 138);
+/// Traversable region color.
+pub const REGION_COLOR: Rgb = Rgb::new(64, 156, 176);
+/// Movement connector color.
+pub const MOVEMENT_COLOR: Rgb = Rgb::new(236, 118, 196);
+/// Pedestrian crossing color.
+pub const CROSSING_COLOR: Rgb = Rgb::new(190, 214, 96);
+/// Conflict region color.
+pub const CONFLICT_COLOR: Rgb = Rgb::new(230, 84, 84);
+/// Control-rule marker color.
+pub const RULE_COLOR: Rgb = Rgb::new(170, 168, 240);
+/// Signal head color.
+pub const SIGNAL_COLOR: Rgb = Rgb::new(240, 100, 60);
 /// Agent body color.
 pub const BODY_COLOR: Rgb = Rgb::new(217, 222, 235);
 /// Selected agent color.
@@ -37,8 +51,21 @@ pub const VECTOR_COLOR: Rgb = Rgb::new(89, 179, 255);
 const PATH_GLYPH: char = '*';
 const PORTAL_GLYPH: char = '=';
 const PORTAL_TIP_GLYPH: char = '>';
+const BOUNDARY_GLYPH: char = '.';
+const REGION_GLYPH: char = ',';
+const MOVEMENT_GLYPH: char = '%';
+const CROSSING_GLYPH: char = 'x';
+const CONFLICT_GLYPH: char = '!';
+const RULE_GLYPH: char = 'o';
+const SIGNAL_GLYPH: char = 'S';
 const BODY_GLYPH: char = '#';
 const VECTOR_GLYPH: char = '.';
+/// Half-width of a rendered signal-head gate in world metres.
+pub const SIGNAL_GATE_HALF_WIDTH_M: f64 = 1.5;
+/// Perpendicular offset of a rendered rule marker from its movement entry, in
+/// world metres, so a rule marker and a signal gate at the same entry do not
+/// draw over each other.
+pub const RULE_MARKER_OFFSET_M: f64 = 2.5;
 
 /// Draws a [`SceneFrame`] into a character grid of a fixed size.
 #[derive(Debug, Clone, Copy)]
@@ -97,6 +124,17 @@ impl Rasterizer {
     }
 
     fn draw_geometry(&self, grid: &mut CellGrid, frame: &SceneFrame) {
+        // Boundaries and traversable regions form the static backdrop; guide
+        // paths and movements are drawn over them.
+        let boundary_cell = Cell::new(BOUNDARY_GLYPH, BOUNDARY_COLOR, BACKGROUND);
+        for boundary in frame.geometry.boundaries() {
+            self.draw_ring(grid, frame.viewport, boundary.points(), boundary_cell);
+        }
+        let region_cell = Cell::new(REGION_GLYPH, REGION_COLOR, BACKGROUND);
+        for region in frame.geometry.regions() {
+            self.draw_ring(grid, frame.viewport, region.points(), region_cell);
+        }
+
         let path_cell = Cell::new(PATH_GLYPH, PATH_COLOR, BACKGROUND);
         for path in frame.geometry.paths() {
             let points: Vec<(f64, f64)> = path
@@ -107,6 +145,37 @@ impl Rasterizer {
             for pair in points.windows(2) {
                 draw_line(grid, pair[0], pair[1], path_cell);
             }
+        }
+
+        // A movement follows the same polyline as its guide path but is the
+        // routed connector, so it gets its own color, glyph, and endpoints.
+        let movement_cell = Cell::new(MOVEMENT_GLYPH, MOVEMENT_COLOR, BACKGROUND);
+        for movement in frame.geometry.movements() {
+            let points: Vec<(f64, f64)> = movement
+                .points()
+                .iter()
+                .map(|point| self.project(frame.viewport, *point))
+                .collect();
+            for pair in points.windows(2) {
+                draw_line(grid, pair[0], pair[1], movement_cell);
+            }
+            for endpoint in [movement.entry(), movement.exit()] {
+                let point = self.project(frame.viewport, endpoint);
+                grid.put(
+                    point.0.round() as i64,
+                    point.1.round() as i64,
+                    movement_cell,
+                );
+            }
+        }
+
+        let conflict_cell = Cell::new(CONFLICT_GLYPH, CONFLICT_COLOR, BACKGROUND);
+        for conflict in frame.geometry.conflict_regions() {
+            self.draw_ring(grid, frame.viewport, conflict.points(), conflict_cell);
+        }
+        let crossing_cell = Cell::new(CROSSING_GLYPH, CROSSING_COLOR, BACKGROUND);
+        for crossing in frame.geometry.crossings() {
+            self.draw_ring(grid, frame.viewport, crossing.points(), crossing_cell);
         }
 
         let portal_cell = Cell::new(PORTAL_GLYPH, PORTAL_COLOR, BACKGROUND);
@@ -131,6 +200,42 @@ impl Rasterizer {
                 position.1.round() as i64,
                 portal_cell,
             );
+        }
+
+        let rule_cell = Cell::new(RULE_GLYPH, RULE_COLOR, BACKGROUND);
+        for rule in frame.geometry.rules() {
+            let (sin, cos) = rule.heading().sin_cos();
+            let offset = DVec2::new(-sin, cos) * RULE_MARKER_OFFSET_M;
+            let point = self.project(frame.viewport, rule.position() + offset);
+            grid.put(point.0.round() as i64, point.1.round() as i64, rule_cell);
+        }
+
+        let signal_cell = Cell::new(SIGNAL_GLYPH, SIGNAL_COLOR, BACKGROUND);
+        for signal in frame.geometry.signals() {
+            for head in signal.heads() {
+                let (sin, cos) = head.heading().sin_cos();
+                let offset = DVec2::new(sin, -cos) * SIGNAL_GATE_HALF_WIDTH_M;
+                draw_line(
+                    grid,
+                    self.project(frame.viewport, head.position() + offset),
+                    self.project(frame.viewport, head.position() - offset),
+                    signal_cell,
+                );
+                let point = self.project(frame.viewport, head.position());
+                grid.put(point.0.round() as i64, point.1.round() as i64, signal_cell);
+            }
+        }
+    }
+
+    /// Draw a closed polygon outline, connecting the last vertex to the first.
+    fn draw_ring(&self, grid: &mut CellGrid, viewport: Viewport, points: &[DVec2], cell: Cell) {
+        if points.len() < 2 {
+            return;
+        }
+        for index in 0..points.len() {
+            let from = self.project(viewport, points[index]);
+            let to = self.project(viewport, points[(index + 1) % points.len()]);
+            draw_line(grid, from, to, cell);
         }
     }
 
@@ -299,6 +404,52 @@ mod tests {
         }
     }
 
+    /// A geometry-only frame for a scenario that carries every general
+    /// primitive, so no simulation population is needed to project it.
+    fn general_frame(viewport: Viewport) -> SceneFrame {
+        let source = parse_scenario_source(
+            "{ schema_version: 1, id: 'four_leg', \
+             coordinate_system: { x: 'east_m', y: 'north_m' }, \
+             paths: [ { id: 'ew', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] }, \
+             { id: 'ns', points: [ { x: 0, y: -20 }, { x: 0, y: 20 } ] } ], \
+             portals: [ { id: 'west', path: 'ew', end: 'start', width_m: 3.5 }, \
+             { id: 'east', path: 'ew', end: 'end', width_m: 3.5 }, \
+             { id: 'south', path: 'ns', end: 'start', width_m: 3.5 }, \
+             { id: 'north', path: 'ns', end: 'end', width_m: 3.5 } ], \
+             boundaries: [ { id: 'world', points: [ { x: -30, y: -30 }, { x: 30, y: -30 }, \
+             { x: 30, y: 30 }, { x: -30, y: 30 } ] } ], \
+             regions: [ { id: 'area', points: [ { x: -8, y: -3 }, { x: -3, y: -3 }, \
+             { x: -3, y: 3 }, { x: -8, y: 3 } ] }, \
+             { id: 'plaza', points: [ { x: -28, y: -28 }, { x: -22, y: -28 }, \
+             { x: -22, y: -22 }, { x: -28, y: -22 } ] } ], \
+             movements: [ { id: 'ew_through', from: 'west', to: 'east', path: 'ew', priority: 0 }, \
+             { id: 'ns_through', from: 'south', to: 'north', path: 'ns', priority: 1 } ], \
+             crossings: [ { id: 'cross', region: 'area', movements: [ 'ew_through' ] } ], \
+             conflict_regions: [ { id: 'center', points: [ { x: -2, y: -2 }, { x: 2, y: -2 }, \
+             { x: 2, y: 2 }, { x: -2, y: 2 } ], movements: [ 'ew_through', 'ns_through' ] } ], \
+             rules: [ { id: 'r_ew', movement: 'ew_through', kind: 'signal', signal: 'main' } ], \
+             signals: [ { id: 'main', heads: [ { id: 'ew', movement: 'ew_through' } ], \
+             phases: [ { duration_s: 20.0, states: [ { head: 'ew', color: 'green' } ] } ] } ] }",
+        )
+        .expect("scenario parses");
+        let compiled = CompiledScenario::compile(source).expect("scenario compiles");
+        SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: 0,
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport,
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies: Vec::new(),
+            overlays: Overlays::default(),
+        }
+    }
+
     #[test]
     fn aspect_correction_makes_one_row_span_two_columns_of_world() {
         let raster = Rasterizer::new(40, 20);
@@ -362,5 +513,30 @@ mod tests {
             .filter_map(|(col, row)| grid.get(i64::from(col), i64::from(row)))
             .any(|cell| cell.fg == SELECTED_COLOR);
         assert!(selected);
+    }
+
+    #[test]
+    fn every_general_primitive_is_rasterized_in_its_own_color() {
+        let raster = Rasterizer::new(160, 80);
+        let frame = general_frame(Viewport::new(DVec2::ZERO, 0.4));
+        let grid = raster.rasterize(&frame);
+        let colors: Vec<Rgb> = (0..grid.height())
+            .flat_map(|row| (0..grid.width()).map(move |col| (col, row)))
+            .filter_map(|(col, row)| grid.get(i64::from(col), i64::from(row)).map(|cell| cell.fg))
+            .collect();
+        for (name, color) in [
+            ("boundary", BOUNDARY_COLOR),
+            ("region", REGION_COLOR),
+            ("movement", MOVEMENT_COLOR),
+            ("crossing", CROSSING_COLOR),
+            ("conflict region", CONFLICT_COLOR),
+            ("rule", RULE_COLOR),
+            ("signal", SIGNAL_COLOR),
+        ] {
+            assert!(
+                colors.contains(&color),
+                "{name} primitive was not rasterized in its color"
+            );
+        }
     }
 }

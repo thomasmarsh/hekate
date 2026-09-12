@@ -465,7 +465,7 @@ fn sync_agents(
     });
 }
 
-/// Draw the guide paths and portals from the current frame.
+/// Draw the scenario geometry from the current frame.
 fn draw_geometry(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
     let Some(frame) = frame.get() else {
         return;
@@ -474,34 +474,83 @@ fn draw_geometry(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
         return;
     }
 
+    let to_vec = |point: DVec2| Vec2::new(point.x as f32, point.y as f32);
+    let draw_ring = |gizmos: &mut Gizmos, points: &[DVec2], color: Color| {
+        for index in 0..points.len() {
+            let from = to_vec(points[index]);
+            let to = to_vec(points[(index + 1) % points.len()]);
+            gizmos.line_2d(from, to, color);
+        }
+    };
+
+    let boundary_color = Color::srgb(0.43, 0.46, 0.54);
+    for boundary in frame.geometry.boundaries() {
+        draw_ring(&mut gizmos, boundary.points(), boundary_color);
+    }
+
+    let region_color = Color::srgb(0.25, 0.61, 0.69);
+    for region in frame.geometry.regions() {
+        draw_ring(&mut gizmos, region.points(), region_color);
+    }
+
     let path_color = Color::srgb(0.24, 0.82, 0.44);
     for path in frame.geometry.paths() {
         for pair in path.points().windows(2) {
-            gizmos.line_2d(
-                Vec2::new(pair[0].x as f32, pair[0].y as f32),
-                Vec2::new(pair[1].x as f32, pair[1].y as f32),
-                path_color,
-            );
+            gizmos.line_2d(to_vec(pair[0]), to_vec(pair[1]), path_color);
         }
+    }
+
+    let movement_color = Color::srgb(0.93, 0.46, 0.77);
+    for movement in frame.geometry.movements() {
+        for pair in movement.points().windows(2) {
+            gizmos.line_2d(to_vec(pair[0]), to_vec(pair[1]), movement_color);
+        }
+        for endpoint in [movement.entry(), movement.exit()] {
+            gizmos.circle_2d(to_vec(endpoint), 0.6, movement_color);
+        }
+    }
+
+    let conflict_color = Color::srgb(0.90, 0.33, 0.33);
+    for conflict in frame.geometry.conflict_regions() {
+        draw_ring(&mut gizmos, conflict.points(), conflict_color);
+    }
+
+    let crossing_color = Color::srgb(0.75, 0.84, 0.38);
+    for crossing in frame.geometry.crossings() {
+        draw_ring(&mut gizmos, crossing.points(), crossing_color);
     }
 
     let portal_color = Color::srgb(0.96, 0.74, 0.22);
     for portal in frame.geometry.portals() {
         let (start, end) = portal.gate();
-        gizmos.line_2d(
-            Vec2::new(start.x as f32, start.y as f32),
-            Vec2::new(end.x as f32, end.y as f32),
-            portal_color,
-        );
+        gizmos.line_2d(to_vec(start), to_vec(end), portal_color);
 
         // A short inward arrow shows the direction of travel through the gate.
         let position = portal.position();
         let tip = portal.inward_tip(3.0);
-        gizmos.arrow_2d(
-            Vec2::new(position.x as f32, position.y as f32),
-            Vec2::new(tip.x as f32, tip.y as f32),
-            portal_color,
-        );
+        gizmos.arrow_2d(to_vec(position), to_vec(tip), portal_color);
+    }
+
+    let rule_color = Color::srgb(0.67, 0.66, 0.94);
+    for rule in frame.geometry.rules() {
+        let (sin, cos) = rule.heading().sin_cos();
+        let offset = DVec2::new(-sin, cos) * 2.5;
+        gizmos.circle_2d(to_vec(rule.position() + offset), 0.8, rule_color);
+    }
+
+    let signal_color = Color::srgb(0.94, 0.39, 0.24);
+    for signal in frame.geometry.signals() {
+        for head in signal.heads() {
+            let (sin, cos) = head.heading().sin_cos();
+            let offset = DVec2::new(sin, -cos) * 1.5;
+            let position = head.position();
+            gizmos.line_2d(
+                to_vec(position + offset),
+                to_vec(position - offset),
+                signal_color,
+            );
+            gizmos.circle_2d(to_vec(position), 0.5, signal_color);
+        }
     }
 }
 

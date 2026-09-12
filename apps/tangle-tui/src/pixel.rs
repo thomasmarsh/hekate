@@ -13,8 +13,10 @@ use tangle_present::{SceneFrame, Viewport};
 
 use crate::palette::Rgb;
 use crate::raster::{
-    BACKGROUND, BODY_COLOR, CELL_ASPECT, PATH_COLOR, PORTAL_COLOR, Rasterizer, SELECTED_BACKGROUND,
-    SELECTED_COLOR, VECTOR_COLOR,
+    BACKGROUND, BODY_COLOR, BOUNDARY_COLOR, CELL_ASPECT, CONFLICT_COLOR, CROSSING_COLOR,
+    MOVEMENT_COLOR, PATH_COLOR, PORTAL_COLOR, REGION_COLOR, RULE_COLOR, RULE_MARKER_OFFSET_M,
+    Rasterizer, SELECTED_BACKGROUND, SELECTED_COLOR, SIGNAL_COLOR, SIGNAL_GATE_HALF_WIDTH_M,
+    VECTOR_COLOR,
 };
 
 /// Default pixels per terminal column.
@@ -186,6 +188,14 @@ impl PixelRasterizer {
     }
 
     fn draw_geometry(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+        // Boundaries and traversable regions form the static backdrop.
+        for boundary in frame.geometry.boundaries() {
+            self.draw_ring(image, frame.viewport, boundary.points(), BOUNDARY_COLOR);
+        }
+        for region in frame.geometry.regions() {
+            self.draw_ring(image, frame.viewport, region.points(), REGION_COLOR);
+        }
+
         for path in frame.geometry.paths() {
             let points: Vec<(f64, f64)> = path
                 .points()
@@ -195,6 +205,30 @@ impl PixelRasterizer {
             for pair in points.windows(2) {
                 image.segment(pair[0], pair[1], PATH_COLOR, LINE_HALF_WIDTH);
             }
+        }
+
+        // A movement shares its guide path's polyline but is the routed
+        // connector, drawn over the path with its own color and endpoints.
+        for movement in frame.geometry.movements() {
+            let points: Vec<(f64, f64)> = movement
+                .points()
+                .iter()
+                .map(|point| self.project(frame.viewport, *point))
+                .collect();
+            for pair in points.windows(2) {
+                image.segment(pair[0], pair[1], MOVEMENT_COLOR, LINE_HALF_WIDTH);
+            }
+            for endpoint in [movement.entry(), movement.exit()] {
+                let point = self.project(frame.viewport, endpoint);
+                image.rect(point.0 - 1.0, point.1 - 1.0, 2.0, 2.0, MOVEMENT_COLOR);
+            }
+        }
+
+        for conflict in frame.geometry.conflict_regions() {
+            self.draw_ring(image, frame.viewport, conflict.points(), CONFLICT_COLOR);
+        }
+        for crossing in frame.geometry.crossings() {
+            self.draw_ring(image, frame.viewport, crossing.points(), CROSSING_COLOR);
         }
 
         for portal in frame.geometry.portals() {
@@ -214,6 +248,43 @@ impl PixelRasterizer {
             );
             // A solid cap so the gate reads as a portal, not a plain line.
             image.rect(position.0 - 2.0, position.1 - 2.0, 4.0, 4.0, PORTAL_COLOR);
+        }
+
+        for rule in frame.geometry.rules() {
+            let (sin, cos) = rule.heading().sin_cos();
+            let offset = DVec2::new(-sin, cos) * RULE_MARKER_OFFSET_M;
+            let point = self.project(frame.viewport, rule.position() + offset);
+            image.rect(point.0 - 1.0, point.1 - 1.0, 2.0, 2.0, RULE_COLOR);
+        }
+
+        for signal in frame.geometry.signals() {
+            for head in signal.heads() {
+                let (sin, cos) = head.heading().sin_cos();
+                let offset = DVec2::new(sin, -cos) * SIGNAL_GATE_HALF_WIDTH_M;
+                image.segment(
+                    self.project(frame.viewport, head.position() + offset),
+                    self.project(frame.viewport, head.position() - offset),
+                    SIGNAL_COLOR,
+                    LINE_HALF_WIDTH,
+                );
+                let point = self.project(frame.viewport, head.position());
+                image.rect(point.0 - 1.0, point.1 - 1.0, 2.0, 2.0, SIGNAL_COLOR);
+            }
+        }
+    }
+
+    /// Draw a closed polygon outline, connecting the last vertex to the first.
+    fn draw_ring(&self, image: &mut RgbaImage, viewport: Viewport, points: &[DVec2], color: Rgb) {
+        if points.len() < 2 {
+            return;
+        }
+        for index in 0..points.len() {
+            image.segment(
+                self.project(viewport, points[index]),
+                self.project(viewport, points[(index + 1) % points.len()]),
+                color,
+                LINE_HALF_WIDTH,
+            );
         }
     }
 
@@ -370,6 +441,51 @@ mod tests {
         image.rgba().as_chunks::<4>().0.contains(&target)
     }
 
+    /// A geometry-only frame for a scenario carrying every general primitive.
+    fn general_frame(viewport: Viewport) -> SceneFrame {
+        let source = parse_scenario_source(
+            "{ schema_version: 1, id: 'four_leg', \
+             coordinate_system: { x: 'east_m', y: 'north_m' }, \
+             paths: [ { id: 'ew', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] }, \
+             { id: 'ns', points: [ { x: 0, y: -20 }, { x: 0, y: 20 } ] } ], \
+             portals: [ { id: 'west', path: 'ew', end: 'start', width_m: 3.5 }, \
+             { id: 'east', path: 'ew', end: 'end', width_m: 3.5 }, \
+             { id: 'south', path: 'ns', end: 'start', width_m: 3.5 }, \
+             { id: 'north', path: 'ns', end: 'end', width_m: 3.5 } ], \
+             boundaries: [ { id: 'world', points: [ { x: -30, y: -30 }, { x: 30, y: -30 }, \
+             { x: 30, y: 30 }, { x: -30, y: 30 } ] } ], \
+             regions: [ { id: 'area', points: [ { x: -8, y: -3 }, { x: -3, y: -3 }, \
+             { x: -3, y: 3 }, { x: -8, y: 3 } ] }, \
+             { id: 'plaza', points: [ { x: -28, y: -28 }, { x: -22, y: -28 }, \
+             { x: -22, y: -22 }, { x: -28, y: -22 } ] } ], \
+             movements: [ { id: 'ew_through', from: 'west', to: 'east', path: 'ew', priority: 0 }, \
+             { id: 'ns_through', from: 'south', to: 'north', path: 'ns', priority: 1 } ], \
+             crossings: [ { id: 'cross', region: 'area', movements: [ 'ew_through' ] } ], \
+             conflict_regions: [ { id: 'center', points: [ { x: -2, y: -2 }, { x: 2, y: -2 }, \
+             { x: 2, y: 2 }, { x: -2, y: 2 } ], movements: [ 'ew_through', 'ns_through' ] } ], \
+             rules: [ { id: 'r_ew', movement: 'ew_through', kind: 'signal', signal: 'main' } ], \
+             signals: [ { id: 'main', heads: [ { id: 'ew', movement: 'ew_through' } ], \
+             phases: [ { duration_s: 20.0, states: [ { head: 'ew', color: 'green' } ] } ] } ] }",
+        )
+        .expect("scenario parses");
+        let compiled = CompiledScenario::compile(source).expect("scenario compiles");
+        SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: 0,
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport,
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies: Vec::new(),
+            overlays: Overlays::default(),
+        }
+    }
+
     #[test]
     fn a_frame_scales_by_the_cell_aspect() {
         let raster = PixelRasterizer::new(40, 20);
@@ -436,5 +552,26 @@ mod tests {
         image.put(2, 0, Rgb::WHITE);
         image.put(0, 2, Rgb::WHITE);
         assert!(image.rgba().iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn every_general_primitive_is_drawn_in_its_own_color() {
+        let raster = PixelRasterizer::new(160, 80);
+        let frame = general_frame(Viewport::new(DVec2::ZERO, 0.4));
+        let image = raster.rasterize(&frame);
+        for (name, color) in [
+            ("boundary", BOUNDARY_COLOR),
+            ("region", REGION_COLOR),
+            ("movement", MOVEMENT_COLOR),
+            ("crossing", CROSSING_COLOR),
+            ("conflict region", CONFLICT_COLOR),
+            ("rule", RULE_COLOR),
+            ("signal", SIGNAL_COLOR),
+        ] {
+            assert!(
+                contains_color(&image, color),
+                "{name} primitive was not drawn in its color"
+            );
+        }
     }
 }
