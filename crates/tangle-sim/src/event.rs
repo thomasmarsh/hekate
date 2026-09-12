@@ -4,6 +4,14 @@ use tangle_model::PathId;
 
 use crate::agent::AgentId;
 
+/// Version of the typed event schema emitted by this build.
+///
+/// Freeze this in the run manifest so a later trace invalidation is deliberate.
+/// Increment it when an existing event's meaning, fields, or payload semantics
+/// change; adding a new variant is also a consumer-visible change, so bump it
+/// before any golden trace is regenerated for that reason.
+pub const EVENT_VERSION: u32 = 1;
+
 /// Why an agent left the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DespawnReason {
@@ -14,7 +22,8 @@ pub enum DespawnReason {
 /// A typed transition emitted by a step.
 ///
 /// Events carry dense identifiers and unit-suffixed fields so observers can
-/// build traces without touching internal state.
+/// build traces without touching internal state. See [`EVENT_VERSION`] for the
+/// schema version recorded in run provenance.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
     /// An agent entered the world at a path position.

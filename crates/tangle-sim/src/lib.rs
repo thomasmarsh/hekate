@@ -43,7 +43,7 @@ mod units;
 
 pub use agent::AgentId;
 pub use config::{DEFAULT_STEP, RunConfig};
-pub use event::{DespawnReason, Event};
+pub use event::{DespawnReason, EVENT_VERSION, Event};
 pub use sim::{InitError, RunSummary, Simulation, StepOutput};
 pub use snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 pub use time::SimTime;

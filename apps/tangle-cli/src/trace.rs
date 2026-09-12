@@ -123,7 +123,7 @@ fn write_line<T: Serialize>(bytes: &mut Vec<u8>, record: &T) {
     bytes.push(b'\n');
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut hash = String::with_capacity(64);
     for byte in digest {

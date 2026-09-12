@@ -8,12 +8,18 @@
 //! crates remain filesystem-free, and this crate depends on them rather than
 //! the other way around.
 
+mod baseline;
 mod trace;
 
 use std::path::{Path, PathBuf};
 
 use tangle_model::{CompiledScenario, Diagnostic, ParseError, parse_scenario_source};
 
+pub use baseline::{
+    BASELINE_VERSION, Baseline, CaptureError, CaptureRequest, Convergence,
+    PERFORMANCE_REPORT_VERSION, PRESETS, PerformanceReport, Preset, PresetPerformance, PresetTrace,
+    ScenarioProvenance, capture,
+};
 pub use trace::{Trace, TraceRecorder, canonical_trace};
 
 /// Failure to load and compile a scenario file.
@@ -55,18 +61,30 @@ pub enum LoadError {
 /// Semantic validation and compilation are the same mandatory steps the kernel
 /// requires, so a scenario that loads here is ready to run.
 pub fn load_scenario(path: &Path) -> Result<CompiledScenario, LoadError> {
+    load_scenario_hashed(path).map(|(scenario, _)| scenario)
+}
+
+/// Read, parse, validate, and compile a scenario, also returning the SHA-256 of
+/// its raw source bytes.
+///
+/// The content hash is provenance, not a parse product: it covers the authored
+/// bytes exactly as written, including comments and whitespace, so a run
+/// manifest can name the artifact it ran.
+pub fn load_scenario_hashed(path: &Path) -> Result<(CompiledScenario, String), LoadError> {
     let text = std::fs::read_to_string(path).map_err(|source| LoadError::Read {
         path: path.to_path_buf(),
         source,
     })?;
+    let content_sha256 = trace::sha256_hex(text.as_bytes());
     let source = parse_scenario_source(&text).map_err(|source| LoadError::Parse {
         path: path.to_path_buf(),
         source,
     })?;
-    CompiledScenario::compile(source).map_err(|diagnostics| LoadError::Invalid {
+    let scenario = CompiledScenario::compile(source).map_err(|diagnostics| LoadError::Invalid {
         path: path.to_path_buf(),
         diagnostics,
-    })
+    })?;
+    Ok((scenario, content_sha256))
 }
 
 fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {

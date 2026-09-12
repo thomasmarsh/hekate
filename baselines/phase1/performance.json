@@ -1,0 +1,36 @@
+{
+  "report_version": 1,
+  "captured_unix_s": 1789226291,
+  "build_profile": "debug",
+  "hardware": {
+    "os": "macos",
+    "arch": "x86_64",
+    "logical_cpus": 4
+  },
+  "presets": [
+    {
+      "preset": "fast",
+      "step_s": 0.1,
+      "ticks": 125,
+      "agent_steps": 352,
+      "wall_seconds": 0.000143347,
+      "agent_steps_per_second": 2455579.816808165
+    },
+    {
+      "preset": "standard",
+      "step_s": 0.05,
+      "ticks": 250,
+      "agent_steps": 704,
+      "wall_seconds": 0.000219836,
+      "agent_steps_per_second": 3202387.23411998
+    },
+    {
+      "preset": "fine",
+      "step_s": 0.02,
+      "ticks": 625,
+      "agent_steps": 1754,
+      "wall_seconds": 0.000462394,
+      "agent_steps_per_second": 3793301.8162000375
+    }
+  ]
+}
