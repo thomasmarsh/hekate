@@ -45,4 +45,6 @@ debug = 0
 
 [profile.release]
 debug = false
-lto = "thin"
+# No LTO, including thin: the link-time cost made release builds too slow for
+# the incremental loop and no benchmark yet shows a benefit. Reconsider only
+# when profiling measures a cross-crate win that outweighs the build time.
