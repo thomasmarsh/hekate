@@ -23,8 +23,12 @@
 //! - **near miss** ([`Event::NearMiss`]): a pair that is not in contact and
 //!   whose signed clearance reached the band `(0,
 //!   NEAR_MISS_THRESHOLD_M]` at some time during the tick, confirmed the same
-//!   way with [`band_entry`]. Contact takes precedence: a pair that touches
-//!   never reports a near miss for the same edge.
+//!   way with [`band_entry`]. Contact and near miss are two nested per-tick
+//!   predicates rather than one predicate with a special case: the contact band
+//!   sits inside the near-miss band, so while a pair is in contact its near-miss
+//!   state is `false`. A pair therefore ends its near-miss record where contact
+//!   begins and begins a new one where contact ends, which keeps both families
+//!   strictly alternating.
 //! - **violation** ([`Event::Violation`]): a crossing action the recorded
 //!   decision says was taken against a forbidding signal.
 //! - **entry and exit** ([`Event::Entry`], [`Event::Exit`]): a body's tick-swept
@@ -41,7 +45,9 @@
 //!   pushed exactly on a membership change, so a transition is reported once.
 //!   A pair or slot in an open state is closed by exactly one end record: the
 //!   same pass that found the change, or — when a pair's open state outlives its
-//!   candidate window — the explicit stale pass below.
+//!   candidate window — the explicit stale pass below. Both pair families and
+//!   every per-agent state therefore alternate begin, end, begin, and never
+//!   repeat a begin without an intervening end.
 //! - No misses: the contact predicate is swept over the whole tick, so a
 //!   sub-tick touch is not missed; region occupancy uses the body's tick-swept
 //!   bounding circle, which contains every pose the body takes during the tick,
@@ -56,7 +62,7 @@
 //!
 //! ## Determinism
 //!
-//! Candidate pairs come from [`SweptBroadPhase`], which is a pure function of
+//! Candidate pairs come from a [`SweptBroadPhase`], which is a pure function of
 //! the indexed bodies and ascending by [`AgentId`]. The open-state sets are
 //! ordered, and nothing here iterates a hash map or depends on insertion order;
 //! the caller sorts the tick's records by [`Event::order_key`]. The only
