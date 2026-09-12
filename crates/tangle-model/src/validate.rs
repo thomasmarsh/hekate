@@ -58,6 +58,8 @@ pub enum DiagnosticCode {
     MovementPortalPathMismatch,
     /// A crossing crosses no movements.
     CrossingEmpty,
+    /// A movement's stop line is non-finite, negative, or past its path end.
+    MovementStopLineInvalid,
     /// A crossing references a region that is not declared.
     CrossingUnknownRegion,
     /// A crossing references a movement that is not declared.
@@ -123,6 +125,7 @@ impl DiagnosticCode {
             Self::MovementUnknownPath => "E_MOVEMENT_UNKNOWN_PATH",
             Self::MovementSelfLoop => "E_MOVEMENT_SELF_LOOP",
             Self::MovementPortalPathMismatch => "E_MOVEMENT_PORTAL_PATH_MISMATCH",
+            Self::MovementStopLineInvalid => "E_MOVEMENT_STOP_LINE",
             Self::CrossingEmpty => "E_CROSSING_EMPTY",
             Self::CrossingUnknownRegion => "E_CROSSING_UNKNOWN_REGION",
             Self::CrossingUnknownMovement => "E_CROSSING_UNKNOWN_MOVEMENT",
@@ -275,7 +278,6 @@ fn validate_paths(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
             continue;
         }
 
-        let mut length = 0.0;
         for point in &path.points {
             if !point.x.is_finite() || !point.y.is_finite() {
                 diagnostics.push(Diagnostic::new(
@@ -288,11 +290,7 @@ fn validate_paths(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
                 ));
             }
         }
-        for pair in path.points.windows(2) {
-            let dx = pair[1].x - pair[0].x;
-            let dy = pair[1].y - pair[0].y;
-            length += (dx * dx + dy * dy).sqrt();
-        }
+        let length = polyline_length(&path.points);
         if !length.is_finite() || length <= 0.0 {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::DegeneratePath,
@@ -301,6 +299,18 @@ fn validate_paths(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
             ));
         }
     }
+}
+
+/// Total traversable length of a polyline in metres.
+fn polyline_length(points: &[PointSource]) -> f64 {
+    points
+        .windows(2)
+        .map(|pair| {
+            let dx = pair[1].x - pair[0].x;
+            let dy = pair[1].y - pair[0].y;
+            (dx * dx + dy * dy).sqrt()
+        })
+        .sum()
 }
 
 fn validate_portals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
@@ -677,6 +687,24 @@ fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
                         ),
                     ));
                 }
+            }
+        }
+
+        if let Some(path) = path {
+            let path_length = polyline_length(&path.points);
+            if !movement.stop_line_m.is_finite()
+                || movement.stop_line_m < 0.0
+                || movement.stop_line_m > path_length
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::MovementStopLineInvalid,
+                    Some(movement.id.clone()),
+                    format!(
+                        "movement '{}' stop_line_m must be finite, non-negative, and no greater \
+                         than its path length {path_length}, got {}",
+                        movement.id, movement.stop_line_m
+                    ),
+                ));
             }
         }
     }
@@ -1282,6 +1310,26 @@ mod tests {
              routes: [ {{ movement: 'through', weight: 1.0 }} ] }} ]"
         ));
         assert!(codes(&non_positive).contains(&"E_NON_POSITIVE"));
+    }
+
+    #[test]
+    fn flags_invalid_movement_stop_lines() {
+        fn with_stop_line(stop_line_m: f64) -> String {
+            format!(
+                "paths: [ {{ id: 'guide', points: [ {{ x: 0, y: 0 }}, {{ x: 100, y: 0 }} ] }} ], \
+                 portals: [ {{ id: 'entry', path: 'guide', end: 'start', width_m: 3.0 }}, \
+                 {{ id: 'exit', path: 'guide', end: 'end', width_m: 3.0 }} ], \
+                 movements: [ {{ id: 'through', from: 'entry', to: 'exit', path: 'guide', \
+                 priority: 0, stop_line_m: {stop_line_m} }} ]"
+            )
+        }
+
+        // Valid: the stop line sits inside the 100 m path and defaults to zero.
+        assert_eq!(validate(&base(FLOW)), Vec::new());
+        assert_eq!(validate(&base(&with_stop_line(40.0))), Vec::new());
+
+        assert!(codes(&base(&with_stop_line(-1.0))).contains(&"E_MOVEMENT_STOP_LINE"));
+        assert!(codes(&base(&with_stop_line(120.0))).contains(&"E_MOVEMENT_STOP_LINE"));
     }
 
     #[test]

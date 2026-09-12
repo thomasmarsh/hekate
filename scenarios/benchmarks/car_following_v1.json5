@@ -1,0 +1,52 @@
+// Benchmark: a long one-way corridor carrying mixed-profile demand.
+//
+// This is the controlled car-following benchmark for PHASE_1_PLAN Increment 2:
+// a single path with no signal, crossing, or stop line, so the only longitudinal
+// interaction is vehicle following. Faster followers catch slower leaders, and
+// the IDM controller must keep every command inside the sampled profile bounds
+// while bodies never overlap.
+{
+  schema_version: 1,
+  id: 'car_following_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -10.0, y: -6.0 },
+        { x: 410.0, y: -6.0 },
+        { x: 410.0, y: 6.0 },
+        { x: -10.0, y: 6.0 },
+      ],
+    },
+  ],
+  paths: [
+    { id: 'corridor', points: [ { x: 0.0, y: 0.0 }, { x: 400.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'corridor', end: 'start', width_m: 3.5 },
+    { id: 'east_exit', path: 'corridor', end: 'end', width_m: 3.5 },
+  ],
+  movements: [
+    { id: 'through', from: 'west_entry', to: 'east_exit', path: 'corridor', priority: 0 },
+  ],
+  rules: [
+    { id: 'free_through', movement: 'through', kind: 'free' },
+  ],
+  demand: [
+    {
+      id: 'west_inflow',
+      portal: 'west_entry',
+      rate_vph: 1200.0,
+      routes: [ { movement: 'through', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 9.0, max: 15.0 },
+    length_m: { min: 4.0, max: 5.2 },
+    width_m: { min: 1.7, max: 2.0 },
+    time_gap_s: { min: 1.0, max: 2.0 },
+    max_accel_mps2: { min: 1.2, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+  },
+}

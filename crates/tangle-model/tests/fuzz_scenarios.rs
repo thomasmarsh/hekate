@@ -143,6 +143,13 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
             to: rng.id(),
             path: rng.id(),
             priority: rng.below(3),
+            // Occasionally negative or past the path end so the stop-line
+            // diagnostic branch is exercised.
+            stop_line_m: if rng.below(4) == 0 {
+                -1.0
+            } else {
+                f64::from(rng.below(200))
+            },
         })
         .collect();
     let crossings: Vec<CrossingSource> = (0..rng.below(MAX_COLLECTION))
@@ -394,6 +401,7 @@ fn consistent_source(rng: &mut Rng) -> ScenarioSource {
                 to: "east".to_owned(),
                 path: "ew".to_owned(),
                 priority: rng.below(3),
+                stop_line_m: 0.0,
             },
             MovementSource {
                 id: "ns_through".to_owned(),
@@ -401,6 +409,7 @@ fn consistent_source(rng: &mut Rng) -> ScenarioSource {
                 to: "north".to_owned(),
                 path: "ns".to_owned(),
                 priority: rng.below(3),
+                stop_line_m: 0.0,
             },
         ],
         crossings: vec![CrossingSource {

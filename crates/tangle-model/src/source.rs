@@ -144,6 +144,12 @@ pub struct MovementSource {
     pub path: String,
     /// Right-of-way rank; a lower value is honored before a higher one.
     pub priority: u32,
+    /// Stop-line arc length in metres from the movement entry, measured along
+    /// the movement's direction of travel. Omitted means `0.0`, the entry
+    /// portal. A controller that must stop holds the vehicle's front bumper at
+    /// this position.
+    #[serde(default)]
+    pub stop_line_m: f64,
 }
 
 /// A pedestrian crossing occupying a traversable region over some movements.

@@ -278,6 +278,12 @@
           "format": "uint32",
           "minimum": 0
         },
+        "stop_line_m": {
+          "description": "Stop-line arc length in metres from the movement entry, measured along\nthe movement's direction of travel. Omitted means `0.0`, the entry\nportal. A controller that must stop holds the vehicle's front bumper at\nthis position.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
         "to": {
           "description": "Portal where the movement ends.",
           "type": "string"

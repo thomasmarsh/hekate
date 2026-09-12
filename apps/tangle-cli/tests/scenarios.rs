@@ -5,10 +5,11 @@
 //! benchmark is the observable contract here; Increment 2 adds the demand that
 //! makes a benchmark runnable.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tangle_cli::load_scenario;
-use tangle_sim::{AgentId, Event, RunConfig, Simulation};
+use tangle_sim::{AgentId, Event, RunConfig, Simulation, SnapshotDetail};
 
 fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -52,6 +53,7 @@ fn benchmark_layouts_compile_from_general_primitives() {
         "straight_approach_v1",
         "perpendicular_conflict_v1",
         "four_leg_signal_v1",
+        "car_following_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
@@ -110,6 +112,9 @@ fn four_leg_benchmark_exposes_its_signal_and_endpoints() {
     assert_eq!(scenario.conflict_regions().len(), 1);
     assert_eq!(scenario.movements()[0].name(), "ew_through");
     assert_eq!(scenario.id_map().movements()[0], "ew_through");
+    // The authored stop line compiles just upstream of the centre conflict.
+    assert!((scenario.movements()[0].stop_line_m() - 34.0).abs() < 1e-9);
+    assert!((scenario.movements()[1].stop_line_m() - 34.0).abs() < 1e-9);
 
     // Entry and exit endpoints derive from the movement's portals.
     let movement = &scenario.movements()[0];
@@ -133,6 +138,7 @@ fn benchmark_demand_generates_routed_vehicles() {
         "straight_approach_v1",
         "perpendicular_conflict_v1",
         "four_leg_signal_v1",
+        "car_following_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
@@ -167,4 +173,74 @@ fn benchmark_demand_generates_routed_vehicles() {
             "benchmark '{name}' produced no demand vehicles"
         );
     }
+}
+
+/// Phase 1 Increment 2 gate: every commanded acceleration and speed stays
+/// inside the sampled profile bounds, and no two bodies on the corridor
+/// overlap while faster followers catch slower leaders.
+#[test]
+fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
+    let path = repo_path("scenarios/benchmarks/car_following_v1.json5");
+    let step = 0.05;
+    let mut follow_brakes = 0u64;
+    for seed in 0..3u64 {
+        let scenario = load_scenario(&path).expect("car-following benchmark loads");
+        let mut sim = Simulation::new(scenario, RunConfig::new(seed)).expect("benchmark runs");
+        let mut previous: HashMap<u32, f64> = HashMap::new();
+        for _ in 0..4000 {
+            sim.step();
+            let snapshot = sim.snapshot(SnapshotDetail::Full);
+            let agents = snapshot.agents();
+            for (index, sample) in agents.iter().enumerate() {
+                let motion = sample.motion.expect("full detail");
+                let profile = sim
+                    .agent_profile(sample.id)
+                    .expect("demand vehicle has a profile");
+                assert!(
+                    motion.speed_mps >= -1e-9,
+                    "seed {seed}: negative speed {}",
+                    motion.speed_mps
+                );
+                assert!(
+                    motion.speed_mps <= profile.desired_speed_mps + 1e-9,
+                    "seed {seed}: speed {} above desired {}",
+                    motion.speed_mps,
+                    profile.desired_speed_mps
+                );
+                if let Some(previous_speed) = previous.get(&sample.id.get()) {
+                    let accel = (motion.speed_mps - previous_speed) / step;
+                    assert!(
+                        accel <= profile.max_accel_mps2 + 1e-6,
+                        "seed {seed}: acceleration {accel} above max {}",
+                        profile.max_accel_mps2
+                    );
+                    assert!(
+                        accel >= -profile.comfortable_brake_mps2 - 1e-6,
+                        "seed {seed}: braking {accel} beyond comfortable {}",
+                        profile.comfortable_brake_mps2
+                    );
+                    if accel < -0.5 {
+                        follow_brakes += 1;
+                    }
+                }
+                previous.insert(sample.id.get(), motion.speed_mps);
+                for other in &agents[index + 1..] {
+                    let other_motion = other.motion.expect("full detail");
+                    if other_motion.path != motion.path {
+                        continue;
+                    }
+                    let half_lengths = (motion.body_length_m + other_motion.body_length_m) * 0.5;
+                    let gap = (motion.path_distance_m - other_motion.path_distance_m).abs();
+                    assert!(
+                        gap >= half_lengths - 1e-9,
+                        "seed {seed}: bodies overlap (gap {gap} < {half_lengths})"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        follow_brakes > 0,
+        "the car-following benchmark must exercise braking while following"
+    );
 }

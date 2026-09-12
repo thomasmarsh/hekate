@@ -35,10 +35,12 @@
 
 mod agent;
 mod config;
+mod control;
 mod demand;
 mod event;
 mod profile;
 mod rng;
+mod signal;
 mod sim;
 mod snapshot;
 mod time;

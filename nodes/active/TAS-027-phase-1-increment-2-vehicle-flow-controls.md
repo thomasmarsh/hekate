@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T16:15:31Z
+updated: 2026-09-12T16:37:55Z
 summary: Phase 1 Increment 2 turns portals into demand, gives cars an IDM longitudinal controller with stop-line, signal, leader, queue, and exit behavior, and records reproducible contextual red-light decisions.
-next: Add path-distance tracking and the documented IDM longitudinal controller over the sampled profiles.
+next: Implement the contextual red-light decision over signal state, distance, speed, urgency, and the compliance profile, and record traceable decision reasons for the inspector.
 ---
 
 # Outcome
@@ -52,8 +52,56 @@ no Phase 2 field is added here.
 # Result
 
 Slice A (portal demand, route assignment, profile sampling, safe spawn
-admission) landed; the IDM controller, stop-line/signal/leader/queue/exit
-behavior, red-light decisions, and inspector records remain.
+admission) and slice B (path-distance tracking under a documented IDM
+longitudinal controller, leader/following/queue/exit behavior, authored stop
+lines, and the fixed-time signal phase state machine) have landed. The
+contextual red-light decision and the inspector decision records remain.
+
+## Slice B — longitudinal control and signals
+
+- `crates/tangle-model/src/source.rs` adds an optional `stop_line_m` on
+  `MovementSource`, an arc length in metres from the movement entry along the
+  movement's travel direction. Omitted means `0.0`. `validate.rs` adds
+  `E_MOVEMENT_STOP_LINE` (finite, non-negative, no greater than the path
+  length) and `compiled.rs` carries `CompiledMovement::stop_line_m`.
+- `crates/tangle-sim/src/control.rs` is the documented IDM model card:
+  `a = a_max[1 - (v/v0)^4 - sum_i (s*/gap_i)^2]` with
+  `s* = s0_i + max(0, v*T + v*dv/(2*sqrt(a_max*b)))`. The profile supplies
+  `v0`, `T`, `a_max`, and `b`; only the free-flow exponent and leader
+  standstill gap are model constants. The command is clamped to
+  `[-b, +a_max]` and speed to `[0, v0]`.
+- `crates/tangle-sim/src/signal.rs` is the fixed-time phase state machine:
+  phases are half-open `[start_s, start_s + duration_s)`, advanced from the
+  authoritative clock, and `Simulation::movement_signal` exposes the authored
+  color. No compliance decision is made.
+- `crates/tangle-sim/src/sim.rs` tracks path distance under IDM for every
+  profile vehicle (the static walking population stays constant-speed and its
+  golden trace is unchanged), follows the nearest same-direction leader bumper
+  to bumper with a stable lowest-id tie-break, admits demand vehicles at a
+  **safe entry speed** (`sqrt(v_leader^2 + 2*b*gap)`) so comfortable braking
+  stays sufficient, holds the front bumper at a red/yellow stop line, and
+  keeps two last-resort caps that make overlap impossible: the next speed may
+  not pass the leader's rear or a stop line in one step.
+- `scenarios/benchmarks/car_following_v1.json5` is the controlled
+  car-following benchmark; `four_leg_signal_v1.json5` now authors
+  `stop_line_m: 34.0` just upstream of its conflict region so the signal queue
+  behavior is exercised.
+
+Evidence:
+
+- `crates/tangle-sim/src/control.rs` and `signal.rs` unit tests cover the IDM
+  bounds, free-flow convergence, stop-line braking, and green/yellow/red phase
+  boundaries including cycle wrap.
+- `crates/tangle-sim/tests/longitudinal_control.rs` covers the stop-line rest
+  position, red queue + non-overlap, green release + exit, free-flow exit,
+  profile speed bounds, and same-seed reproducibility of control and signal
+  state.
+- `apps/tangle-cli/tests/scenarios.rs` runs `car_following_v1` across seeds 0-2
+  and asserts every command stays inside the sampled profile bounds
+  (`speed in [0, v0]`, `accel in [-b, +a_max]`) with no body overlap while
+  braking under real following.
+
+## Slice A — demand, profiles, admission
 
 - Schema version 1 gains optional `demand` and `profiles` collections in
   `crates/tangle-model/src/source.rs`; `validate.rs` adds `E_DEMAND_UNKNOWN_PORTAL`,

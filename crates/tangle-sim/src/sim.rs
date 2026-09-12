@@ -3,21 +3,26 @@
 //! `Simulation` owns the authoritative clock. It advances exactly one
 //! configured tick per [`Simulation::step`] call and never reads wall-clock
 //! time, so frame rate, pause, and speed controls cannot change results.
-//! Increment 0 moves constant-speed agents along a guide path and emits typed
-//! spawn/despawn events. Increment 2 slice A adds scenario-driven portal demand
-//! with route assignment, per-agent profile sampling, and safe spawn admission;
-//! interaction, longitudinal control, and signals remain later work.
+//! Increment 2 slice A adds scenario-driven portal demand with route
+//! assignment, per-agent profile sampling, and safe spawn admission. Slice B
+//! adds path-distance tracking under a documented IDM longitudinal controller
+//! ([`crate::control`]), leader/following/queue/exit behavior, authored stop
+//! lines, and the fixed-time signal phase state machine ([`crate::signal`]).
+//! The contextual red-light decision is later work.
 
 use tangle_model::{
     CompiledMovement, CompiledScenario, DemandId, MovementId, PathEnd, PathId, PortalId,
+    SignalColor, SignalId,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentStore};
 use crate::config::RunConfig;
+use crate::control::{self, Constraint, IDM_STANDSTILL_GAP_M};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_route};
 use crate::event::{DespawnReason, Event};
 use crate::profile::{VehicleProfile, sample_profile};
 use crate::rng::{STREAM_DEMAND, STREAM_PROFILE, derive_stream, uniform01};
+use crate::signal::{self, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 use crate::time::SimTime;
 use crate::units::Seconds;
@@ -145,6 +150,8 @@ pub struct Simulation {
     tick: u64,
     agents: AgentStore,
     demand: Vec<DemandRuntime>,
+    signals: Vec<SignalRuntime>,
+    signal_heads: Vec<Option<(SignalId, usize)>>,
     events: Vec<Event>,
     population_announced: bool,
     spawned_total: u64,
@@ -185,6 +192,12 @@ impl Simulation {
             .collect();
 
         let population = *scenario.population();
+        let signals: Vec<SignalRuntime> = scenario
+            .signals()
+            .iter()
+            .map(|signal| SignalRuntime::new(signal.cycle_s()))
+            .collect();
+        let signal_heads = signal::movement_signal_map(&scenario);
         let mut agents = AgentStore::default();
         let mut spawned_total = 0;
         if demand.is_empty() && population.vehicle_count > 0 {
@@ -227,6 +240,8 @@ impl Simulation {
             tick: 0,
             agents,
             demand,
+            signals,
+            signal_heads,
             events: Vec::new(),
             population_announced: false,
             spawned_total,
@@ -334,6 +349,21 @@ impl Simulation {
         self.agents.profile.get(agent.index()).copied().flatten()
     }
 
+    /// Current display color of the signal head controlling a movement.
+    ///
+    /// `None` when the movement has no signal rule or no matching head. This is
+    /// the observable seam for the fixed-time phase state machine; it reports
+    /// the authored color only and makes no compliance decision.
+    pub fn movement_signal(&self, movement: MovementId) -> Option<SignalColor> {
+        let (signal_id, head_index) = self.signal_heads.get(movement.index()).copied().flatten()?;
+        let signal = self.scenario.signal(signal_id)?;
+        let elapsed = self
+            .signals
+            .get(signal_id.index())
+            .map_or(0.0, |runtime| runtime.elapsed_s());
+        signal::head_color(signal, head_index, elapsed)
+    }
+
     /// The root seed recorded for the run.
     pub fn seed(&self) -> u64 {
         self.config.seed()
@@ -356,6 +386,12 @@ impl Simulation {
         self.tick += 1;
         let dt = self.config.step().as_secs();
 
+        // Fixed-time phases advance with the authoritative clock, so the color
+        // governing this interval is a function of simulation time only.
+        for runtime in &mut self.signals {
+            runtime.advance(dt);
+        }
+
         for index in 0..self.agents.len() {
             if !self.agents.alive[index] {
                 continue;
@@ -366,8 +402,13 @@ impl Simulation {
             };
 
             let direction = self.agents.direction[index];
-            let travelled =
-                self.agents.distance_m[index] + self.agents.speed_mps[index] * direction * dt;
+            // Profile vehicles drive under IDM; the walking skeleton's static
+            // population keeps its constant speed and is byte-identical.
+            let speed_mps = match self.agents.profile[index] {
+                Some(profile) => self.controlled_speed(index, &profile, dt),
+                None => self.agents.speed_mps[index],
+            };
+            let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
             let length = path.length();
             let distance_m = if direction < 0.0 {
                 travelled.max(0.0)
@@ -375,6 +416,7 @@ impl Simulation {
                 travelled.min(length)
             };
 
+            self.agents.speed_mps[index] = speed_mps;
             self.agents.distance_m[index] = distance_m;
             self.agents.position[index] = path.position_at(distance_m);
             self.agents.heading_rad[index] = path.heading_at(distance_m);
@@ -396,6 +438,124 @@ impl Simulation {
         }
 
         self.advance_demand(dt);
+    }
+
+    /// Speed for one profile vehicle after IDM, its bounds, and safety caps.
+    ///
+    /// The controller is the documented IDM in [`crate::control`]. Two hard
+    /// caps keep the bounded model collision-free without an extra collision
+    /// resolver: the next speed may not pass the nearest leader's rear, and it
+    /// may not pass a stop line whose control requires a stop.
+    fn controlled_speed(&self, index: usize, profile: &VehicleProfile, dt: f64) -> f64 {
+        let leader = self.nearest_leader(index);
+        let stop_line = self.stop_line_constraint(index);
+
+        let mut constraints = [Constraint {
+            gap_m: f64::INFINITY,
+            speed_mps: 0.0,
+            standstill_m: 0.0,
+        }; 2];
+        let mut count = 0;
+        for constraint in [leader, stop_line].into_iter().flatten() {
+            constraints[count] = constraint;
+            count += 1;
+        }
+
+        let speed_mps = self.agents.speed_mps[index];
+        let accel = control::desired_acceleration(profile, speed_mps, &constraints[..count]);
+        let mut new_speed = (speed_mps + accel * dt).clamp(0.0, profile.desired_speed_mps);
+
+        if let Some(leader) = leader {
+            // The follower's front bumper must not pass the leader's rear this
+            // step. The gap already reflects the leader's post-step position
+            // (lower-index leaders integrate first), so the reachable speed is
+            // `gap / dt`. This binds only when IDM's bounded braking is
+            // insufficient.
+            new_speed = new_speed.min(leader.gap_m / dt);
+        }
+        if let Some(stop_line) = stop_line {
+            // A required stop holds the front bumper at the authored line.
+            new_speed = new_speed.min(stop_line.gap_m / dt);
+        }
+        new_speed.max(0.0)
+    }
+
+    /// Nearest live leader ahead on the same path travelling the same way.
+    ///
+    /// The gap is bumper to bumper along the path. Iterating in ascending agent
+    /// order means the lowest agent id wins a tie, which keeps tie-breaking
+    /// stable across runs. Opposite-direction and crossing-path interaction is
+    /// later work.
+    fn nearest_leader(&self, index: usize) -> Option<Constraint> {
+        let direction = self.agents.direction[index];
+        let own_progress = direction * self.agents.distance_m[index];
+        let own_front = own_progress + self.agents.body_length_m[index] * 0.5;
+        let mut best: Option<(usize, f64)> = None;
+        for other in 0..self.agents.len() {
+            if other == index || !self.agents.alive[other] {
+                continue;
+            }
+            if self.agents.path[other] != self.agents.path[index]
+                || self.agents.direction[other] != direction
+            {
+                continue;
+            }
+            let other_progress = direction * self.agents.distance_m[other];
+            if other_progress <= own_progress {
+                continue;
+            }
+            let gap = other_progress - self.agents.body_length_m[other] * 0.5 - own_front;
+            if best.is_none_or(|(_, best_gap)| gap < best_gap) {
+                best = Some((other, gap));
+            }
+        }
+        best.map(|(other, gap)| Constraint {
+            gap_m: gap.max(0.0),
+            speed_mps: self.agents.speed_mps[other],
+            standstill_m: IDM_STANDSTILL_GAP_M,
+        })
+    }
+
+    /// Stop-line constraint for an agent whose control currently says stop.
+    ///
+    /// A vehicle already past the line returns `None` and continues; it is not
+    /// pulled backward. The constraint means a red or yellow signal head for
+    /// the agent's movement; the contextual choice to obey that head is later
+    /// work, so this slice always stops.
+    fn stop_line_constraint(&self, index: usize) -> Option<Constraint> {
+        let movement_id = self.agents.movement[index]?;
+        if !self.control_requires_stop(movement_id) {
+            return None;
+        }
+        let movement = self.scenario.movement(movement_id)?;
+        let path = self.scenario.path(self.agents.path[index])?;
+        let direction = self.agents.direction[index];
+        // `stop_line_m` is measured from the movement entry along travel, so a
+        // backward movement reaches it at `path_length - stop_line_m`.
+        let stop_line_distance = if direction < 0.0 {
+            path.length() - movement.stop_line_m()
+        } else {
+            movement.stop_line_m()
+        };
+        let own_progress = direction * self.agents.distance_m[index];
+        let own_front = own_progress + self.agents.body_length_m[index] * 0.5;
+        let gap = direction * stop_line_distance - own_front;
+        if gap < 0.0 {
+            return None;
+        }
+        Some(Constraint {
+            gap_m: gap,
+            speed_mps: 0.0,
+            standstill_m: 0.0,
+        })
+    }
+
+    /// Whether the signal head governing a movement currently says stop.
+    fn control_requires_stop(&self, movement: MovementId) -> bool {
+        matches!(
+            self.movement_signal(movement),
+            Some(SignalColor::Red | SignalColor::Yellow)
+        )
     }
 
     /// Generate demand arrivals, then admit them subject to portal clearance.
@@ -472,11 +632,15 @@ impl Simulation {
         };
         let position = path.position_at(entry_distance);
         let heading_rad = path.heading_at(entry_distance);
+        // Enter at a speed from which the profile's comfortable braking can
+        // still follow the nearest vehicle ahead; the desired speed remains the
+        // target once the entry is safe.
+        let speed_mps = self.safe_entry_speed(path_id, entry_distance, direction, &profile);
 
         self.agents.push(AgentInit {
             path: path_id,
             distance_m: entry_distance,
-            speed_mps: profile.desired_speed_mps,
+            speed_mps,
             position,
             heading_rad,
             body_length_m: profile.length_m,
@@ -511,6 +675,45 @@ impl Simulation {
             }
         }
         true
+    }
+
+    /// Greatest speed at which an entering vehicle can safely follow ahead.
+    ///
+    /// The entering vehicle is never faster than the speed from which the
+    /// profile's comfortable braking brings it to the nearest leader's speed
+    /// within the available gap: `v = sqrt(v_leader² + 2·b·gap)`. Without a
+    /// leader the desired speed is unchanged. This is what keeps IDM's bounded
+    /// comfortable braking sufficient during admission, so the emergency
+    /// anti-overlap cap is a backstop rather than the normal regime.
+    fn safe_entry_speed(
+        &self,
+        path: PathId,
+        entry_distance: f64,
+        direction: f64,
+        profile: &VehicleProfile,
+    ) -> f64 {
+        let entry_progress = direction * entry_distance;
+        let entry_front = entry_progress + profile.length_m * 0.5;
+        let brake = profile.comfortable_brake_mps2;
+        let mut speed_mps = profile.desired_speed_mps;
+        for index in 0..self.agents.len() {
+            if !self.agents.alive[index]
+                || self.agents.path[index] != path
+                || self.agents.direction[index] != direction
+            {
+                continue;
+            }
+            let progress = direction * self.agents.distance_m[index];
+            if progress <= entry_progress {
+                continue;
+            }
+            let gap = progress - self.agents.body_length_m[index] * 0.5 - entry_front;
+            let usable = (gap - IDM_STANDSTILL_GAP_M).max(0.0);
+            let leader_speed = self.agents.speed_mps[index];
+            let limit = (leader_speed * leader_speed + 2.0 * brake * usable).sqrt();
+            speed_mps = speed_mps.min(limit);
+        }
+        speed_mps.max(0.0)
     }
 }
 

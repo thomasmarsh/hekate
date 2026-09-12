@@ -50,8 +50,8 @@
     { id: 'north_exit', path: 'ns_road', end: 'end', width_m: 7.0 },
   ],
   movements: [
-    { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0 },
-    { id: 'ns_through', from: 'south_entry', to: 'north_exit', path: 'ns_road', priority: 0 },
+    { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0, stop_line_m: 34.0 },
+    { id: 'ns_through', from: 'south_entry', to: 'north_exit', path: 'ns_road', priority: 0, stop_line_m: 34.0 },
   ],
   crossings: [
     { id: 'west_crossing', region: 'west_crossing_area', movements: [ 'ew_through' ] },

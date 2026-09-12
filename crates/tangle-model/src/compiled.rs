@@ -590,6 +590,7 @@ pub struct CompiledMovement {
     to: PortalId,
     path: PathId,
     priority: u32,
+    stop_line_m: f64,
     entry: DVec2,
     entry_heading: f64,
     exit: DVec2,
@@ -625,6 +626,12 @@ impl CompiledMovement {
     /// Lower values are honored before higher ones.
     pub fn priority(&self) -> u32 {
         self.priority
+    }
+
+    /// Stop-line arc length in metres from the movement entry, measured along
+    /// the movement's direction of travel. `0.0` places it at the entry portal.
+    pub fn stop_line_m(&self) -> f64 {
+        self.stop_line_m
     }
 
     /// World position of the entry endpoint in metres.
@@ -1067,6 +1074,7 @@ impl CompiledScenario {
                     to,
                     path: PathId::from_index(path_index[movement.path.as_str()]),
                     priority: movement.priority,
+                    stop_line_m: movement.stop_line_m,
                     entry: entry_portal.position(),
                     entry_heading: entry_portal.heading(),
                     exit: exit_portal.position(),
