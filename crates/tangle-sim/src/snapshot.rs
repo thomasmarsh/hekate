@@ -5,11 +5,11 @@
 //! kernel.
 
 use glam::DVec2;
-use tangle_model::{MovementId, PathId};
+use tangle_model::{MovementId, PathId, PedestrianRouteId};
 
-use crate::agent::AgentId;
+use crate::agent::{AgentId, AgentMode};
 use crate::compliance::ComplianceDecision;
-use crate::profile::VehicleProfile;
+use crate::profile::{PedestrianProfile, VehicleProfile};
 use crate::time::SimTime;
 
 /// How much per-agent detail a snapshot carries.
@@ -19,30 +19,40 @@ pub enum SnapshotDetail {
     /// without carrying simulation internals.
     #[default]
     Position,
-    /// Position plus longitudinal motion, route, profile, and body dimensions.
+    /// Position plus mode, longitudinal motion, route, profile, and body
+    /// dimensions.
     Full,
 }
 
 /// Motion and route detail for one agent, present at [`SnapshotDetail::Full`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionSample {
+    /// Whether this body is a vehicle or a pedestrian. A pedestrian body is a
+    /// circle inscribed in the reported body bounds.
+    pub mode: AgentMode,
     /// Longitudinal speed in metres per second. IDM-controlled for demand
-    /// vehicles; the static walking-skeleton population holds its configured
-    /// constant speed.
+    /// vehicles; a pedestrian and the static walking-skeleton population hold
+    /// a constant speed.
     pub speed_mps: f64,
     /// The guide path the agent follows.
     pub path: PathId,
     /// Arc-length position in metres.
     pub path_distance_m: f64,
-    /// Body length in metres.
+    /// Body length in metres. A pedestrian body is a circle, so this is the
+    /// diameter.
     pub body_length_m: f64,
-    /// Body width in metres.
+    /// Body width in metres. A pedestrian body is a circle, so this is the
+    /// diameter.
     pub body_width_m: f64,
-    /// Assigned route, present for demand-generated vehicles.
+    /// Assigned vehicle route, present for demand-generated vehicles.
     pub route: Option<MovementId>,
-    /// Sampled physical and behavior profile, present for demand-generated
-    /// vehicles.
+    /// Sampled vehicle profile, present for demand-generated vehicles.
     pub profile: Option<VehicleProfile>,
+    /// Assigned pedestrian route, present for demand-generated pedestrians.
+    pub pedestrian_route: Option<PedestrianRouteId>,
+    /// Sampled pedestrian body and gait, present for demand-generated
+    /// pedestrians.
+    pub pedestrian_profile: Option<PedestrianProfile>,
     /// Most recent signal-compliance decision, present for signal-controlled
     /// vehicles. The snapshot deliberately carries only this small record, not
     /// the controller's internal state.

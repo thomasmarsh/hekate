@@ -9,21 +9,30 @@
 //! ([`crate::control`]), leader/following/queue/exit behavior, authored stop
 //! lines, the fixed-time signal phase state machine ([`crate::signal`]), and the
 //! contextual signal-compliance decision ([`crate::compliance`]) that gates the
-//! stop-line constraint and records a traceable reason.
+//! stop-line constraint and records a traceable reason. Increment 3 slice A
+//! adds pedestrian agents generated from pedestrian demand: they share the
+//! agent store, identifier space, events, and clock with vehicles and track
+//! their assigned route at the sampled walking speed. Waypoint control, local
+//! collision avoidance, and mixed interaction are later slices.
 
 use tangle_model::{
-    CompiledMovement, CompiledScenario, DemandId, MovementId, PathEnd, PathId, PortalId,
-    SignalColor, SignalId,
+    CompiledMovement, CompiledPedestrianRoute, CompiledScenario, DemandId, MovementId, PathEnd,
+    PathId, PedestrianDemandId, PedestrianRouteId, PortalId, SignalColor, SignalId,
 };
 
-use crate::agent::{AgentId, AgentInit, AgentStore};
+use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore};
 use crate::compliance::{self, ComplianceDecision, SignalAction};
 use crate::config::RunConfig;
 use crate::control::{self, Constraint, IDM_STANDSTILL_GAP_M};
-use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_route};
+use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
 use crate::event::{DespawnReason, Event};
-use crate::profile::{VehicleProfile, sample_profile};
-use crate::rng::{STREAM_COMPLIANCE, STREAM_DEMAND, STREAM_PROFILE, derive_stream, uniform01};
+use crate::profile::{
+    PedestrianProfile, VehicleProfile, sample_pedestrian_profile, sample_profile,
+};
+use crate::rng::{
+    STREAM_COMPLIANCE, STREAM_DEMAND, STREAM_PEDESTRIAN_DEMAND, STREAM_PROFILE, derive_stream,
+    uniform01,
+};
 use crate::signal::{self, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 use crate::time::SimTime;
@@ -133,7 +142,7 @@ impl RunSummary {
         self.despawned
     }
 
-    /// Demand arrivals shed because a pending queue was full.
+    /// Vehicle and pedestrian arrivals shed because a pending queue was full.
     pub fn dropped(&self) -> u64 {
         self.dropped
     }
@@ -151,7 +160,8 @@ pub struct Simulation {
     config: RunConfig,
     tick: u64,
     agents: AgentStore,
-    demand: Vec<DemandRuntime>,
+    demand: Vec<DemandRuntime<MovementId>>,
+    pedestrian_demand: Vec<DemandRuntime<PedestrianRouteId>>,
     signals: Vec<SignalRuntime>,
     signal_heads: Vec<Option<(SignalId, usize)>>,
     events: Vec<Event>,
@@ -165,11 +175,11 @@ pub struct Simulation {
 impl Simulation {
     /// Build a simulation from a compiled scenario and run configuration.
     ///
-    /// When the scenario declares demand sources, vehicles arrive over time at
-    /// their portals and the static walking-skeleton population is not used.
-    /// Otherwise the initial population is placed immediately along the first
-    /// guide path at the configured spacing, so a snapshot before the first
-    /// step already shows the starting state. The first [`Self::step`]
+    /// When the scenario declares demand sources of either mode, agents arrive
+    /// over time at their portals and the static walking-skeleton population is
+    /// not used. Otherwise the initial population is placed immediately along
+    /// the first guide path at the configured spacing, so a snapshot before the
+    /// first step already shows the starting state. The first [`Self::step`]
     /// announces an initial population with [`Event::Spawned`] before
     /// advancing the clock.
     pub fn new(scenario: CompiledScenario, config: RunConfig) -> Result<Self, InitError> {
@@ -180,9 +190,11 @@ impl Simulation {
             });
         }
 
-        // One `demand` substream per source: arrivals at different portals are
-        // independent and stable under the root seed.
-        let demand: Vec<DemandRuntime> = scenario
+        // One `demand` substream per vehicle source and one
+        // `pedestrian_demand` substream per pedestrian source: arrivals at
+        // different portals are independent, and the mode-specific stream
+        // names keep the two modes from sharing a generator.
+        let demand: Vec<DemandRuntime<MovementId>> = scenario
             .demand()
             .iter()
             .enumerate()
@@ -190,6 +202,17 @@ impl Simulation {
                 DemandRuntime::new(
                     index,
                     derive_stream(config.seed(), STREAM_DEMAND, index as u32),
+                )
+            })
+            .collect();
+        let pedestrian_demand: Vec<DemandRuntime<PedestrianRouteId>> = scenario
+            .pedestrian_demand()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                DemandRuntime::new(
+                    index,
+                    derive_stream(config.seed(), STREAM_PEDESTRIAN_DEMAND, index as u32),
                 )
             })
             .collect();
@@ -203,7 +226,7 @@ impl Simulation {
         let signal_heads = signal::movement_signal_map(&scenario);
         let mut agents = AgentStore::default();
         let mut spawned_total = 0;
-        if demand.is_empty() && population.vehicle_count > 0 {
+        if demand.is_empty() && pedestrian_demand.is_empty() && population.vehicle_count > 0 {
             let path = scenario.paths().first().ok_or(InitError::NoGuidePath {
                 vehicles: population.vehicle_count,
             })?;
@@ -222,6 +245,7 @@ impl Simulation {
             for index in 0..population.vehicle_count {
                 let distance_m = f64::from(index) * population.vehicle_spacing_m;
                 agents.push(AgentInit {
+                    mode: AgentMode::Vehicle,
                     path: path.id(),
                     distance_m,
                     speed_mps: population.vehicle_speed_mps,
@@ -232,6 +256,8 @@ impl Simulation {
                     direction: 1.0,
                     movement: None,
                     profile: None,
+                    pedestrian_route: None,
+                    pedestrian_profile: None,
                 });
             }
             spawned_total = u64::from(population.vehicle_count);
@@ -243,6 +269,7 @@ impl Simulation {
             tick: 0,
             agents,
             demand,
+            pedestrian_demand,
             signals,
             signal_heads,
             events: Vec::new(),
@@ -287,6 +314,7 @@ impl Simulation {
                 motion: match detail {
                     SnapshotDetail::Position => None,
                     SnapshotDetail::Full => Some(MotionSample {
+                        mode: self.agents.mode[index],
                         speed_mps: self.agents.speed_mps[index],
                         path: self.agents.path[index],
                         path_distance_m: self.agents.distance_m[index],
@@ -294,6 +322,8 @@ impl Simulation {
                         body_width_m: self.agents.body_width_m[index],
                         route: self.agents.movement[index],
                         profile: self.agents.profile[index],
+                        pedestrian_route: self.agents.pedestrian_route[index],
+                        pedestrian_profile: self.agents.pedestrian_profile[index],
                         decision: self.agents.decision[index],
                     }),
                 },
@@ -346,6 +376,26 @@ impl Simulation {
             .map_or(0, |runtime| runtime.dropped)
     }
 
+    /// Pedestrians waiting for safe admission at one demand source.
+    pub fn pending_pedestrian_arrivals(&self, demand: PedestrianDemandId) -> usize {
+        self.pedestrian_demand
+            .get(demand.index())
+            .map_or(0, DemandRuntime::pending_len)
+    }
+
+    /// Pedestrian arrivals shed because a demand source's pending queue was
+    /// full.
+    pub fn dropped_pedestrian_arrivals(&self, demand: PedestrianDemandId) -> u64 {
+        self.pedestrian_demand
+            .get(demand.index())
+            .map_or(0, |runtime| runtime.dropped)
+    }
+
+    /// Mode of an agent slot, or `None` when the identifier has no slot.
+    pub fn agent_mode(&self, agent: AgentId) -> Option<AgentMode> {
+        self.agents.mode.get(agent.index()).copied()
+    }
+
     /// Route assigned to an agent, present for demand-generated vehicles.
     pub fn agent_route(&self, agent: AgentId) -> Option<MovementId> {
         self.agents.movement.get(agent.index()).copied().flatten()
@@ -354,6 +404,25 @@ impl Simulation {
     /// Sampled profile of an agent, present for demand-generated vehicles.
     pub fn agent_profile(&self, agent: AgentId) -> Option<VehicleProfile> {
         self.agents.profile.get(agent.index()).copied().flatten()
+    }
+
+    /// Route assigned to an agent, present for demand-generated pedestrians.
+    pub fn agent_pedestrian_route(&self, agent: AgentId) -> Option<PedestrianRouteId> {
+        self.agents
+            .pedestrian_route
+            .get(agent.index())
+            .copied()
+            .flatten()
+    }
+
+    /// Sampled pedestrian body and gait, present for demand-generated
+    /// pedestrians.
+    pub fn agent_pedestrian_profile(&self, agent: AgentId) -> Option<PedestrianProfile> {
+        self.agents
+            .pedestrian_profile
+            .get(agent.index())
+            .copied()
+            .flatten()
     }
 
     /// Steps so far in which a safety position cap forced more braking than
@@ -621,6 +690,12 @@ impl Simulation {
     /// an arrival is admitted. Every state-affecting choice is therefore a
     /// deterministic function of the root seed.
     fn advance_demand(&mut self, dt: f64) {
+        self.advance_vehicle_demand(dt);
+        self.advance_pedestrian_demand(dt);
+    }
+
+    /// Generate vehicle arrivals, then admit them subject to portal clearance.
+    fn advance_vehicle_demand(&mut self, dt: f64) {
         for runtime in 0..self.demand.len() {
             let source_index = self.demand[runtime].source;
             let rate_vph = self.scenario.demand()[source_index].rate_vph();
@@ -653,6 +728,50 @@ impl Simulation {
             while let Some(&movement) = self.demand[runtime].pending.front() {
                 if self.try_admit(movement) {
                     self.demand[runtime].pending.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Generate pedestrian arrivals, then admit them subject to portal
+    /// clearance.
+    ///
+    /// This mirrors the vehicle path with the `pedestrian_demand` stream and
+    /// the pedestrian route identifier, so the two modes share the demand
+    /// machinery but never a mutable generator.
+    fn advance_pedestrian_demand(&mut self, dt: f64) {
+        for runtime in 0..self.pedestrian_demand.len() {
+            let source_index = self.pedestrian_demand[runtime].source;
+            let rate_pph = self.scenario.pedestrian_demand()[source_index].rate_pph();
+            let expected = rate_pph / 3600.0 * dt;
+            let mut arrivals = 0u64;
+            if expected.is_finite() && expected > 0.0 {
+                arrivals = expected.floor() as u64;
+                let fraction = expected - expected.floor();
+                if uniform01(&mut self.pedestrian_demand[runtime].rng) < fraction {
+                    arrivals += 1;
+                }
+            }
+            for _ in 0..arrivals {
+                let route = sample_pedestrian_route(
+                    &self.scenario.pedestrian_demand()[source_index],
+                    &mut self.pedestrian_demand[runtime].rng,
+                );
+                if self.pedestrian_demand[runtime].pending.len() < MAX_PENDING_SPAWNS {
+                    self.pedestrian_demand[runtime].pending.push_back(route);
+                } else {
+                    self.pedestrian_demand[runtime].dropped += 1;
+                    self.dropped_total += 1;
+                }
+            }
+        }
+
+        for runtime in 0..self.pedestrian_demand.len() {
+            while let Some(&route) = self.pedestrian_demand[runtime].pending.front() {
+                if self.try_admit_pedestrian(route) {
+                    self.pedestrian_demand[runtime].pending.pop_front();
                 } else {
                     break;
                 }
@@ -696,6 +815,7 @@ impl Simulation {
         let speed_mps = self.safe_entry_speed(path_id, entry_distance, direction, &profile);
 
         self.agents.push(AgentInit {
+            mode: AgentMode::Vehicle,
             path: path_id,
             distance_m: entry_distance,
             speed_mps,
@@ -706,6 +826,8 @@ impl Simulation {
             direction,
             movement: Some(movement_id),
             profile: Some(profile),
+            pedestrian_route: None,
+            pedestrian_profile: None,
         });
         self.spawned_total += 1;
         self.events.push(Event::Spawned {
@@ -716,6 +838,69 @@ impl Simulation {
         // Record the entry decision immediately so a snapshot taken right after
         // admission already carries a traceable reason.
         self.update_signal_decision(agent_id.index());
+        true
+    }
+
+    /// Admit one pedestrian on `route_id` when the portal entry is clear.
+    ///
+    /// A pedestrian enters at its sampled walking speed and tracks its route at
+    /// that constant speed. Body shape, demand, route assignment, and admission
+    /// are this slice; waypoint steering, local collision avoidance, and signal
+    /// compliance are later slices, so an admitted pedestrian follows the route
+    /// path without any steering law.
+    fn try_admit_pedestrian(&mut self, route_id: PedestrianRouteId) -> bool {
+        let Some((path_id, entry_distance, direction)) =
+            self.scenario.pedestrian_route(route_id).map(|route| {
+                let (entry_distance, direction) = route_entry(&self.scenario, route);
+                (route.path(), entry_distance, direction)
+            })
+        else {
+            return false;
+        };
+
+        // The body and gait are derived from the stable agent id, so a blocked
+        // arrival re-derives the same profile on the next attempt. Pedestrians
+        // share the mode-neutral `profile` stream with vehicles, and agent ids
+        // are unique across modes, so no two agents share a generator.
+        let agent_id = AgentId::from_index(self.agents.len());
+        let profile = sample_pedestrian_profile(
+            self.scenario.pedestrian_profiles(),
+            &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
+        );
+        // A pedestrian body is a circle, so its bounding box is the diameter on
+        // both axes.
+        let diameter_m = profile.radius_m * 2.0;
+        if !self.entry_clear(path_id, entry_distance, diameter_m) {
+            return false;
+        }
+
+        let Some(path) = self.scenario.path(path_id) else {
+            return false;
+        };
+        let position = path.position_at(entry_distance);
+        let heading_rad = path.heading_at(entry_distance);
+
+        self.agents.push(AgentInit {
+            mode: AgentMode::Pedestrian,
+            path: path_id,
+            distance_m: entry_distance,
+            speed_mps: profile.desired_speed_mps,
+            position,
+            heading_rad,
+            body_length_m: diameter_m,
+            body_width_m: diameter_m,
+            direction,
+            movement: None,
+            profile: None,
+            pedestrian_route: Some(route_id),
+            pedestrian_profile: Some(profile),
+        });
+        self.spawned_total += 1;
+        self.events.push(Event::Spawned {
+            agent: agent_id,
+            path: path_id,
+            distance_m: entry_distance,
+        });
         true
     }
 
@@ -805,6 +990,21 @@ fn movement_entry(scenario: &CompiledScenario, movement: &CompiledMovement) -> (
         .path(movement.path())
         .map_or(0.0, |path| path.length());
     match portal_end(scenario, movement.from()) {
+        PathEnd::End => (path_length, -1.0),
+        PathEnd::Start => (0.0, 1.0),
+    }
+}
+
+/// Entry arc length and travel direction for a pedestrian route.
+///
+/// A route enters at its `from` portal, exactly as a movement does: on the path
+/// start it enters at distance zero travelling forward; on the path end it
+/// enters at the full length travelling backward.
+fn route_entry(scenario: &CompiledScenario, route: &CompiledPedestrianRoute) -> (f64, f64) {
+    let path_length = scenario
+        .path(route.path())
+        .map_or(0.0, |path| path.length());
+    match portal_end(scenario, route.from()) {
         PathEnd::End => (path_length, -1.0),
         PathEnd::Start => (0.0, 1.0),
     }
@@ -1115,6 +1315,7 @@ mod tests {
         let distance_m = sim.agents.distance_m[leader_index] - 2.25 - 0.1 - 2.0;
         let path_geometry = sim.scenario.path(path).expect("guide path").clone();
         sim.agents.push(AgentInit {
+            mode: AgentMode::Vehicle,
             path,
             distance_m,
             speed_mps: 4.0,
@@ -1125,6 +1326,8 @@ mod tests {
             direction: 1.0,
             movement: None,
             profile: Some(profile),
+            pedestrian_route: None,
+            pedestrian_profile: None,
         });
 
         sim.step();

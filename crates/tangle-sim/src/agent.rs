@@ -6,10 +6,23 @@
 //! shift; state-affecting logic therefore never iterates a hash map.
 
 use glam::DVec2;
-use tangle_model::{MovementId, PathId};
+use tangle_model::{MovementId, PathId, PedestrianRouteId};
 
 use crate::compliance::ComplianceDecision;
-use crate::profile::VehicleProfile;
+use crate::profile::{PedestrianProfile, VehicleProfile};
+
+/// Which mode of agent a slot holds.
+///
+/// Both modes share one contiguous agent store, so they occupy the same world,
+/// the same stable identifier space, and the same event stream. The mode only
+/// selects how the body is sized and, later, how it is controlled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMode {
+    /// A motor vehicle, an oriented box with a longitudinal controller.
+    Vehicle,
+    /// A pedestrian, a circle that follows a pedestrian route.
+    Pedestrian,
+}
 
 /// Stable identifier of one agent for the lifetime of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -53,17 +66,25 @@ pub(crate) struct AgentInit {
     /// Longitudinal travel direction: `1.0` toward the path end, `-1.0`
     /// toward the path start.
     pub direction: f64,
-    /// Assigned route, present for demand-generated vehicles.
+    /// Which mode this agent belongs to.
+    pub mode: AgentMode,
+    /// Assigned vehicle route, present for demand-generated vehicles.
     pub movement: Option<MovementId>,
     /// Sampled physical and behavior profile, present for demand-generated
     /// vehicles.
     pub profile: Option<VehicleProfile>,
+    /// Assigned pedestrian route, present for demand-generated pedestrians.
+    pub pedestrian_route: Option<PedestrianRouteId>,
+    /// Sampled pedestrian body and gait, present for demand-generated
+    /// pedestrians.
+    pub pedestrian_profile: Option<PedestrianProfile>,
 }
 
 /// Contiguous, stable-order agent state.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct AgentStore {
     pub(crate) alive: Vec<bool>,
+    pub(crate) mode: Vec<AgentMode>,
     pub(crate) path: Vec<PathId>,
     pub(crate) distance_m: Vec<f64>,
     pub(crate) speed_mps: Vec<f64>,
@@ -74,6 +95,8 @@ pub(crate) struct AgentStore {
     pub(crate) direction: Vec<f64>,
     pub(crate) movement: Vec<Option<MovementId>>,
     pub(crate) profile: Vec<Option<VehicleProfile>>,
+    pub(crate) pedestrian_route: Vec<Option<PedestrianRouteId>>,
+    pub(crate) pedestrian_profile: Vec<Option<PedestrianProfile>>,
     /// Most recent signal-compliance decision, present for signal-controlled
     /// vehicles. `None` for vehicles with no signal rule.
     pub(crate) decision: Vec<Option<ComplianceDecision>>,
@@ -84,6 +107,7 @@ impl AgentStore {
     pub(crate) fn push(&mut self, init: AgentInit) -> AgentId {
         let id = AgentId::from_index(self.alive.len());
         self.alive.push(true);
+        self.mode.push(init.mode);
         self.path.push(init.path);
         self.distance_m.push(init.distance_m);
         self.speed_mps.push(init.speed_mps);
@@ -94,6 +118,8 @@ impl AgentStore {
         self.direction.push(init.direction);
         self.movement.push(init.movement);
         self.profile.push(init.profile);
+        self.pedestrian_route.push(init.pedestrian_route);
+        self.pedestrian_profile.push(init.pedestrian_profile);
         self.decision.push(None);
         id
     }
@@ -115,6 +141,7 @@ mod tests {
 
     fn init(distance_m: f64) -> AgentInit {
         AgentInit {
+            mode: AgentMode::Vehicle,
             path: PathId::from_index(0),
             distance_m,
             speed_mps: 1.0,
@@ -125,6 +152,8 @@ mod tests {
             direction: 1.0,
             movement: None,
             profile: None,
+            pedestrian_route: None,
+            pedestrian_profile: None,
         }
     }
 
@@ -136,6 +165,34 @@ mod tests {
         assert_eq!(store.len(), 2);
         assert_eq!(store.alive_count(), 2);
         assert_eq!(store.distance_m[1], 10.0);
+    }
+
+    #[test]
+    fn stores_mode_and_pedestrian_columns_in_slot_order() {
+        let mut store = AgentStore::default();
+        store.push(init(0.0));
+        store.push(AgentInit {
+            mode: AgentMode::Pedestrian,
+            body_length_m: 0.5,
+            body_width_m: 0.5,
+            pedestrian_route: Some(PedestrianRouteId::from_index(2)),
+            pedestrian_profile: Some(PedestrianProfile {
+                radius_m: 0.25,
+                desired_speed_mps: 1.2,
+            }),
+            ..init(5.0)
+        });
+        assert_eq!(store.mode, [AgentMode::Vehicle, AgentMode::Pedestrian]);
+        assert_eq!(store.pedestrian_route[0], None);
+        assert_eq!(
+            store.pedestrian_route[1],
+            Some(PedestrianRouteId::from_index(2))
+        );
+        assert_eq!(store.pedestrian_profile[0], None);
+        assert_eq!(
+            store.pedestrian_profile[1].map(|profile| profile.radius_m),
+            Some(0.25)
+        );
     }
 
     #[test]

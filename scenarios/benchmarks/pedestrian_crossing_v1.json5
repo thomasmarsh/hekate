@@ -1,0 +1,100 @@
+// Benchmark: a pedestrian crossing over a single road movement.
+//
+// One east-west road, one north-south walking path crossing it, a crossing
+// region over the road movement, a waiting area on the south kerb, one
+// pedestrian route through both, and demand for each mode. The layout is
+// expressed entirely from general primitives, so no field names a scenario
+// kind. Pedestrian signal compliance and vehicle yielding are later slices;
+// this benchmark exercises pedestrian bodies, demand, route assignment, and
+// admission into the shared world. See PHASE_1_PLAN.md Increment 3.
+{
+  schema_version: 1,
+  id: 'pedestrian_crossing_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -50.0, y: -50.0 },
+        { x: 50.0, y: -50.0 },
+        { x: 50.0, y: 50.0 },
+        { x: -50.0, y: 50.0 },
+      ],
+    },
+  ],
+  regions: [
+    {
+      id: 'crossing_zone',
+      points: [
+        { x: -2.0, y: -4.0 },
+        { x: 2.0, y: -4.0 },
+        { x: 2.0, y: 4.0 },
+        { x: -2.0, y: 4.0 },
+      ],
+    },
+    {
+      id: 'south_kerb',
+      points: [
+        { x: -3.0, y: -9.0 },
+        { x: 3.0, y: -9.0 },
+        { x: 3.0, y: -5.0 },
+        { x: -3.0, y: -5.0 },
+      ],
+    },
+  ],
+  paths: [
+    { id: 'ew_road', points: [ { x: -40.0, y: 0.0 }, { x: 40.0, y: 0.0 } ] },
+    { id: 'ns_walk', points: [ { x: 0.0, y: -20.0 }, { x: 0.0, y: 20.0 } ] },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'ew_road', end: 'start', width_m: 7.0 },
+    { id: 'east_exit', path: 'ew_road', end: 'end', width_m: 7.0 },
+    { id: 'south_walk', path: 'ns_walk', end: 'start', width_m: 3.0 },
+    { id: 'north_walk', path: 'ns_walk', end: 'end', width_m: 3.0 },
+  ],
+  movements: [
+    { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0 },
+  ],
+  crossings: [
+    { id: 'road_crossing', region: 'crossing_zone', movements: [ 'ew_through' ] },
+  ],
+  waiting_areas: [ { id: 'south_wait', region: 'south_kerb' } ],
+  pedestrian_routes: [
+    {
+      id: 'cross_to_north',
+      from: 'south_walk',
+      to: 'north_walk',
+      path: 'ns_walk',
+      crossings: [ 'road_crossing' ],
+      waiting_areas: [ 'south_wait' ],
+    },
+  ],
+  demand: [
+    {
+      id: 'road_inflow',
+      portal: 'west_entry',
+      rate_vph: 600.0,
+      routes: [ { movement: 'ew_through', weight: 1.0 } ],
+    },
+  ],
+  pedestrian_demand: [
+    {
+      id: 'footfall',
+      portal: 'south_walk',
+      rate_pph: 400.0,
+      routes: [ { route: 'cross_to_north', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 9.0, max: 15.0 },
+    length_m: { min: 4.0, max: 5.2 },
+    width_m: { min: 1.7, max: 2.0 },
+    time_gap_s: { min: 1.0, max: 2.0 },
+    max_accel_mps2: { min: 1.2, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+  },
+  pedestrian_profiles: {
+    radius_m: { min: 0.20, max: 0.30 },
+    speed_mps: { min: 1.0, max: 1.6 },
+  },
+}

@@ -47,11 +47,11 @@ mod snapshot;
 mod time;
 mod units;
 
-pub use agent::AgentId;
+pub use agent::{AgentId, AgentMode};
 pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
 pub use config::{DEFAULT_STEP, RunConfig};
 pub use event::{DespawnReason, EVENT_VERSION, Event};
-pub use profile::VehicleProfile;
+pub use profile::{PedestrianProfile, VehicleProfile};
 pub use sim::{InitError, RunSummary, Simulation, StepOutput};
 pub use snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 pub use time::SimTime;

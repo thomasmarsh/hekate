@@ -6,10 +6,11 @@
 //! one mutable generator, so adding a draw to one stream cannot reshuffle
 //! another.
 //!
-//! This module owns the derivation for the streams Increment 2 draws from:
-//! one `demand` substream per demand source, one `profile` substream per
-//! agent, and one `compliance` substream per agent. The `perception` stream
-//! belongs to a later increment and is not derived here.
+//! This module owns the derivation for the streams drawn from so far: one
+//! `demand` substream per vehicle demand source, one `pedestrian_demand`
+//! substream per pedestrian demand source, one `profile` substream per agent
+//! of either mode, and one `compliance` substream per agent. The `perception`
+//! stream belongs to a later increment and is not derived here.
 
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::{Rng, SeedableRng};
@@ -17,7 +18,18 @@ use rand_chacha::rand_core::{Rng, SeedableRng};
 /// Stream name for portal demand generation and route assignment.
 pub const STREAM_DEMAND: &str = "demand";
 
+/// Stream name for pedestrian demand generation and route assignment.
+///
+/// Pedestrian demand draws from its own named stream rather than sharing
+/// `demand`, so adding or removing a pedestrian source cannot reshuffle a
+/// vehicle source's arrival or route sequence.
+pub const STREAM_PEDESTRIAN_DEMAND: &str = "pedestrian_demand";
+
 /// Stream name for per-agent physical and behavior profile sampling.
+///
+/// The stream is mode-neutral: a vehicle and a pedestrian derive it from the
+/// same stable agent id, and agent ids are unique across modes, so each agent
+/// has its own substream regardless of body kind.
 pub const STREAM_PROFILE: &str = "profile";
 
 /// Stream name for per-agent signal-compliance propensity sampling.
@@ -104,6 +116,48 @@ mod tests {
         assert_ne!(draw(42, STREAM_DEMAND, 0), draw(42, STREAM_DEMAND, 1));
         assert_ne!(draw(42, STREAM_DEMAND, 0), draw(43, STREAM_DEMAND, 0));
         assert_ne!(draw(42, STREAM_COMPLIANCE, 0), draw(42, STREAM_PROFILE, 0));
+    }
+
+    #[test]
+    fn pedestrian_streams_are_independent_of_vehicle_streams() {
+        fn draw(root: u64, name: &str, id: u32) -> u64 {
+            let mut rng = derive_stream(root, name, id);
+            rng.next_u64()
+        }
+        assert_ne!(
+            draw(42, STREAM_PEDESTRIAN_DEMAND, 0),
+            draw(42, STREAM_DEMAND, 0)
+        );
+        assert_ne!(
+            draw(42, STREAM_PEDESTRIAN_DEMAND, 0),
+            draw(42, STREAM_PROFILE, 0)
+        );
+        assert_ne!(
+            draw(42, STREAM_PEDESTRIAN_DEMAND, 0),
+            draw(42, STREAM_PEDESTRIAN_DEMAND, 1)
+        );
+    }
+
+    #[test]
+    fn extra_pedestrian_draws_do_not_perturb_vehicle_streams() {
+        // The same isolation contract as the compliance stream: a new draw on
+        // the pedestrian demand stream leaves every vehicle demand, profile,
+        // and compliance sequence byte-identical.
+        fn vehicle_streams(root: u64, id: u32, pedestrian_draws: usize) -> Vec<Vec<u64>> {
+            let mut pedestrian = derive_stream(root, STREAM_PEDESTRIAN_DEMAND, id);
+            for _ in 0..pedestrian_draws {
+                let _ = uniform01(&mut pedestrian);
+            }
+            [STREAM_DEMAND, STREAM_PROFILE, STREAM_COMPLIANCE]
+                .into_iter()
+                .map(|name| {
+                    let mut rng = derive_stream(root, name, id);
+                    (0..8).map(|_| rng.next_u64()).collect()
+                })
+                .collect()
+        }
+
+        assert_eq!(vehicle_streams(23, 2, 0), vehicle_streams(23, 2, 7));
     }
 
     #[test]
