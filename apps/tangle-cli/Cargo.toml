@@ -11,6 +11,10 @@ description = "Headless command-line interface for Tangle."
 tangle-model.workspace = true
 tangle-sim.workspace = true
 clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

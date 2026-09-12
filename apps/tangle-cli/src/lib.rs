@@ -1,0 +1,78 @@
+//! Headless command-line interface for Tangle.
+//!
+//! The binary in `main.rs` is a thin argument parser; the reusable work lives
+//! here so tests and future tooling can load a scenario and produce the same
+//! canonical trace without spawning a process.
+//!
+//! This crate is an application: it reads scenario files from disk. The kernel
+//! crates remain filesystem-free, and this crate depends on them rather than
+//! the other way around.
+
+mod trace;
+
+use std::path::{Path, PathBuf};
+
+use tangle_model::{CompiledScenario, Diagnostic, ParseError, parse_scenario_source};
+
+pub use trace::{Trace, canonical_trace};
+
+/// Failure to load and compile a scenario file.
+#[derive(Debug, thiserror::Error)]
+pub enum LoadError {
+    /// The scenario file could not be read.
+    #[error("cannot read scenario '{path}': {source}")]
+    Read {
+        /// The path that was read.
+        path: PathBuf,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The file was not valid JSON5 for the scenario source schema.
+    #[error("scenario '{path}' is not valid JSON5: {source}")]
+    Parse {
+        /// The path that was read.
+        path: PathBuf,
+        /// The structural parse failure.
+        #[source]
+        source: ParseError,
+    },
+    /// The scenario parsed but failed semantic validation.
+    #[error(
+        "scenario '{path}' failed validation: {}",
+        render_diagnostics(diagnostics)
+    )]
+    Invalid {
+        /// The path that was read.
+        path: PathBuf,
+        /// Every diagnostic produced by validation, in source order.
+        diagnostics: Vec<Diagnostic>,
+    },
+}
+
+/// Read, parse, validate, and compile a JSON5 scenario file.
+///
+/// Semantic validation and compilation are the same mandatory steps the kernel
+/// requires, so a scenario that loads here is ready to run.
+pub fn load_scenario(path: &Path) -> Result<CompiledScenario, LoadError> {
+    let text = std::fs::read_to_string(path).map_err(|source| LoadError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let source = parse_scenario_source(&text).map_err(|source| LoadError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    CompiledScenario::compile(source).map_err(|diagnostics| LoadError::Invalid {
+        path: path.to_path_buf(),
+        diagnostics,
+    })
+}
+
+fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}

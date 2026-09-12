@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T12:11:12Z
+updated: 2026-09-12T12:21:33Z
 summary: Deliver Phase 1 Increment 0, the pinned workspace and visible walking skeleton.
-next: [[TAS-005-cli-canonical-trace]]
+next: [[TAS-006-bevy-viewer-skeleton]]
 ---
 
 # Outcome
