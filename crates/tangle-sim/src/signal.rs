@@ -12,8 +12,8 @@
 //! simulation time reaches the next phase's `start_s`.
 //!
 //! Only the phase state machine lives here. Deciding whether a vehicle obeys a
-//! red or yellow head (the contextual compliance decision) is later work; this
-//! module only reports the authored color.
+//! red or yellow head is the contextual compliance decision in
+//! [`crate::compliance`]; this module only reports the authored color.
 
 use tangle_model::{CompiledScenario, RuleKind, SignalColor, SignalId};
 

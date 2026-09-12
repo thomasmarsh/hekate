@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use tangle_model::CompiledScenario;
-use tangle_present::{SceneBody, SceneFrame, decision_summary};
+use tangle_present::{SceneBody, SceneFrame, decision_summary, intent_summary, profile_summary};
 
 use crate::backend::RunInfo;
 
@@ -125,12 +125,23 @@ esc clear   q quit"
                 .path
                 .and_then(|id| self.scenario.id_map().path_name(id))
                 .unwrap_or("<unknown>");
+            let route = match body.route {
+                Some(id) => self
+                    .scenario
+                    .id_map()
+                    .movement_name(id)
+                    .unwrap_or("<unknown>"),
+                None => "none (static population)",
+            };
             out.push_str(&format!(
                 "   speed {speed:.2} m/s   path {path}   distance {distance:.2} m   \
-                 body {length:.2} x {width:.2} m   intent hold constant speed along the guide path",
+                 body {length:.2} x {width:.2} m   route {route}   \
+                 profile {profile}   intent {intent}",
                 distance = body.path_distance_m.unwrap_or(0.0),
                 length = body.length_m,
                 width = body.width_m,
+                profile = profile_summary(body.profile),
+                intent = intent_summary(body.profile),
             ));
         }
 
@@ -157,6 +168,8 @@ mod tests {
              paths: [ { id: 'guide', points: [ { x: 0, y: 0 }, { x: 120, y: 0 } ] } ], \
              portals: [ { id: 'west', path: 'guide', end: 'start', width_m: 4.0 }, \
              { id: 'east', path: 'guide', end: 'end', width_m: 4.0 } ], \
+             movements: [ { id: 'through', from: 'west', to: 'east', path: 'guide', \
+             priority: 0 } ], \
              population: { vehicle_count: 1, vehicle_speed_mps: 12.0, vehicle_spacing_m: 20.0, \
              vehicle_length_m: 4.5, vehicle_width_m: 1.8 } }",
         )
@@ -220,15 +233,29 @@ mod tests {
         assert!(footer.contains("speed 12.00 m/s"));
         assert!(footer.contains("path guide"));
         assert!(footer.contains("body 4.50 x 1.80 m"));
+        // The static population has no route or sampled profile, so the
+        // inspector says what it actually does instead of asserting IDM.
+        assert!(
+            footer.contains("route none (static population)"),
+            "{footer}"
+        );
+        assert!(
+            footer.contains("profile none (static population)"),
+            "{footer}"
+        );
+        assert!(
+            footer.contains("intent hold constant speed along the guide path"),
+            "{footer}"
+        );
         assert!(footer.contains("decision none (movement is not signal-controlled)"));
         assert!(hud.selected());
     }
 
     #[test]
     fn the_inspector_reports_the_latest_decision_reason() {
-        use tangle_model::{PathId, SignalColor};
+        use tangle_model::{MovementId, PathId, SignalColor};
         use tangle_present::BodyKind;
-        use tangle_sim::{ComplianceReason, SignalAction};
+        use tangle_sim::{ComplianceReason, SignalAction, VehicleProfile};
 
         let hud = Hud::new(scenario());
         let body = SceneBody {
@@ -241,6 +268,16 @@ mod tests {
             speed_mps: Some(0.0),
             path: Some(PathId::from_index(0)),
             path_distance_m: Some(30.0),
+            route: Some(MovementId::from_index(0)),
+            profile: Some(VehicleProfile {
+                desired_speed_mps: 10.0,
+                length_m: 4.0,
+                width_m: 2.0,
+                time_gap_s: 1.5,
+                max_accel_mps2: 2.0,
+                comfortable_brake_mps2: 3.0,
+                compliance: 0.5,
+            }),
             decision: Some(tangle_sim::ComplianceDecision {
                 action: SignalAction::Stop,
                 reason: ComplianceReason::CompliantStop,
@@ -252,5 +289,13 @@ mod tests {
         let text = hud.describe(&body);
         assert!(text.contains("decision stop (compliant stop)"), "{text}");
         assert!(text.contains("head red"), "{text}");
+        // A demand vehicle reports its route, sampled profile, and IDM intent.
+        assert!(text.contains("route through"), "{text}");
+        assert!(text.contains("profile v0 10.00 m/s"), "{text}");
+        assert!(text.contains("compliance 0.50"), "{text}");
+        assert!(
+            text.contains("intent follow IDM under sampled profile bounds"),
+            "{text}"
+        );
     }
 }

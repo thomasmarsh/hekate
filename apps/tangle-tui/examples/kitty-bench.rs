@@ -131,6 +131,8 @@ fn measure_dense<W: Write>(
                 speed_mps: Some(6.0),
                 path: None,
                 path_distance_m: None,
+                route: None,
+                profile: None,
                 decision: None,
             }
         })

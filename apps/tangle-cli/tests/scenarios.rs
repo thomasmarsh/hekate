@@ -189,6 +189,7 @@ fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
     let mut follow_brakes = 0u64;
     for seed in 0..3u64 {
         let scenario = load_scenario(&path).expect("car-following benchmark loads");
+        let bounds = *scenario.profiles();
         let mut sim = Simulation::new(scenario, RunConfig::new(seed)).expect("benchmark runs");
         let mut previous: HashMap<u32, f64> = HashMap::new();
         for _ in 0..4000 {
@@ -200,6 +201,30 @@ fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
                 let profile = sim
                     .agent_profile(sample.id)
                     .expect("demand vehicle has a profile");
+                // The sampled profile itself must lie inside the authored
+                // envelope, so the bounds below are the scenario's, not the
+                // sample's own restated values.
+                for (field, range, value) in [
+                    ("speed_mps", bounds.speed_mps(), profile.desired_speed_mps),
+                    (
+                        "max_accel_mps2",
+                        bounds.max_accel_mps2(),
+                        profile.max_accel_mps2,
+                    ),
+                    (
+                        "comfortable_brake_mps2",
+                        bounds.comfortable_brake_mps2(),
+                        profile.comfortable_brake_mps2,
+                    ),
+                ] {
+                    assert!(
+                        value >= range.min() - 1e-9 && value <= range.max() + 1e-9,
+                        "seed {seed}: sampled {field} {value} left the authored range \
+                         [{}, {}]",
+                        range.min(),
+                        range.max()
+                    );
+                }
                 assert!(
                     motion.speed_mps >= -1e-9,
                     "seed {seed}: negative speed {}",
@@ -242,6 +267,14 @@ fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
                 }
             }
         }
+        // The emergency position caps are backstops, not the normal regime:
+        // the controlled car-following benchmark must not engage one, so no
+        // step here brakes harder than the sampled comfortable deceleration.
+        assert_eq!(
+            sim.emergency_cap_steps(),
+            0,
+            "seed {seed}: a position cap braked beyond the profile bound"
+        );
     }
     assert!(
         follow_brakes > 0,

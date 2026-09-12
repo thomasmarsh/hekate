@@ -19,7 +19,8 @@ use glam::DVec2;
 use tangle_model::CompiledScenario;
 use tangle_present::{
     Applied, Overlay, PresentationController, RendererBackend, RestartMode, SceneBody,
-    SceneGeometry, Speed, ViewCommand, Viewport, decision_summary, load_scenario,
+    SceneGeometry, Speed, ViewCommand, Viewport, decision_summary, intent_summary, load_scenario,
+    profile_summary,
 };
 use tangle_sim::{Event, RunConfig, Simulation, Snapshot, SnapshotDetail};
 use tangle_viewer::CurrentFrame;
@@ -653,16 +654,24 @@ fn describe_agent(scenario: &CompiledScenario, body: &SceneBody) -> String {
             .path
             .and_then(|id| scenario.id_map().path_name(id))
             .unwrap_or("<unknown>");
+        let route = match body.route {
+            Some(id) => scenario.id_map().movement_name(id).unwrap_or("<unknown>"),
+            None => "none (static population)",
+        };
         out.push_str(&format!(
             "speed     {speed:.2} m/s\n\
              path      {path}\n\
              distance  {distance:.2} m\n\
-             body      {length:.2} x {width:.2} m\n",
+             body      {length:.2} x {width:.2} m\n\
+             route     {route}\n\
+             profile   {profile}\n\
+             intent    {intent}\n",
             distance = body.path_distance_m.unwrap_or(0.0),
             length = body.length_m,
             width = body.width_m,
+            profile = profile_summary(body.profile),
+            intent = intent_summary(body.profile),
         ));
-        out.push_str("intent    hold constant speed along the guide path\n");
     }
 
     out.push_str(&format!("decision  {}", decision_summary(body.decision)));

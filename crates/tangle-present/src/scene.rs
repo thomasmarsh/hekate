@@ -12,7 +12,7 @@ use tangle_model::{
     BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, MovementId, PathId, PortalId,
     RegionId, RuleId, RuleKind, SignalId,
 };
-use tangle_sim::{AgentSample, ComplianceDecision};
+use tangle_sim::{AgentSample, ComplianceDecision, VehicleProfile};
 
 use crate::clock::Speed;
 
@@ -612,6 +612,12 @@ pub struct SceneBody {
     pub path: Option<PathId>,
     /// Arc-length position along the path in metres, when known.
     pub path_distance_m: Option<f64>,
+    /// Assigned route through the network, present for demand-generated
+    /// vehicles.
+    pub route: Option<MovementId>,
+    /// Sampled physical and behavior profile, present for demand-generated
+    /// vehicles.
+    pub profile: Option<VehicleProfile>,
     /// Most recent signal-compliance decision, when the body is
     /// signal-controlled. Carries only the small recorded reason, not the
     /// controller's internal state.
@@ -637,6 +643,8 @@ impl SceneBody {
             speed_mps: sample.motion.map(|motion| motion.speed_mps),
             path: sample.motion.map(|motion| motion.path),
             path_distance_m: sample.motion.map(|motion| motion.path_distance_m),
+            route: sample.motion.and_then(|motion| motion.route),
+            profile: sample.motion.and_then(|motion| motion.profile),
             decision: sample.motion.and_then(|motion| motion.decision),
         }
     }
@@ -666,6 +674,39 @@ fn lerp_angle(from: f64, to: f64, alpha: f64) -> f64 {
         delta += std::f64::consts::TAU;
     }
     from + delta * alpha
+}
+
+/// One-line inspector text for what an agent is currently trying to do.
+///
+/// A body with a sampled profile is driven by the IDM controller in
+/// `tangle-sim::control`; a body without one is the static walking-skeleton
+/// population at its configured constant speed. The presentation layer owns
+/// this wording so every backend describes the same intent.
+pub fn intent_summary(profile: Option<VehicleProfile>) -> &'static str {
+    if profile.is_some() {
+        "follow IDM under sampled profile bounds"
+    } else {
+        "hold constant speed along the guide path"
+    }
+}
+
+/// One-line inspector text for an agent's sampled physical and behavior
+/// profile; `None` means the body has no sampled profile.
+pub fn profile_summary(profile: Option<VehicleProfile>) -> String {
+    let Some(profile) = profile else {
+        return "none (static population)".to_owned();
+    };
+    format!(
+        "v0 {speed:.2} m/s   T {gap:.2} s   a_max {accel:.2} m/s²   \
+         b {brake:.2} m/s²   size {length:.2} x {width:.2} m   compliance {compliance:.2}",
+        speed = profile.desired_speed_mps,
+        gap = profile.time_gap_s,
+        accel = profile.max_accel_mps2,
+        brake = profile.comfortable_brake_mps2,
+        length = profile.length_m,
+        width = profile.width_m,
+        compliance = profile.compliance,
+    )
 }
 
 /// One-line inspector text for an agent's most recent signal-compliance
@@ -865,6 +906,38 @@ mod tests {
         assert_eq!(body.position, DVec2::new(5.0, 0.0));
         // Wrapping across pi must not rotate the long way around.
         assert!(body.heading_rad.abs() > 3.0);
+    }
+
+    #[test]
+    fn intent_and_profile_summaries_follow_the_sampled_profile() {
+        // The static population carries no sampled profile, so it keeps the
+        // constant-speed wording; a demand vehicle reports IDM and its values.
+        assert_eq!(
+            intent_summary(None),
+            "hold constant speed along the guide path"
+        );
+        assert_eq!(profile_summary(None), "none (static population)");
+
+        let profile = VehicleProfile {
+            desired_speed_mps: 12.5,
+            length_m: 4.25,
+            width_m: 1.9,
+            time_gap_s: 1.4,
+            max_accel_mps2: 2.2,
+            comfortable_brake_mps2: 3.1,
+            compliance: 0.4,
+        };
+        assert_eq!(
+            intent_summary(Some(profile)),
+            "follow IDM under sampled profile bounds"
+        );
+        let summary = profile_summary(Some(profile));
+        assert!(summary.contains("v0 12.50 m/s"), "{summary}");
+        assert!(summary.contains("T 1.40 s"), "{summary}");
+        assert!(summary.contains("a_max 2.20 m/s²"), "{summary}");
+        assert!(summary.contains("b 3.10 m/s²"), "{summary}");
+        assert!(summary.contains("size 4.25 x 1.90 m"), "{summary}");
+        assert!(summary.contains("compliance 0.40"), "{summary}");
     }
 
     #[test]

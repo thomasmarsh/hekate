@@ -103,6 +103,8 @@ SceneFrame {
             path_distance_m: Some(
                 11.999999999999996,
             ),
+            route: None,
+            profile: None,
             decision: None,
         },
         SceneBody {
@@ -126,6 +128,8 @@ SceneFrame {
             path_distance_m: Some(
                 32.00000000000003,
             ),
+            route: None,
+            profile: None,
             decision: None,
         },
         SceneBody {
@@ -149,6 +153,8 @@ SceneFrame {
             path_distance_m: Some(
                 52.00000000000003,
             ),
+            route: None,
+            profile: None,
             decision: None,
         },
         SceneBody {
@@ -172,6 +178,8 @@ SceneFrame {
             path_distance_m: Some(
                 71.99999999999993,
             ),
+            route: None,
+            profile: None,
             decision: None,
         },
         SceneBody {
@@ -195,6 +203,8 @@ SceneFrame {
             path_distance_m: Some(
                 91.99999999999989,
             ),
+            route: None,
+            profile: None,
             decision: None,
         },
         SceneBody {
@@ -218,6 +228,8 @@ SceneFrame {
             path_distance_m: Some(
                 111.99999999999989,
             ),
+            route: None,
+            profile: None,
             decision: None,
         },
     ],

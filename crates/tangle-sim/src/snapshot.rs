@@ -5,10 +5,11 @@
 //! kernel.
 
 use glam::DVec2;
-use tangle_model::PathId;
+use tangle_model::{MovementId, PathId};
 
 use crate::agent::AgentId;
 use crate::compliance::ComplianceDecision;
+use crate::profile::VehicleProfile;
 use crate::time::SimTime;
 
 /// How much per-agent detail a snapshot carries.
@@ -18,14 +19,16 @@ pub enum SnapshotDetail {
     /// without carrying simulation internals.
     #[default]
     Position,
-    /// Position plus constant-speed motion, route, and body dimensions.
+    /// Position plus longitudinal motion, route, profile, and body dimensions.
     Full,
 }
 
 /// Motion and route detail for one agent, present at [`SnapshotDetail::Full`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionSample {
-    /// Constant longitudinal speed in metres per second.
+    /// Longitudinal speed in metres per second. IDM-controlled for demand
+    /// vehicles; the static walking-skeleton population holds its configured
+    /// constant speed.
     pub speed_mps: f64,
     /// The guide path the agent follows.
     pub path: PathId,
@@ -35,6 +38,11 @@ pub struct MotionSample {
     pub body_length_m: f64,
     /// Body width in metres.
     pub body_width_m: f64,
+    /// Assigned route, present for demand-generated vehicles.
+    pub route: Option<MovementId>,
+    /// Sampled physical and behavior profile, present for demand-generated
+    /// vehicles.
+    pub profile: Option<VehicleProfile>,
     /// Most recent signal-compliance decision, present for signal-controlled
     /// vehicles. The snapshot deliberately carries only this small record, not
     /// the controller's internal state.

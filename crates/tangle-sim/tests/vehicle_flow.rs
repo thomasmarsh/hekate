@@ -96,6 +96,37 @@ const REVERSE: &str = r#"
 }
 "#;
 
+/// The same approach with a non-degenerate profile envelope, so a sampled
+/// value can be checked against real bounds rather than a single constant.
+const MIXED_PROFILES: &str = r#"
+{
+  schema_version: 1,
+  id: 'mixed_profiles',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [ { id: 'guide', points: [ { x: -40.0, y: 0.0 }, { x: 40.0, y: 0.0 } ] } ],
+  portals: [
+    { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  movements: [
+    { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0 },
+  ],
+  demand: [
+    { id: 'inflow', portal: 'entry', rate_vph: 720.0,
+      routes: [ { movement: 'through', weight: 1.0 } ] },
+  ],
+  profiles: {
+    speed_mps: { min: 9.0, max: 15.0 },
+    length_m: { min: 4.0, max: 5.2 },
+    width_m: { min: 1.7, max: 2.0 },
+    time_gap_s: { min: 1.0, max: 2.0 },
+    max_accel_mps2: { min: 1.2, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+    compliance: { min: 0.0, max: 1.0 },
+  },
+}
+"#;
+
 fn scenario(text: &str) -> CompiledScenario {
     let source = parse_scenario_source(text).expect("scenario parses");
     CompiledScenario::compile(source).expect("scenario compiles")
@@ -204,17 +235,11 @@ fn saturated_demand_sheds_load_instead_of_growing_the_queue() {
 
 #[test]
 fn profile_sampling_stays_within_the_configured_ranges() {
-    let mut sim = sim(STRAIGHT, 5);
-    let expected = VehicleProfile {
-        desired_speed_mps: 10.0,
-        length_m: 4.0,
-        width_m: 2.0,
-        time_gap_s: 1.5,
-        max_accel_mps2: 2.0,
-        comfortable_brake_mps2: 3.0,
-        compliance: 1.0,
-    };
-    let mut checked = 0;
+    let compiled = scenario(MIXED_PROFILES);
+    let bounds = *compiled.profiles();
+    let mut sim = Simulation::new(compiled, RunConfig::new(5)).expect("simulation builds");
+
+    let mut sampled = Vec::new();
     for _ in 0..2000 {
         let spawned: Vec<AgentId> = sim
             .step()
@@ -226,12 +251,59 @@ fn profile_sampling_stays_within_the_configured_ranges() {
             })
             .collect();
         for agent in spawned {
-            let profile = sim.agent_profile(agent).expect("sampled profile");
-            assert_eq!(profile, expected);
-            checked += 1;
+            sampled.push(sim.agent_profile(agent).expect("sampled profile"));
         }
     }
-    assert!(checked > 0);
+    assert!(sampled.len() > 4, "too few profiles sampled");
+
+    // Every field lies inside its authored range.
+    for profile in &sampled {
+        let fields = [
+            ("speed_mps", bounds.speed_mps(), profile.desired_speed_mps),
+            ("length_m", bounds.length_m(), profile.length_m),
+            ("width_m", bounds.width_m(), profile.width_m),
+            ("time_gap_s", bounds.time_gap_s(), profile.time_gap_s),
+            (
+                "max_accel_mps2",
+                bounds.max_accel_mps2(),
+                profile.max_accel_mps2,
+            ),
+            (
+                "comfortable_brake_mps2",
+                bounds.comfortable_brake_mps2(),
+                profile.comfortable_brake_mps2,
+            ),
+            ("compliance", bounds.compliance(), profile.compliance),
+        ];
+        for (field, range, value) in fields {
+            assert!(
+                value >= range.min() - 1e-9 && value <= range.max() + 1e-9,
+                "{field} {value} left its authored range [{}, {}]",
+                range.min(),
+                range.max()
+            );
+        }
+    }
+
+    // The envelope is non-degenerate, so the samples must spread across it
+    // rather than collapse onto one point (which is what a degenerate
+    // min == max scenario could not distinguish).
+    let speeds: std::collections::BTreeSet<u64> = sampled
+        .iter()
+        .map(|profile| profile.desired_speed_mps.to_bits())
+        .collect();
+    assert!(
+        speeds.len() > 1,
+        "a wide speed range must sample more than one value"
+    );
+    let lowest_speed = sampled
+        .iter()
+        .map(|profile| profile.desired_speed_mps)
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        lowest_speed < bounds.speed_mps().max() - 1e-9,
+        "every sample sat at the top of the range"
+    );
 }
 
 #[test]

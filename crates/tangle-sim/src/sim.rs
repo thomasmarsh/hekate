@@ -159,6 +159,7 @@ pub struct Simulation {
     spawned_total: u64,
     despawned_total: u64,
     dropped_total: u64,
+    emergency_cap_steps: u64,
 }
 
 impl Simulation {
@@ -249,6 +250,7 @@ impl Simulation {
             spawned_total,
             despawned_total: 0,
             dropped_total: 0,
+            emergency_cap_steps: 0,
         })
     }
 
@@ -290,6 +292,8 @@ impl Simulation {
                         path_distance_m: self.agents.distance_m[index],
                         body_length_m: self.agents.body_length_m[index],
                         body_width_m: self.agents.body_width_m[index],
+                        route: self.agents.movement[index],
+                        profile: self.agents.profile[index],
                         decision: self.agents.decision[index],
                     }),
                 },
@@ -352,6 +356,19 @@ impl Simulation {
         self.agents.profile.get(agent.index()).copied().flatten()
     }
 
+    /// Steps so far in which a safety position cap forced more braking than
+    /// the sampled profile's comfortable deceleration.
+    ///
+    /// IDM's commanded acceleration is clamped to `[-b, +a_max]`, so the
+    /// profile bound holds for the model command. The two position caps (the
+    /// nearest leader's rear and a required stop line) are emergency backstops
+    /// outside that clamp and can demand a single larger deceleration. This
+    /// counter is the assertion seam for that documented exception: the
+    /// controlled car-following benchmark requires it to stay `0`.
+    pub fn emergency_cap_steps(&self) -> u64 {
+        self.emergency_cap_steps
+    }
+
     /// Most recent signal-compliance decision of an agent.
     ///
     /// Present for vehicles whose movement is signal-controlled, including a
@@ -412,16 +429,16 @@ impl Simulation {
             // speed, so the stop-line constraint the controller sees is exactly
             // the recorded decision.
             self.update_signal_decision(index);
-            let Some(path) = self.scenario.path(path_id) else {
-                continue;
-            };
-
             let direction = self.agents.direction[index];
             // Profile vehicles drive under IDM; the walking skeleton's static
             // population keeps its constant speed and is byte-identical.
-            let speed_mps = match self.agents.profile[index] {
+            let profile = self.agents.profile[index];
+            let speed_mps = match profile {
                 Some(profile) => self.controlled_speed(index, &profile, dt),
                 None => self.agents.speed_mps[index],
+            };
+            let Some(path) = self.scenario.path(path_id) else {
+                continue;
             };
             let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
             let length = path.length();
@@ -460,8 +477,10 @@ impl Simulation {
     /// The controller is the documented IDM in [`crate::control`]. Two hard
     /// caps keep the bounded model collision-free without an extra collision
     /// resolver: the next speed may not pass the nearest leader's rear, and it
-    /// may not pass a stop line whose control requires a stop.
-    fn controlled_speed(&self, index: usize, profile: &VehicleProfile, dt: f64) -> f64 {
+    /// may not pass a stop line whose control requires a stop. Each cap can
+    /// force a deceleration beyond the profile's comfortable value, so a step
+    /// where it does is counted in [`Self::emergency_cap_steps`].
+    fn controlled_speed(&mut self, index: usize, profile: &VehicleProfile, dt: f64) -> f64 {
         let leader = self.nearest_leader(index);
         let stop_line = self.stop_line_constraint(index);
 
@@ -492,7 +511,15 @@ impl Simulation {
             // A required stop holds the front bumper at the authored line.
             new_speed = new_speed.min(stop_line.gap_m / dt);
         }
-        new_speed.max(0.0)
+        let new_speed = new_speed.max(0.0);
+
+        // Comfortable braking alone would leave the vehicle at this speed, so
+        // anything below it was forced by a cap rather than by the controller.
+        let comfort_floor = (speed_mps - profile.comfortable_brake_mps2 * dt).max(0.0);
+        if new_speed < comfort_floor - 1e-9 {
+            self.emergency_cap_steps += 1;
+        }
+        new_speed
     }
 
     /// Nearest live leader ahead on the same path travelling the same way.
@@ -1027,6 +1054,95 @@ mod tests {
         assert_eq!(spawn_capacity(10.0, 20.0, 4.0), 1);
         assert_eq!(spawn_capacity(3.0, 20.0, 4.0), 0);
         assert_eq!(spawn_capacity(120.0, 0.0, 4.0), 0);
+    }
+
+    /// The model card's leader tie-break: two candidates at the same gap are
+    /// broken by agent id, not by any other attribute.
+    #[test]
+    fn leader_ties_resolve_to_the_lowest_agent_id() {
+        let mut sim = walking_sim(1);
+        // Overlap is normally impossible, so this degenerate tie is constructed
+        // directly: agents 1 and 2 occupy the same arc length, which is exactly
+        // the state the anti-overlap cap leaves behind when it pins a queue.
+        sim.agents.distance_m[2] = sim.agents.distance_m[1];
+        sim.agents.speed_mps[1] = 5.0;
+        sim.agents.speed_mps[2] = 9.0;
+        // The precondition: both candidates sit at exactly the same gap.
+        let half_lengths = (sim.agents.body_length_m[1] + sim.agents.body_length_m[0]) * 0.5;
+        let gap_to_first = sim.agents.distance_m[1] - sim.agents.distance_m[0] - half_lengths;
+        let gap_to_second = sim.agents.distance_m[2] - sim.agents.distance_m[0] - half_lengths;
+        assert!(
+            (gap_to_first - gap_to_second).abs() < 1e-12,
+            "the constructed state must be a genuine tie"
+        );
+        let leader = sim.nearest_leader(0).expect("a tied leader");
+        assert_eq!(
+            leader.speed_mps, 5.0,
+            "the lowest tied id must win, even when it is the slower candidate"
+        );
+
+        // Swapping which tied candidate moves faster must not move the winner.
+        sim.agents.speed_mps[1] = 9.0;
+        sim.agents.speed_mps[2] = 5.0;
+        let leader = sim.nearest_leader(0).expect("a tied leader");
+        assert_eq!(
+            leader.speed_mps, 9.0,
+            "the tie-break follows agent id, not the candidate's speed"
+        );
+    }
+
+    /// The documented exception to the profile braking bound: when the
+    /// anti-overlap cap binds, the step's implied deceleration exceeds `b` and
+    /// the emergency counter records it.
+    #[test]
+    fn the_anti_overlap_cap_is_counted_when_it_brakes_beyond_the_profile_bound() {
+        let mut sim = walking_sim(1);
+        let profile = VehicleProfile {
+            desired_speed_mps: 10.0,
+            length_m: 4.0,
+            width_m: 2.0,
+            time_gap_s: 1.5,
+            max_accel_mps2: 2.0,
+            comfortable_brake_mps2: 3.0,
+            compliance: 1.0,
+        };
+        // Park the last walker and enter a profile follower 0.1 m behind its
+        // rear at 4 m/s. Comfortable braking removes 0.15 m/s in one 0.05 s
+        // step, far more than the cap allows, so the cap must bind.
+        let leader_index = 5;
+        sim.agents.speed_mps[leader_index] = 0.0;
+        let path = sim.agents.path[leader_index];
+        let distance_m = sim.agents.distance_m[leader_index] - 2.25 - 0.1 - 2.0;
+        let path_geometry = sim.scenario.path(path).expect("guide path").clone();
+        sim.agents.push(AgentInit {
+            path,
+            distance_m,
+            speed_mps: 4.0,
+            position: path_geometry.position_at(distance_m),
+            heading_rad: path_geometry.heading_at(distance_m),
+            body_length_m: profile.length_m,
+            body_width_m: profile.width_m,
+            direction: 1.0,
+            movement: None,
+            profile: Some(profile),
+        });
+
+        sim.step();
+        let follower = sim.agents.len() - 1;
+        // The cap allows at most `gap / dt`; the step therefore decelerates far
+        // beyond the profile's comfortable 3.0 m/s².
+        assert!(
+            sim.agents.speed_mps[follower] < 4.0 - profile.comfortable_brake_mps2 * 0.05,
+            "the anti-overlap cap should have braked harder than the profile bound"
+        );
+        assert_eq!(sim.emergency_cap_steps(), 1);
+
+        // The static population's constant-speed path never engages the cap.
+        let mut free = walking_sim(1);
+        for _ in 0..20 {
+            free.step();
+        }
+        assert_eq!(free.emergency_cap_steps(), 0);
     }
 
     #[test]

@@ -48,6 +48,18 @@
 //! commanded braking never exceeds the profile's comfortable deceleration.
 //! The kernel additionally integrates speed within `[0, v0]`.
 //!
+//! ## Emergency backstops
+//!
+//! The profile bound above describes the IDM command only. The kernel adds two
+//! position caps outside that clamp: the next speed may not pass the nearest
+//! leader's rear in one step, and it may not pass a required stop line. When a
+//! cap binds, the one-step deceleration it implies can exceed `b`, because the
+//! cap answers a physical constraint (not crossing a bumper or a line) rather
+//! than a comfort target. Each such step is counted in
+//! `Simulation::emergency_cap_steps`, so a caller can assert that the backstop
+//! stayed idle: the controlled car-following benchmark requires `0`, and a
+//! signalized queue forming from free flow can legitimately engage it.
+//!
 //! ## Stop lines
 //!
 //! A stop line is modeled as a stationary constraint with `v_i = 0` and a
@@ -62,8 +74,10 @@
 //!
 //! The kernel passes at most one leader constraint: the nearest live vehicle
 //! ahead on the same guide path travelling the same direction, measured
-//! bumper to bumper. Ties resolve to the lowest agent id (stable spawn order).
-//! Opposite-direction and crossing-path interactions are later increments.
+//! bumper to bumper. Ties resolve to the lowest agent id (stable spawn order):
+//! the kernel scans agents in ascending id order and replaces the current
+//! leader only for a strictly smaller gap. Opposite-direction and crossing-path
+//! interactions are later increments.
 
 use crate::profile::VehicleProfile;
 

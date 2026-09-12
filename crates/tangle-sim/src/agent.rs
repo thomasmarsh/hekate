@@ -39,7 +39,8 @@ pub(crate) struct AgentInit {
     pub path: PathId,
     /// Current arc-length position along the path in metres.
     pub distance_m: f64,
-    /// Constant longitudinal speed in metres per second.
+    /// Longitudinal speed in metres per second. IDM-controlled for
+    /// demand-generated vehicles, constant for the static walking population.
     pub speed_mps: f64,
     /// World position in metres.
     pub position: DVec2,
