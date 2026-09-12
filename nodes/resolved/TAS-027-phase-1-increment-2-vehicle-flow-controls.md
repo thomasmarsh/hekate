@@ -1,9 +1,8 @@
 ---
-context_rev: 1
+context_rev: 2
 priority: P1
-updated: 2026-09-12T16:50:21Z
+updated: 2026-09-12T17:05:48Z
 summary: Phase 1 Increment 2 turns portals into demand, gives cars an IDM longitudinal controller with stop-line, signal, leader, queue, and exit behavior, and records reproducible contextual red-light decisions.
-next: Verify the integrated Increment 2 slices against every Done-when criterion and resolve the node.
 ---
 
 # Outcome
@@ -56,7 +55,9 @@ admission), slice B (path-distance tracking under a documented IDM
 longitudinal controller, leader/following/queue/exit behavior, authored stop
 lines, and the fixed-time signal phase state machine), and slice C (the
 contextual red-light decision, its recorded reasons, and inspector display)
-have landed. Final verification of the integrated increment remains.
+have landed, and the integrated increment has been verified against every
+Done-when criterion. The verification, the evidence for each criterion, and the
+accepted scope boundaries are recorded below.
 
 ## Slice C — contextual signal-compliance decision
 
@@ -221,3 +222,93 @@ Evidence:
   no dependency edge changed.
 - `schemas/scenario-source.schema.json` was regenerated for the new source
   types.
+
+## Final verification
+
+The five gates were rerun on the final tree after the closeout fixes below:
+
+- `cargo test --workspace --all-features` — every test binary passed.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean.
+- `cargo fmt --all --check` — clean.
+- `./scripts/check-dependency-direction.sh` — dependency direction OK.
+- `braintree check nodes` — graph check passed on the moved node.
+
+Done-when criterion evidence:
+
+1. Acceleration, braking, and speed bounds plus non-overlap in the controlled
+   benchmark —
+   `apps/tangle-cli/tests/scenarios.rs::car_following_benchmark_obeys_controller_bounds_without_overlap`
+   runs `car_following_v1` for seeds 0-2 and asserts, per step and per vehicle,
+   `speed in [0, sampled v0]`, `accel in [-b, +a_max]`, no same-path body
+   overlap, at least one real following brake, that every sampled profile lies
+   inside the authored `scenario.profiles()` envelope, and that
+   `Simulation::emergency_cap_steps() == 0`, so no position cap braked beyond
+   the sampled comfortable deceleration in this benchmark. The controlled
+   benchmark is the scope of this criterion; outside it the anti-overlap
+   backstop can bind (see Limitations).
+2. Stable saturated queues instead of unbounded spawn overlap —
+   `crates/tangle-sim/tests/vehicle_flow.rs`
+   (`safe_admission_never_overlaps_two_vehicles`,
+   `saturated_demand_sheds_load_instead_of_growing_the_queue`) holds the pending
+   queue at `MAX_PENDING_SPAWNS` or below, sheds load, and keeps bumper-to-bumper
+   separation; `crates/tangle-sim/tests/longitudinal_control.rs`
+   (`a_red_signal_queues_vehicles_behind_the_stop_line_without_overlap`) covers
+   the signal queue.
+3. Reproducible distributions drawing only from named streams —
+   `crates/tangle-sim/src/rng.rs` proves an added `compliance` draw leaves the
+   `demand` and `profile` sequences byte-identical;
+   `crates/tangle-sim/tests/vehicle_flow.rs`
+   (`profile_sampling_stays_within_the_configured_ranges` over a non-degenerate
+   authored envelope, `profile_sampling_uses_its_own_stream`,
+   `same_seed_reproduces_demand_and_profiles`) and
+   `crates/tangle-sim/tests/signal_compliance.rs` cover determinism and stream
+   isolation; `apps/tangle-cli/tests/scenarios.rs` asserts an identical
+   red-light decision trace for the same seed.
+4. Green/yellow/red boundaries and deterministic tie-breaking —
+   `crates/tangle-sim/src/compliance.rs` covers the green/red/yellow
+   boundaries, the inclusive boundary tie-breaker, the zero-compliance limit,
+   and `required_deceleration`; `crates/tangle-sim/src/signal.rs` covers
+   start-inclusive/end-exclusive phase boundaries and cycle wrap;
+   `crates/tangle-sim/src/sim.rs::leader_ties_resolve_to_the_lowest_agent_id`
+   covers the documented leader tie-break against a constructed genuine tie;
+   `crates/tangle-sim/src/control.rs` covers the IDM bounds.
+5. Traceable decision reasons — signal-compliance decisions record a full
+   `ComplianceDecision` (`green`, `past stop line`, `cannot stop comfortably`,
+   `compliant stop`, `noncompliant run`) and despawn decisions record
+   `DespawnReason::ExitedPath`. Admission accept/block, load shedding, and route
+   choice carry an outcome record (`Event::Spawned`, the `dropped` counters,
+   `Simulation::agent_route`) but no reason record, so the traceable-reason
+   claim is met by the signal-compliance and despawn decisions only (see
+   Limitations).
+
+The review closeout also landed these correctness fixes: the emergency-cap
+counter above plus its assertion in the controlled benchmark, an engine test
+for the leader tie-break, a non-degenerate profile-sampling test, a fresh
+`intent` wording that branches on the sampled profile with route and profile in
+both inspectors, and corrected `snapshot.rs`, `agent.rs`, and `signal.rs` doc
+comments. The scene golden gained `route: None` and `profile: None` per body;
+the walking CLI trace golden is unchanged.
+
+# Limitations
+
+Accepted scope boundaries and residual risks, all verified against
+`PHASE_1_PLAN.md` Increment 2:
+
+- Decision cadence: every state-affecting decision is re-evaluated each fixed
+  step (50 ms at the Standard preset) rather than at the provisional 200 ms
+  vehicle decision cadence preset, which is finer, not coarser.
+- Dilemma-zone compliance: a compliant driver whose comfortable braking cannot
+  stop it before the line (`CannotStop`) proceeds under ordinary IDM, carrying
+  the reason that names the choice rather than a special trajectory.
+- Emergency backstop: the leader and stop-line position caps sit outside the
+  IDM clamp, so a binding cap can demand a single deceleration beyond the
+  sampled comfortable value. `Simulation::emergency_cap_steps` counts those
+  steps; the controlled car-following benchmark requires zero, and
+  `four_leg_signal_v1` seed 0 engages the cap while a queue forms.
+- Signal rendering: heads are drawn at the movement entry and the authored stop
+  line is not rendered.
+- Cross-path and opposite-direction conflict resolution is Increment 4 work;
+  Increment 2 resolves same-path following only.
+- Traceable reasons cover the signal-compliance and despawn decisions;
+  admission accept/block, load shedding, and route choice have outcome records
+  but no reason record.
