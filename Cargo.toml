@@ -19,6 +19,7 @@ tangle-present = { path = "crates/tangle-present" }
 # upgrades deliberately; see PHASE_1_PLAN.md.
 bevy = "=0.19.1"
 clap = { version = "4.6.6", features = ["derive"] }
+crossterm = "0.29.0"
 glam = "0.33.7"
 parry2d-f64 = "0.30.2"
 rand_chacha = "0.10.0"

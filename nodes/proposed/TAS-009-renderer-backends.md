@@ -3,7 +3,7 @@ context_rev: 1
 priority: P1
 updated: 2026-09-12T13:22:00Z
 summary: Render one simulation through interchangeable GUI and terminal renderer backends.
-next: Build the character-cell terminal viewer ([[TAS-012-terminal-viewer-ascii]]).
+next: Add capability probing and fallback for the opt-in Kitty backend ([[TAS-014-terminal-capability-detection]]).
 ---
 
 # Outcome
