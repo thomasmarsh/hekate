@@ -1,2 +1,5 @@
 .lavish/
 /target/
+
+# Each spike is a detached throwaway crate with its own lockfile and target.
+spikes/*/target/
