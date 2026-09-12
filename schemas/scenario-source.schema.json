@@ -4,13 +4,45 @@
   "description": "A hand-authored scenario document before validation or compilation.",
   "type": "object",
   "properties": {
+    "boundaries": {
+      "description": "Closed polygons marking the non-traversable world limits.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PolygonSource"
+      }
+    },
+    "conflict_regions": {
+      "description": "Authored conflict regions shared by pairs of movements.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ConflictRegionSource"
+      }
+    },
     "coordinate_system": {
       "description": "Human-facing names for the two world axes.",
       "$ref": "#/$defs/CoordinateSystem"
     },
+    "crossings": {
+      "description": "Pedestrian crossings over one or more movements.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CrossingSource"
+      }
+    },
     "id": {
       "description": "Stable scenario identifier recorded in run provenance.",
       "type": "string"
+    },
+    "movements": {
+      "description": "Movement connectors from one portal to another along a guide path.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/MovementSource"
+      }
     },
     "paths": {
       "description": "Guide paths agents travel along.",
@@ -37,11 +69,35 @@
         "$ref": "#/$defs/PortalSource"
       }
     },
+    "regions": {
+      "description": "Closed polygons marking traversable areas other than guide paths.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PolygonSource"
+      }
+    },
+    "rules": {
+      "description": "Right-of-way or control rules attached to movements.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuleSource"
+      }
+    },
     "schema_version": {
       "description": "Schema version the document was written against.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "signals": {
+      "description": "Fixed-time signal controllers with phased signal heads.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SignalSource"
+      }
     }
   },
   "additionalProperties": false,
@@ -53,6 +109,36 @@
     "portals"
   ],
   "$defs": {
+    "ConflictRegionSource": {
+      "description": "An authored conflict region shared by two movements.\n\nThe geometry lets a renderer or metric show where two movement envelopes\ncross; the movement pair is what a signal check uses to reject conflicting\ngreens. A scenario may author it explicitly or, later, accept a derived one.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "movements": {
+          "description": "Exactly two movements whose envelopes conflict in this region.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "points": {
+          "description": "Ordered ring vertices in metres.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PointSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "points",
+        "movements"
+      ]
+    },
     "CoordinateSystem": {
       "description": "Human-facing names for the world coordinate axes.",
       "type": "object",
@@ -70,6 +156,69 @@
       "required": [
         "x",
         "y"
+      ]
+    },
+    "CrossingSource": {
+      "description": "A pedestrian crossing occupying a traversable region over some movements.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "movements": {
+          "description": "Movements the crossing crosses.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "region": {
+          "description": "Traversable region the crossing occupies.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "region",
+        "movements"
+      ]
+    },
+    "MovementSource": {
+      "description": "A movement connector from one portal to another along a guide path.\n\nA movement is the Phase 1 routing primitive: it names where an agent enters\nthe modeled area, where it leaves, and the guide path between them. Conflict\nregions, crossings, and control rules all reference movements rather than\nnaming a scenario kind, so a layout such as a four-leg intersection is data,\nnot a simulator branch.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "Portal where the movement begins.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Guide path the movement follows.",
+          "type": "string"
+        },
+        "priority": {
+          "description": "Right-of-way rank; a lower value is honored before a higher one.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "to": {
+          "description": "Portal where the movement ends.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "from",
+        "to",
+        "path",
+        "priority"
       ]
     },
     "PathEnd": {
@@ -128,6 +277,28 @@
       "required": [
         "x",
         "y"
+      ]
+    },
+    "PolygonSource": {
+      "description": "A closed polygon in metres.\n\nThe ring closes implicitly from the last vertex back to the first, so the\nauthored vertex list must not repeat the first point at the end.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "points": {
+          "description": "Ordered ring vertices in metres.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PointSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "points"
       ]
     },
     "PopulationSource": {
@@ -198,6 +369,174 @@
         "path",
         "end",
         "width_m"
+      ]
+    },
+    "RuleKind": {
+      "description": "How a movement's right of way is controlled.",
+      "oneOf": [
+        {
+          "description": "No control; the movement proceeds subject to ordinary interaction.",
+          "type": "string",
+          "const": "free"
+        },
+        {
+          "description": "The movement must yield to the conflicting movements.",
+          "type": "string",
+          "const": "yield"
+        },
+        {
+          "description": "The movement must stop before proceeding.",
+          "type": "string",
+          "const": "stop"
+        },
+        {
+          "description": "A signal controller governs the movement.",
+          "type": "string",
+          "const": "signal"
+        }
+      ]
+    },
+    "RuleSource": {
+      "description": "A control rule attached to one movement.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Kind of control the rule applies.",
+          "$ref": "#/$defs/RuleKind"
+        },
+        "movement": {
+          "description": "Movement this rule governs.",
+          "type": "string"
+        },
+        "signal": {
+          "description": "Signal controller, present exactly when `kind` is `signal`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "movement",
+        "kind"
+      ]
+    },
+    "SignalColor": {
+      "description": "Display color of one signal head during one phase.",
+      "oneOf": [
+        {
+          "description": "The controlled movement must stop.",
+          "type": "string",
+          "const": "red"
+        },
+        {
+          "description": "The controlled movement should prepare to stop.",
+          "type": "string",
+          "const": "yellow"
+        },
+        {
+          "description": "The controlled movement may proceed.",
+          "type": "string",
+          "const": "green"
+        }
+      ]
+    },
+    "SignalHeadSource": {
+      "description": "One signal head controlling a movement.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Identifier unique within the owning signal.",
+          "type": "string"
+        },
+        "movement": {
+          "description": "Movement this head controls.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "movement"
+      ]
+    },
+    "SignalPhaseSource": {
+      "description": "One fixed-time signal phase.",
+      "type": "object",
+      "properties": {
+        "duration_s": {
+          "description": "Phase duration in seconds.",
+          "type": "number",
+          "format": "double"
+        },
+        "states": {
+          "description": "The color of every head in the owning signal during this phase.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SignalStateSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "duration_s",
+        "states"
+      ]
+    },
+    "SignalSource": {
+      "description": "A fixed-time signal controller.",
+      "type": "object",
+      "properties": {
+        "heads": {
+          "description": "Signal heads controlled together.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SignalHeadSource"
+          }
+        },
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "phases": {
+          "description": "Phases in cycle order, each showing every head once.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SignalPhaseSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "heads",
+        "phases"
+      ]
+    },
+    "SignalStateSource": {
+      "description": "One head's color during one phase.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "Color shown on that head during this phase.",
+          "$ref": "#/$defs/SignalColor"
+        },
+        "head": {
+          "description": "Head identifier within the owning signal.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "color"
       ]
     }
   }

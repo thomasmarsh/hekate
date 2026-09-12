@@ -1,0 +1,59 @@
+// Benchmark: two perpendicular paths with an explicit conflict region.
+//
+// Unsynchronized crossing traffic: an east-west movement and a north-south
+// movement whose envelopes meet in one authored conflict region. Priority is
+// data (`free` versus `yield`), not a four-way-stop branch in the simulator.
+// See PHASE_1_PLAN.md Increment 1.
+{
+  schema_version: 1,
+  id: 'perpendicular_conflict_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -50.0, y: -50.0 },
+        { x: 50.0, y: -50.0 },
+        { x: 50.0, y: 50.0 },
+        { x: -50.0, y: 50.0 },
+      ],
+    },
+  ],
+  paths: [
+    { id: 'ew_road', points: [ { x: -40.0, y: 0.0 }, { x: 40.0, y: 0.0 } ] },
+    { id: 'ns_road', points: [ { x: 0.0, y: -40.0 }, { x: 0.0, y: 40.0 } ] },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'ew_road', end: 'start', width_m: 7.0 },
+    { id: 'east_exit', path: 'ew_road', end: 'end', width_m: 7.0 },
+    { id: 'south_entry', path: 'ns_road', end: 'start', width_m: 7.0 },
+    { id: 'north_exit', path: 'ns_road', end: 'end', width_m: 7.0 },
+  ],
+  movements: [
+    { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0 },
+    { id: 'ns_through', from: 'south_entry', to: 'north_exit', path: 'ns_road', priority: 1 },
+  ],
+  conflict_regions: [
+    {
+      id: 'center_conflict',
+      points: [
+        { x: -5.0, y: -5.0 },
+        { x: 5.0, y: -5.0 },
+        { x: 5.0, y: 5.0 },
+        { x: -5.0, y: 5.0 },
+      ],
+      movements: [ 'ew_through', 'ns_through' ],
+    },
+  ],
+  rules: [
+    { id: 'free_ew', movement: 'ew_through', kind: 'free' },
+    { id: 'yield_ns', movement: 'ns_through', kind: 'yield' },
+  ],
+  population: {
+    vehicle_count: 6,
+    vehicle_speed_mps: 12.0,
+    vehicle_spacing_m: 20.0,
+    vehicle_length_m: 4.5,
+    vehicle_width_m: 1.8,
+  },
+}

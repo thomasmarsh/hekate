@@ -24,6 +24,27 @@ pub struct ScenarioSource {
     pub paths: Vec<PathSource>,
     /// Entry and exit points attached to path ends.
     pub portals: Vec<PortalSource>,
+    /// Closed polygons marking the non-traversable world limits.
+    #[serde(default)]
+    pub boundaries: Vec<PolygonSource>,
+    /// Closed polygons marking traversable areas other than guide paths.
+    #[serde(default)]
+    pub regions: Vec<PolygonSource>,
+    /// Movement connectors from one portal to another along a guide path.
+    #[serde(default)]
+    pub movements: Vec<MovementSource>,
+    /// Pedestrian crossings over one or more movements.
+    #[serde(default)]
+    pub crossings: Vec<CrossingSource>,
+    /// Authored conflict regions shared by pairs of movements.
+    #[serde(default)]
+    pub conflict_regions: Vec<ConflictRegionSource>,
+    /// Right-of-way or control rules attached to movements.
+    #[serde(default)]
+    pub rules: Vec<RuleSource>,
+    /// Fixed-time signal controllers with phased signal heads.
+    #[serde(default)]
+    pub signals: Vec<SignalSource>,
     /// Walking-skeleton population tuning.
     #[serde(default)]
     pub population: PopulationSource,
@@ -81,6 +102,152 @@ pub struct PortalSource {
     pub end: PathEnd,
     /// Traversable width of the portal in metres.
     pub width_m: f64,
+}
+
+/// A closed polygon in metres.
+///
+/// The ring closes implicitly from the last vertex back to the first, so the
+/// authored vertex list must not repeat the first point at the end.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PolygonSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Ordered ring vertices in metres.
+    pub points: Vec<PointSource>,
+}
+
+/// A movement connector from one portal to another along a guide path.
+///
+/// A movement is the Phase 1 routing primitive: it names where an agent enters
+/// the modeled area, where it leaves, and the guide path between them. Conflict
+/// regions, crossings, and control rules all reference movements rather than
+/// naming a scenario kind, so a layout such as a four-leg intersection is data,
+/// not a simulator branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MovementSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Portal where the movement begins.
+    pub from: String,
+    /// Portal where the movement ends.
+    pub to: String,
+    /// Guide path the movement follows.
+    pub path: String,
+    /// Right-of-way rank; a lower value is honored before a higher one.
+    pub priority: u32,
+}
+
+/// A pedestrian crossing occupying a traversable region over some movements.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CrossingSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Traversable region the crossing occupies.
+    pub region: String,
+    /// Movements the crossing crosses.
+    pub movements: Vec<String>,
+}
+
+/// An authored conflict region shared by two movements.
+///
+/// The geometry lets a renderer or metric show where two movement envelopes
+/// cross; the movement pair is what a signal check uses to reject conflicting
+/// greens. A scenario may author it explicitly or, later, accept a derived one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConflictRegionSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Ordered ring vertices in metres.
+    pub points: Vec<PointSource>,
+    /// Exactly two movements whose envelopes conflict in this region.
+    pub movements: Vec<String>,
+}
+
+/// How a movement's right of way is controlled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleKind {
+    /// No control; the movement proceeds subject to ordinary interaction.
+    Free,
+    /// The movement must yield to the conflicting movements.
+    Yield,
+    /// The movement must stop before proceeding.
+    Stop,
+    /// A signal controller governs the movement.
+    Signal,
+}
+
+/// A control rule attached to one movement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuleSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Movement this rule governs.
+    pub movement: String,
+    /// Kind of control the rule applies.
+    pub kind: RuleKind,
+    /// Signal controller, present exactly when `kind` is `signal`.
+    #[serde(default)]
+    pub signal: Option<String>,
+}
+
+/// Display color of one signal head during one phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalColor {
+    /// The controlled movement must stop.
+    Red,
+    /// The controlled movement should prepare to stop.
+    Yellow,
+    /// The controlled movement may proceed.
+    Green,
+}
+
+/// One signal head controlling a movement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignalHeadSource {
+    /// Identifier unique within the owning signal.
+    pub id: String,
+    /// Movement this head controls.
+    pub movement: String,
+}
+
+/// One head's color during one phase.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignalStateSource {
+    /// Head identifier within the owning signal.
+    pub head: String,
+    /// Color shown on that head during this phase.
+    pub color: SignalColor,
+}
+
+/// One fixed-time signal phase.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignalPhaseSource {
+    /// Phase duration in seconds.
+    pub duration_s: f64,
+    /// The color of every head in the owning signal during this phase.
+    pub states: Vec<SignalStateSource>,
+}
+
+/// A fixed-time signal controller.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SignalSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Signal heads controlled together.
+    pub heads: Vec<SignalHeadSource>,
+    /// Phases in cycle order, each showing every head once.
+    pub phases: Vec<SignalPhaseSource>,
 }
 
 /// Walking-skeleton population tuning.

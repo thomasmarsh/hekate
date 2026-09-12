@@ -1,0 +1,98 @@
+// Benchmark: a small four-leg signalized intersection.
+//
+// Two crossing roads, one conflict region, two pedestrian crossings, explicit
+// signal rules, and a two-phase fixed-time controller expressed entirely from
+// general primitives. No field names a scenario kind. See PHASE_1_PLAN.md
+// Increment 1.
+{
+  schema_version: 1,
+  id: 'four_leg_signal_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -50.0, y: -50.0 },
+        { x: 50.0, y: -50.0 },
+        { x: 50.0, y: 50.0 },
+        { x: -50.0, y: 50.0 },
+      ],
+    },
+  ],
+  regions: [
+    {
+      id: 'west_crossing_area',
+      points: [
+        { x: -9.0, y: -4.0 },
+        { x: -6.0, y: -4.0 },
+        { x: -6.0, y: 4.0 },
+        { x: -9.0, y: 4.0 },
+      ],
+    },
+    {
+      id: 'south_crossing_area',
+      points: [
+        { x: -4.0, y: -9.0 },
+        { x: 4.0, y: -9.0 },
+        { x: 4.0, y: -6.0 },
+        { x: -4.0, y: -6.0 },
+      ],
+    },
+  ],
+  paths: [
+    { id: 'ew_road', points: [ { x: -40.0, y: 0.0 }, { x: 40.0, y: 0.0 } ] },
+    { id: 'ns_road', points: [ { x: 0.0, y: -40.0 }, { x: 0.0, y: 40.0 } ] },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'ew_road', end: 'start', width_m: 7.0 },
+    { id: 'east_exit', path: 'ew_road', end: 'end', width_m: 7.0 },
+    { id: 'south_entry', path: 'ns_road', end: 'start', width_m: 7.0 },
+    { id: 'north_exit', path: 'ns_road', end: 'end', width_m: 7.0 },
+  ],
+  movements: [
+    { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0 },
+    { id: 'ns_through', from: 'south_entry', to: 'north_exit', path: 'ns_road', priority: 0 },
+  ],
+  crossings: [
+    { id: 'west_crossing', region: 'west_crossing_area', movements: [ 'ew_through' ] },
+    { id: 'south_crossing', region: 'south_crossing_area', movements: [ 'ns_through' ] },
+  ],
+  conflict_regions: [
+    {
+      id: 'center_conflict',
+      points: [
+        { x: -5.0, y: -5.0 },
+        { x: 5.0, y: -5.0 },
+        { x: 5.0, y: 5.0 },
+        { x: -5.0, y: 5.0 },
+      ],
+      movements: [ 'ew_through', 'ns_through' ],
+    },
+  ],
+  rules: [
+    { id: 'signal_ew', movement: 'ew_through', kind: 'signal', signal: 'main' },
+    { id: 'signal_ns', movement: 'ns_through', kind: 'signal', signal: 'main' },
+  ],
+  signals: [
+    {
+      id: 'main',
+      heads: [
+        { id: 'ew_head', movement: 'ew_through' },
+        { id: 'ns_head', movement: 'ns_through' },
+      ],
+      phases: [
+        { duration_s: 25.0, states: [ { head: 'ew_head', color: 'green' }, { head: 'ns_head', color: 'red' } ] },
+        { duration_s: 4.0, states: [ { head: 'ew_head', color: 'yellow' }, { head: 'ns_head', color: 'red' } ] },
+        { duration_s: 25.0, states: [ { head: 'ew_head', color: 'red' }, { head: 'ns_head', color: 'green' } ] },
+        { duration_s: 4.0, states: [ { head: 'ew_head', color: 'red' }, { head: 'ns_head', color: 'yellow' } ] },
+      ],
+    },
+  ],
+  population: {
+    vehicle_count: 8,
+    vehicle_speed_mps: 12.0,
+    vehicle_spacing_m: 20.0,
+    vehicle_length_m: 4.5,
+    vehicle_width_m: 1.8,
+  },
+}

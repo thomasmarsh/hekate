@@ -19,8 +19,10 @@ mod validate;
 pub use compiled::{CompiledPath, CompiledPortal, CompiledScenario, IdMap, PathId, PortalId};
 pub use schema::{scenario_schema, scenario_schema_json};
 pub use source::{
-    CoordinateSystem, ParseError, PathEnd, PathSource, PointSource, PopulationSource, PortalSource,
-    SUPPORTED_SCHEMA_VERSION, ScenarioSource, parse_scenario_source,
+    ConflictRegionSource, CoordinateSystem, CrossingSource, MovementSource, ParseError, PathEnd,
+    PathSource, PointSource, PolygonSource, PopulationSource, PortalSource, RuleKind, RuleSource,
+    SUPPORTED_SCHEMA_VERSION, ScenarioSource, SignalColor, SignalHeadSource, SignalPhaseSource,
+    SignalSource, SignalStateSource, parse_scenario_source,
 };
 pub use validate::{Diagnostic, DiagnosticCode, validate};
 

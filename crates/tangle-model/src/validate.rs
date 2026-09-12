@@ -11,7 +11,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::source::{PathEnd, SUPPORTED_SCHEMA_VERSION, ScenarioSource};
+use crate::source::{
+    PathEnd, PointSource, RuleKind, SUPPORTED_SCHEMA_VERSION, ScenarioSource, SignalColor,
+};
 
 /// Stable, machine-readable diagnostic codes.
 ///
@@ -39,6 +41,52 @@ pub enum DiagnosticCode {
     PortalUnreachable,
     /// Two portals attach to the same end of the same path.
     PortalDuplicateEnd,
+    /// Two portals overlap in world space.
+    PortalOverlap,
+    /// A polygon has fewer than three vertices.
+    PolygonTooFewVertices,
+    /// A polygon encloses no area.
+    PolygonDegenerate,
+    /// A movement references a portal that is not declared.
+    MovementUnknownPortal,
+    /// A movement references a path that is not declared.
+    MovementUnknownPath,
+    /// A movement starts and ends at the same portal.
+    MovementSelfLoop,
+    /// A movement's portals do not both attach to its guide path.
+    MovementPortalPathMismatch,
+    /// A crossing crosses no movements.
+    CrossingEmpty,
+    /// A crossing references a region that is not declared.
+    CrossingUnknownRegion,
+    /// A crossing references a movement that is not declared.
+    CrossingUnknownMovement,
+    /// A conflict region does not name exactly two distinct movements.
+    ConflictArity,
+    /// A conflict region references a movement that is not declared.
+    ConflictUnknownMovement,
+    /// A rule references a movement that is not declared.
+    RuleUnknownMovement,
+    /// A signal rule references a signal that is not declared.
+    RuleUnknownSignal,
+    /// A rule's signal field disagrees with its kind.
+    RuleSignalMismatch,
+    /// A signal has no heads or no phases.
+    SignalEmpty,
+    /// A signal head controls a movement that is not declared.
+    SignalUnknownMovement,
+    /// Two signal heads in one signal share an identifier.
+    SignalDuplicateHead,
+    /// A signal phase lists no states.
+    SignalPhaseEmpty,
+    /// A signal phase references a head that is not declared.
+    SignalUnknownHead,
+    /// A signal phase lists one head more than once.
+    SignalPhaseDuplicateHead,
+    /// A signal phase omits a head declared by its signal.
+    SignalPhaseMissingHead,
+    /// A signal phase shows two conflicting movements a green at once.
+    SignalConflictingGreen,
 }
 
 impl DiagnosticCode {
@@ -55,6 +103,29 @@ impl DiagnosticCode {
             Self::PortalUnknownPath => "E_PORTAL_UNKNOWN_PATH",
             Self::PortalUnreachable => "E_PORTAL_UNREACHABLE",
             Self::PortalDuplicateEnd => "E_PORTAL_DUPLICATE_END",
+            Self::PortalOverlap => "E_PORTAL_OVERLAP",
+            Self::PolygonTooFewVertices => "E_POLYGON_TOO_FEW_VERTICES",
+            Self::PolygonDegenerate => "E_POLYGON_DEGENERATE",
+            Self::MovementUnknownPortal => "E_MOVEMENT_UNKNOWN_PORTAL",
+            Self::MovementUnknownPath => "E_MOVEMENT_UNKNOWN_PATH",
+            Self::MovementSelfLoop => "E_MOVEMENT_SELF_LOOP",
+            Self::MovementPortalPathMismatch => "E_MOVEMENT_PORTAL_PATH_MISMATCH",
+            Self::CrossingEmpty => "E_CROSSING_EMPTY",
+            Self::CrossingUnknownRegion => "E_CROSSING_UNKNOWN_REGION",
+            Self::CrossingUnknownMovement => "E_CROSSING_UNKNOWN_MOVEMENT",
+            Self::ConflictArity => "E_CONFLICT_ARITY",
+            Self::ConflictUnknownMovement => "E_CONFLICT_UNKNOWN_MOVEMENT",
+            Self::RuleUnknownMovement => "E_RULE_UNKNOWN_MOVEMENT",
+            Self::RuleUnknownSignal => "E_RULE_UNKNOWN_SIGNAL",
+            Self::RuleSignalMismatch => "E_RULE_SIGNAL_MISMATCH",
+            Self::SignalEmpty => "E_SIGNAL_EMPTY",
+            Self::SignalUnknownMovement => "E_SIGNAL_UNKNOWN_MOVEMENT",
+            Self::SignalDuplicateHead => "E_SIGNAL_DUPLICATE_HEAD",
+            Self::SignalPhaseEmpty => "E_SIGNAL_PHASE_EMPTY",
+            Self::SignalUnknownHead => "E_SIGNAL_UNKNOWN_HEAD",
+            Self::SignalPhaseDuplicateHead => "E_SIGNAL_PHASE_DUPLICATE_HEAD",
+            Self::SignalPhaseMissingHead => "E_SIGNAL_PHASE_MISSING_HEAD",
+            Self::SignalConflictingGreen => "E_SIGNAL_CONFLICTING_GREEN",
         }
     }
 }
@@ -115,6 +186,12 @@ pub fn validate(source: &ScenarioSource) -> Vec<Diagnostic> {
     validate_ids(source, &mut diagnostics);
     validate_paths(source, &mut diagnostics);
     validate_portals(source, &mut diagnostics);
+    validate_polygons(source, &mut diagnostics);
+    validate_movements(source, &mut diagnostics);
+    validate_crossings(source, &mut diagnostics);
+    validate_conflict_regions(source, &mut diagnostics);
+    validate_rules(source, &mut diagnostics);
+    validate_signals(source, &mut diagnostics);
     validate_population(source, &mut diagnostics);
 
     diagnostics
@@ -133,7 +210,19 @@ fn validate_ids(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
         .paths
         .iter()
         .map(|path| path.id.as_str())
-        .chain(source.portals.iter().map(|portal| portal.id.as_str()));
+        .chain(source.portals.iter().map(|portal| portal.id.as_str()))
+        .chain(source.boundaries.iter().map(|polygon| polygon.id.as_str()))
+        .chain(source.regions.iter().map(|polygon| polygon.id.as_str()))
+        .chain(source.movements.iter().map(|movement| movement.id.as_str()))
+        .chain(source.crossings.iter().map(|crossing| crossing.id.as_str()))
+        .chain(
+            source
+                .conflict_regions
+                .iter()
+                .map(|conflict| conflict.id.as_str()),
+        )
+        .chain(source.rules.iter().map(|rule| rule.id.as_str()))
+        .chain(source.signals.iter().map(|signal| signal.id.as_str()));
     let mut seen: HashSet<&str> = HashSet::new();
     for id in authored {
         if id.is_empty() {
@@ -265,6 +354,44 @@ fn validate_portals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
             ));
         }
     }
+
+    // Spawn/absorb points that physically overlap are an ambiguous admission
+    // area, so reject them before time zero.
+    for (index, portal) in source.portals.iter().enumerate() {
+        let Some(position) = portal_position(source, portal) else {
+            continue;
+        };
+        for other in source.portals.iter().skip(index + 1) {
+            let Some(other_position) = portal_position(source, other) else {
+                continue;
+            };
+            let gap = (position.x - other_position.x).hypot(position.y - other_position.y);
+            let overlap_threshold = (portal.width_m + other.width_m) * 0.5;
+            if gap < overlap_threshold {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PortalOverlap,
+                    Some(portal.id.clone()),
+                    format!(
+                        "portal '{}' overlaps portal '{}' (gap {:.3} m, half-widths {:.3} m)",
+                        portal.id, other.id, gap, overlap_threshold
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// World position of a portal's path endpoint, or `None` when the reference is
+/// broken (which another check reports).
+fn portal_position(
+    source: &ScenarioSource,
+    portal: &crate::source::PortalSource,
+) -> Option<PointSource> {
+    let path = source.paths.iter().find(|path| path.id == portal.path)?;
+    match portal.end {
+        PathEnd::Start => path.points.first().copied(),
+        PathEnd::End => path.points.last().copied(),
+    }
 }
 
 fn validate_population(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
@@ -282,6 +409,382 @@ fn validate_population(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic
                 Some(source.id.clone()),
                 format!("population.{field} must be finite and positive, got {value}"),
             ));
+        }
+    }
+}
+
+/// Signed area of a polygon ring via the shoelace formula.
+fn polygon_area(points: &[PointSource]) -> f64 {
+    let count = points.len();
+    let mut sum = 0.0;
+    for index in 0..count {
+        let current = points[index];
+        let next = points[(index + 1) % count];
+        sum += current.x * next.y - next.x * current.y;
+    }
+    sum * 0.5
+}
+
+/// Validate one authored polygon ring.
+fn validate_polygon(id: &str, points: &[PointSource], diagnostics: &mut Vec<Diagnostic>) {
+    for point in points {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::NonFiniteCoordinate,
+                Some(id.to_owned()),
+                format!(
+                    "polygon '{id}' has a non-finite coordinate ({}, {})",
+                    point.x, point.y
+                ),
+            ));
+        }
+    }
+    if points.len() < 3 {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::PolygonTooFewVertices,
+            Some(id.to_owned()),
+            format!(
+                "polygon '{id}' needs at least three vertices, got {}",
+                points.len()
+            ),
+        ));
+        return;
+    }
+    let area = polygon_area(points);
+    if !area.is_finite() || area.abs() <= f64::EPSILON {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::PolygonDegenerate,
+            Some(id.to_owned()),
+            format!("polygon '{id}' encloses no area"),
+        ));
+    }
+}
+
+fn validate_polygons(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for polygon in &source.boundaries {
+        validate_polygon(&polygon.id, &polygon.points, diagnostics);
+    }
+    for polygon in &source.regions {
+        validate_polygon(&polygon.id, &polygon.points, diagnostics);
+    }
+}
+
+fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for movement in &source.movements {
+        let from = source
+            .portals
+            .iter()
+            .find(|portal| portal.id == movement.from);
+        let to = source
+            .portals
+            .iter()
+            .find(|portal| portal.id == movement.to);
+        let path = source.paths.iter().find(|path| path.id == movement.path);
+
+        if from.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::MovementUnknownPortal,
+                Some(movement.id.clone()),
+                format!(
+                    "movement '{}' starts at undeclared portal '{}'",
+                    movement.id, movement.from
+                ),
+            ));
+        }
+        if to.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::MovementUnknownPortal,
+                Some(movement.id.clone()),
+                format!(
+                    "movement '{}' ends at undeclared portal '{}'",
+                    movement.id, movement.to
+                ),
+            ));
+        }
+        if movement.from == movement.to {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::MovementSelfLoop,
+                Some(movement.id.clone()),
+                format!(
+                    "movement '{}' starts and ends at portal '{}'",
+                    movement.id, movement.from
+                ),
+            ));
+        }
+        if path.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::MovementUnknownPath,
+                Some(movement.id.clone()),
+                format!(
+                    "movement '{}' follows undeclared path '{}'",
+                    movement.id, movement.path
+                ),
+            ));
+        } else {
+            for (role, portal) in [("from", from), ("to", to)] {
+                if let Some(portal) = portal
+                    && portal.path != movement.path
+                {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::MovementPortalPathMismatch,
+                        Some(movement.id.clone()),
+                        format!(
+                            "movement '{}' {role} portal '{}' attaches to path '{}', not '{}'",
+                            movement.id, portal.id, portal.path, movement.path
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn validate_crossings(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for crossing in &source.crossings {
+        if crossing.movements.is_empty() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::CrossingEmpty,
+                Some(crossing.id.clone()),
+                format!("crossing '{}' crosses no movements", crossing.id),
+            ));
+        }
+        if !source
+            .regions
+            .iter()
+            .any(|region| region.id == crossing.region)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::CrossingUnknownRegion,
+                Some(crossing.id.clone()),
+                format!(
+                    "crossing '{}' occupies undeclared region '{}'",
+                    crossing.id, crossing.region
+                ),
+            ));
+        }
+        for movement in &crossing.movements {
+            if !source
+                .movements
+                .iter()
+                .any(|candidate| candidate.id == *movement)
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::CrossingUnknownMovement,
+                    Some(crossing.id.clone()),
+                    format!(
+                        "crossing '{}' crosses undeclared movement '{}'",
+                        crossing.id, movement
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_conflict_regions(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for conflict in &source.conflict_regions {
+        validate_polygon(&conflict.id, &conflict.points, diagnostics);
+        let distinct =
+            conflict.movements.len() == 2 && conflict.movements[0] != conflict.movements[1];
+        if !distinct {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ConflictArity,
+                Some(conflict.id.clone()),
+                format!(
+                    "conflict region '{}' must name exactly two distinct movements, got [{}]",
+                    conflict.id,
+                    conflict.movements.join(", ")
+                ),
+            ));
+        }
+        for movement in &conflict.movements {
+            if !source
+                .movements
+                .iter()
+                .any(|candidate| candidate.id == *movement)
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ConflictUnknownMovement,
+                    Some(conflict.id.clone()),
+                    format!(
+                        "conflict region '{}' names undeclared movement '{}'",
+                        conflict.id, movement
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_rules(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for rule in &source.rules {
+        if !source
+            .movements
+            .iter()
+            .any(|movement| movement.id == rule.movement)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::RuleUnknownMovement,
+                Some(rule.id.clone()),
+                format!(
+                    "rule '{}' governs undeclared movement '{}'",
+                    rule.id, rule.movement
+                ),
+            ));
+        }
+        match (rule.kind, rule.signal.as_deref()) {
+            (RuleKind::Signal, Some(signal)) => {
+                if !source
+                    .signals
+                    .iter()
+                    .any(|candidate| candidate.id == signal)
+                {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::RuleUnknownSignal,
+                        Some(rule.id.clone()),
+                        format!("rule '{}' names undeclared signal '{}'", rule.id, signal),
+                    ));
+                }
+            }
+            (RuleKind::Signal, None) => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::RuleSignalMismatch,
+                Some(rule.id.clone()),
+                format!(
+                    "rule '{}' is signal-controlled but names no signal",
+                    rule.id
+                ),
+            )),
+            (_, Some(signal)) => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::RuleSignalMismatch,
+                Some(rule.id.clone()),
+                format!(
+                    "rule '{}' is not signal-controlled but names signal '{}'",
+                    rule.id, signal
+                ),
+            )),
+            (_, None) => {}
+        }
+    }
+}
+
+fn validate_signals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for signal in &source.signals {
+        if signal.heads.is_empty() || signal.phases.is_empty() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::SignalEmpty,
+                Some(signal.id.clone()),
+                format!(
+                    "signal '{}' needs at least one head and one phase",
+                    signal.id
+                ),
+            ));
+        }
+
+        let mut head_ids: HashSet<&str> = HashSet::new();
+        for head in &signal.heads {
+            if !head_ids.insert(head.id.as_str()) {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::SignalDuplicateHead,
+                    Some(signal.id.clone()),
+                    format!(
+                        "signal '{}' declares head '{}' more than once",
+                        signal.id, head.id
+                    ),
+                ));
+            }
+            if !source
+                .movements
+                .iter()
+                .any(|movement| movement.id == head.movement)
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::SignalUnknownMovement,
+                    Some(signal.id.clone()),
+                    format!(
+                        "signal '{}' head '{}' controls undeclared movement '{}'",
+                        signal.id, head.id, head.movement
+                    ),
+                ));
+            }
+        }
+
+        for (index, phase) in signal.phases.iter().enumerate() {
+            if !phase.duration_s.is_finite() || phase.duration_s <= 0.0 {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::NonPositiveValue,
+                    Some(signal.id.clone()),
+                    format!(
+                        "signal '{}' phase {} duration must be finite and positive, got {}",
+                        signal.id, index, phase.duration_s
+                    ),
+                ));
+            }
+            if phase.states.is_empty() {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::SignalPhaseEmpty,
+                    Some(signal.id.clone()),
+                    format!("signal '{}' phase {} lists no states", signal.id, index),
+                ));
+            }
+
+            let mut seen: HashSet<&str> = HashSet::new();
+            for state in &phase.states {
+                if !head_ids.contains(state.head.as_str()) {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::SignalUnknownHead,
+                        Some(signal.id.clone()),
+                        format!(
+                            "signal '{}' phase {} names undeclared head '{}'",
+                            signal.id, index, state.head
+                        ),
+                    ));
+                } else if !seen.insert(state.head.as_str()) {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::SignalPhaseDuplicateHead,
+                        Some(signal.id.clone()),
+                        format!(
+                            "signal '{}' phase {} lists head '{}' more than once",
+                            signal.id, index, state.head
+                        ),
+                    ));
+                }
+            }
+            for head in &signal.heads {
+                if !seen.contains(head.id.as_str()) {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::SignalPhaseMissingHead,
+                        Some(signal.id.clone()),
+                        format!(
+                            "signal '{}' phase {} omits head '{}'",
+                            signal.id, index, head.id
+                        ),
+                    ));
+                }
+            }
+
+            for conflict in &source.conflict_regions {
+                if conflict.movements.len() != 2 {
+                    continue;
+                }
+                let green = |movement: &str| {
+                    signal.heads.iter().any(|head| {
+                        head.movement == movement
+                            && phase.states.iter().any(|state| {
+                                state.head == head.id && state.color == SignalColor::Green
+                            })
+                    })
+                };
+                if green(&conflict.movements[0]) && green(&conflict.movements[1]) {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::SignalConflictingGreen,
+                        Some(signal.id.clone()),
+                        format!(
+                            "signal '{}' phase {} shows green to conflicting movements '{}' and '{}'",
+                            signal.id, index, conflict.movements[0], conflict.movements[1]
+                        ),
+                    ));
+                }
+            }
         }
     }
 }
@@ -404,5 +907,194 @@ mod tests {
                 .iter()
                 .any(|line| line.starts_with("[E_PORTAL_UNKNOWN_PATH] a:"))
         );
+    }
+
+    /// A complete car/pedestrian four-way layout: two crossing paths, two
+    /// movements, a conflict region, a crossing, signal rules, and a two-phase
+    /// fixed-time controller. It uses only general primitives, so it is the
+    /// fixture the gate means by "no intersection type".
+    const SIGNALIZED: &str = "
+        paths: [
+            { id: 'ew', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] },
+            { id: 'ns', points: [ { x: 0, y: -20 }, { x: 0, y: 20 } ] },
+        ],
+        portals: [
+            { id: 'west', path: 'ew', end: 'start', width_m: 3.5 },
+            { id: 'east', path: 'ew', end: 'end', width_m: 3.5 },
+            { id: 'south', path: 'ns', end: 'start', width_m: 3.5 },
+            { id: 'north', path: 'ns', end: 'end', width_m: 3.5 },
+        ],
+        boundaries: [ { id: 'world', points: [
+            { x: -30, y: -30 }, { x: 30, y: -30 }, { x: 30, y: 30 }, { x: -30, y: 30 }
+        ] } ],
+        regions: [ { id: 'crossing_area', points: [
+            { x: -3, y: -3 }, { x: 3, y: -3 }, { x: 3, y: 3 }, { x: -3, y: 3 }
+        ] } ],
+        movements: [
+            { id: 'ew_through', from: 'west', to: 'east', path: 'ew', priority: 0 },
+            { id: 'ns_through', from: 'south', to: 'north', path: 'ns', priority: 0 },
+        ],
+        crossings: [ { id: 'north_crossing', region: 'crossing_area',
+            movements: [ 'ew_through', 'ns_through' ] } ],
+        conflict_regions: [ { id: 'center', points: [
+            { x: -1, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 1 }, { x: -1, y: 1 }
+        ], movements: [ 'ew_through', 'ns_through' ] } ],
+        rules: [
+            { id: 'r_ew', movement: 'ew_through', kind: 'signal', signal: 'main' },
+            { id: 'r_ns', movement: 'ns_through', kind: 'signal', signal: 'main' },
+        ],
+        signals: [ { id: 'main',
+            heads: [ { id: 'ew', movement: 'ew_through' }, { id: 'ns', movement: 'ns_through' } ],
+            phases: [
+                { duration_s: 20.0, states: [ { head: 'ew', color: 'green' }, { head: 'ns', color: 'red' } ] },
+                { duration_s: 4.0, states: [ { head: 'ew', color: 'yellow' }, { head: 'ns', color: 'red' } ] },
+                { duration_s: 20.0, states: [ { head: 'ew', color: 'red' }, { head: 'ns', color: 'green' } ] },
+                { duration_s: 4.0, states: [ { head: 'ew', color: 'red' }, { head: 'ns', color: 'yellow' } ] },
+            ]
+        } ],
+    ";
+
+    #[test]
+    fn accepts_a_general_signalized_layout() {
+        let source = base(SIGNALIZED);
+        assert_eq!(validate(&source), Vec::new());
+    }
+
+    #[test]
+    fn flags_polygon_vertex_and_area_errors() {
+        let too_few = base(&format!(
+            "{OK_PATHS}, {OK_PORTALS}, boundaries: [ {{ id: 'b', points: [ {{ x: 0, y: 0 }}, {{ x: 1, y: 0 }} ] }} ]"
+        ));
+        assert!(codes(&too_few).contains(&"E_POLYGON_TOO_FEW_VERTICES"));
+
+        let degenerate = base(&format!(
+            "{OK_PATHS}, {OK_PORTALS}, regions: [ {{ id: 'r', points: [
+                {{ x: 0, y: 0 }}, {{ x: 1, y: 0 }}, {{ x: 2, y: 0 }}
+            ] }} ]"
+        ));
+        assert!(codes(&degenerate).contains(&"E_POLYGON_DEGENERATE"));
+    }
+
+    #[test]
+    fn flags_movement_reference_errors() {
+        let source = base(
+            "paths: [ { id: 'ew', points: [ { x: 0, y: 0 }, { x: 10, y: 0 } ] }, \
+             { id: 'ns', points: [ { x: 0, y: 0 }, { x: 0, y: 10 } ] } ], \
+             portals: [ { id: 'west', path: 'ew', end: 'start', width_m: 3.0 }, \
+             { id: 'north', path: 'ns', end: 'end', width_m: 3.0 } ], \
+             movements: [ { id: 'm', from: 'west', to: 'north', path: 'ew', priority: 0 } ]",
+        );
+        let found = codes(&source);
+        assert!(found.contains(&"E_MOVEMENT_PORTAL_PATH_MISMATCH"));
+
+        let unknown = base(
+            "paths: [], portals: [], \
+             movements: [ { id: 'm', from: 'nope', to: 'nada', path: 'gone', priority: 0 } ]",
+        );
+        let found = codes(&unknown);
+        assert!(found.contains(&"E_MOVEMENT_UNKNOWN_PORTAL"));
+        assert!(found.contains(&"E_MOVEMENT_UNKNOWN_PATH"));
+
+        let loop_back = base(
+            "paths: [ { id: 'ew', points: [ { x: 0, y: 0 }, { x: 10, y: 0 } ] } ], \
+             portals: [ { id: 'west', path: 'ew', end: 'start', width_m: 3.0 } ], \
+             movements: [ { id: 'm', from: 'west', to: 'west', path: 'ew', priority: 0 } ]",
+        );
+        assert!(codes(&loop_back).contains(&"E_MOVEMENT_SELF_LOOP"));
+    }
+
+    #[test]
+    fn flags_crossing_and_conflict_reference_errors() {
+        let crossing = base(&format!(
+            "{OK_PATHS}, {OK_PORTALS}, \
+             crossings: [ {{ id: 'c', region: 'missing', movements: [ 'ghost' ] }} ]"
+        ));
+        let found = codes(&crossing);
+        assert!(found.contains(&"E_CROSSING_UNKNOWN_REGION"));
+        assert!(found.contains(&"E_CROSSING_UNKNOWN_MOVEMENT"));
+
+        let empty = base(&format!(
+            "{OK_PATHS}, {OK_PORTALS}, crossings: [ {{ id: 'c', region: 'r', movements: [] }} ]"
+        ));
+        assert!(codes(&empty).contains(&"E_CROSSING_EMPTY"));
+
+        let conflict = base(&format!(
+            "{OK_PATHS}, {OK_PORTALS}, conflict_regions: [ {{ id: 'x', points: [
+                {{ x: 0, y: 0 }}, {{ x: 1, y: 0 }}, {{ x: 1, y: 1 }}
+            ], movements: [ 'a', 'a' ] }} ]"
+        ));
+        let found = codes(&conflict);
+        assert!(found.contains(&"E_CONFLICT_ARITY"));
+        assert!(found.contains(&"E_CONFLICT_UNKNOWN_MOVEMENT"));
+    }
+
+    #[test]
+    fn flags_conflicting_greens() {
+        let green_both = SIGNALIZED.replace(
+            "{ duration_s: 20.0, states: [ { head: 'ew', color: 'green' }, { head: 'ns', color: 'red' } ] }",
+            "{ duration_s: 20.0, states: [ { head: 'ew', color: 'green' }, { head: 'ns', color: 'green' } ] }",
+        );
+        let source = base(&green_both);
+        assert!(codes(&source).contains(&"E_SIGNAL_CONFLICTING_GREEN"));
+    }
+
+    #[test]
+    fn flags_signal_phase_head_errors() {
+        let missing = SIGNALIZED.replace(
+            "{ duration_s: 4.0, states: [ { head: 'ew', color: 'yellow' }, { head: 'ns', color: 'red' } ] }",
+            "{ duration_s: 4.0, states: [ { head: 'ew', color: 'yellow' } ] }",
+        );
+        assert!(codes(&base(&missing)).contains(&"E_SIGNAL_PHASE_MISSING_HEAD"));
+
+        let unknown = SIGNALIZED.replace("head: 'ns', color: 'red'", "head: 'ghost', color: 'red'");
+        assert!(codes(&base(&unknown)).contains(&"E_SIGNAL_UNKNOWN_HEAD"));
+
+        let duplicate = SIGNALIZED.replace(
+            "{ duration_s: 4.0, states: [ { head: 'ew', color: 'red' }, { head: 'ns', color: 'yellow' } ] }",
+            "{ duration_s: 4.0, states: [ { head: 'ew', color: 'red' }, { head: 'ew', color: 'yellow' } ] }",
+        );
+        assert!(codes(&base(&duplicate)).contains(&"E_SIGNAL_PHASE_DUPLICATE_HEAD"));
+    }
+
+    #[test]
+    fn flags_rule_signal_mismatch() {
+        let no_signal = SIGNALIZED.replace(
+            "{ id: 'r_ew', movement: 'ew_through', kind: 'signal', signal: 'main' }",
+            "{ id: 'r_ew', movement: 'ew_through', kind: 'signal' }",
+        );
+        assert!(codes(&base(&no_signal)).contains(&"E_RULE_SIGNAL_MISMATCH"));
+
+        let stray_signal = SIGNALIZED.replace(
+            "{ id: 'r_ns', movement: 'ns_through', kind: 'signal', signal: 'main' }",
+            "{ id: 'r_ns', movement: 'ns_through', kind: 'yield', signal: 'main' }",
+        );
+        assert!(codes(&base(&stray_signal)).contains(&"E_RULE_SIGNAL_MISMATCH"));
+
+        let unknown = SIGNALIZED.replace("signal: 'main' }", "signal: 'ghost' }");
+        assert!(codes(&base(&unknown)).contains(&"E_RULE_UNKNOWN_SIGNAL"));
+    }
+
+    #[test]
+    fn flags_overlapping_portals() {
+        let source = base(
+            "paths: [ { id: 'a', points: [ { x: 0, y: 0 }, { x: 10, y: 0 } ] }, \
+             { id: 'b', points: [ { x: 1, y: 0 }, { x: 20, y: 0 } ] } ], \
+             portals: [ { id: 'pa', path: 'a', end: 'start', width_m: 4.0 }, \
+             { id: 'pb', path: 'b', end: 'start', width_m: 4.0 } ]",
+        );
+        assert!(codes(&source).contains(&"E_PORTAL_OVERLAP"));
+    }
+
+    #[test]
+    fn reports_duplicate_ids_across_new_object_kinds() {
+        let source = base(
+            "paths: [ { id: 'shared', points: [ { x: 0, y: 0 }, { x: 10, y: 0 } ] } ], \
+             portals: [ { id: 'a', path: 'shared', end: 'start', width_m: 3.0 }, \
+             { id: 'b', path: 'shared', end: 'end', width_m: 3.0 } ], \
+             regions: [ { id: 'shared', points: [
+                { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }
+             ] } ]",
+        );
+        assert!(codes(&source).contains(&"E_ID_DUPLICATE"));
     }
 }

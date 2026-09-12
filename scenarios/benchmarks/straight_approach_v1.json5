@@ -1,0 +1,47 @@
+// Benchmark: a single straight approach with no interaction.
+//
+// One guide path, one movement, no crossing or control. It is the control case
+// for longitudinal behavior and the simplest layout the general primitives can
+// express. See PHASE_1_PLAN.md Increment 1.
+{
+  schema_version: 1,
+  id: 'straight_approach_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -60.0, y: -10.0 },
+        { x: 10.0, y: -10.0 },
+        { x: 10.0, y: 10.0 },
+        { x: -60.0, y: 10.0 },
+      ],
+    },
+  ],
+  paths: [
+    {
+      id: 'approach',
+      points: [
+        { x: -50.0, y: 0.0 },
+        { x: 0.0, y: 0.0 },
+      ],
+    },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'approach', end: 'start', width_m: 3.5 },
+    { id: 'east_exit', path: 'approach', end: 'end', width_m: 3.5 },
+  ],
+  movements: [
+    { id: 'through', from: 'west_entry', to: 'east_exit', path: 'approach', priority: 0 },
+  ],
+  rules: [
+    { id: 'free_through', movement: 'through', kind: 'free' },
+  ],
+  population: {
+    vehicle_count: 4,
+    vehicle_speed_mps: 12.0,
+    vehicle_spacing_m: 20.0,
+    vehicle_length_m: 4.5,
+    vehicle_width_m: 1.8,
+  },
+}
