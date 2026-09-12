@@ -1,43 +1,48 @@
-//! Deterministic shared spatial index over every live agent, plus the spatial
-//! predicates a candidate query feeds.
+//! Deterministic uniform-grid broad phase over every live agent, plus the
+//! spatial predicates a candidate query feeds.
 //!
 //! # Model card
 //!
-//! Phase 1 Increment 3 slice D needs one deterministic way to ask "which bodies
-//! are near this region?" that both modes share, so vehicle yielding to an
-//! occupied crossing is not a mode-specific shortcut. This module is that
-//! foundation: a uniform grid rebuilt each tick from the shared, stable-order
-//! [`AgentStore`], and a bounding-box candidate query over it.
-//!
 //! `PHASE_1_PLAN.md` Increment 4 ("Deterministic uniform-grid broad phase with
-//! stable candidate ordering") formalises this into the broad phase and adds
-//! exact box/box, circle/circle, and box/circle queries plus swept bounds. This
-//! module is deliberately only the foundation: a candidate query with a stable
-//! order, used by the crossing-occupancy test, not a speculative full broad
-//! phase.
+//! stable candidate ordering") needs one deterministic way to ask "which bodies
+//! are near this region?" that both modes share, so vehicle yielding to an
+//! occupied crossing is not a mode-specific shortcut. This module owns that
+//! broad phase: a uniform grid rebuilt each tick from the shared, stable-order
+//! [`AgentStore`], a bounding-box candidate query, and the candidate-pair
+//! enumeration the exact queries in [`crate::query`] consume.
+//!
+//! The vehicle and pedestrian body shapes, the exact box/box, circle/circle,
+//! and box/circle queries, and the signed-clearance tolerance live in
+//! [`crate::query`]; this module only bounds and orders candidates.
 //!
 //! ## Determinism
 //!
-//! The grid stores its cells in a `Vec` sorted by integer cell coordinate and
-//! binary-searches that array on a query. Nothing here iterates a hash map, so
-//! the candidate set and its order are a pure function of agent state. Agents
-//! are inserted in ascending [`AgentId`] order and a query sorts its result
-//! ascending, so equal cells and exactly equal positions are broken by
-//! [`AgentId`]. Every agent occupies exactly one cell, so a query never reports
-//! the same agent twice.
+//! [`BroadPhase`] stores its cells in a `Vec` sorted by integer cell coordinate
+//! and binary-searches that array on a query. Nothing here iterates a hash map,
+//! so the candidate set and its order are a pure function of the indexed
+//! bodies. Cells and their residents are sorted by [`AgentId`] at rebuild time,
+//! and every query sorts its result ascending, so equal cells and exactly equal
+//! positions are broken by [`AgentId`]. Every body occupies exactly one cell,
+//! so a query never reports the same agent twice and a candidate pair never
+//! repeats.
 //!
 //! ## Query shape
 //!
-//! [`SpatialIndex::candidates_in_aabb`] returns every live agent whose cell
-//! overlaps an axis-aligned box, in ascending [`AgentId`] order. It is a
-//! candidate query: a caller applies its own exact shape test, such as
-//! [`circle_overlaps_ring`], to each candidate. The query widens the box by a
-//! caller-chosen margin so a body whose centre is outside the box can still be
-//! returned when its extent reaches in.
+//! [`BroadPhase::candidates_in_aabb`] returns every indexed body whose centre
+//! cell overlaps an axis-aligned box, in ascending [`AgentId`] order.
+//! [`BroadPhase::candidates_overlapping`] widens that box by the largest
+//! circumradius among the indexed bodies, so a body whose centre is outside the
+//! box is still returned when its extent reaches in; that is the bound the
+//! broad phase guarantees. [`BroadPhase::candidate_pairs`] enumerates every
+//! unordered pair whose enclosing axis-aligned boxes overlap, in ascending
+//! `(AgentId, AgentId)` order. All three are candidate queries: a caller applies
+//! its own exact shape test, such as [`crate::query::bodies_intersect`] or
+//! [`circle_overlaps_ring`], to each result.
 
 use glam::DVec2;
 
 use crate::agent::{AgentId, AgentStore};
+use crate::query::{self, Aabb, BodyShape};
 
 /// Edge length in metres of one uniform-grid cell.
 ///
@@ -53,13 +58,191 @@ struct Cell {
     y: i32,
 }
 
-/// A deterministic uniform-grid candidate index over live agents of both modes.
+/// A deterministic uniform-grid broad phase over body shapes keyed by
+/// [`AgentId`].
+///
+/// Rebuild it once per tick from every live body; then any number of candidate
+/// queries that tick share one consistent view. The input slice may be in any
+/// order: rebuild sorts by [`AgentId`], so the result is a pure function of the
+/// indexed bodies and not of insertion order.
 #[derive(Debug, Clone)]
-pub(crate) struct SpatialIndex {
+pub struct BroadPhase {
     cell_size_m: f64,
-    /// Cells in ascending `Cell` order; each holds the agents whose centre
+    /// Circumradius in metres of the largest indexed body; the uniform bound a
+    /// query widens by.
+    max_half_extent_m: f64,
+    /// Enclosing box of every indexed body, in ascending [`AgentId`] order.
+    bodies: Vec<(AgentId, Aabb)>,
+    /// Cells in ascending `Cell` order; each holds the ids whose body centre
     /// falls in it, in ascending [`AgentId`] order.
     cells: Vec<(Cell, Vec<AgentId>)>,
+}
+
+impl Default for BroadPhase {
+    fn default() -> Self {
+        Self::new(GRID_CELL_SIZE_M)
+    }
+}
+
+impl BroadPhase {
+    /// A broad phase with the given cell edge length in metres.
+    ///
+    /// A non-finite or non-positive edge falls back to [`GRID_CELL_SIZE_M`], so
+    /// the broad phase is always well defined.
+    pub fn new(cell_size_m: f64) -> Self {
+        let cell_size_m = if cell_size_m.is_finite() && cell_size_m > 0.0 {
+            cell_size_m
+        } else {
+            GRID_CELL_SIZE_M
+        };
+        Self {
+            cell_size_m,
+            max_half_extent_m: 0.0,
+            bodies: Vec::new(),
+            cells: Vec::new(),
+        }
+    }
+
+    /// The cell edge length in metres.
+    pub fn cell_size_m(&self) -> f64 {
+        self.cell_size_m
+    }
+
+    /// The largest indexed body circumradius in metres, the query-widening
+    /// bound. Zero when no body is indexed.
+    pub fn max_half_extent_m(&self) -> f64 {
+        self.max_half_extent_m
+    }
+
+    /// Number of indexed bodies.
+    pub fn len(&self) -> usize {
+        self.bodies.len()
+    }
+
+    /// Whether no body is indexed.
+    pub fn is_empty(&self) -> bool {
+        self.bodies.is_empty()
+    }
+
+    /// Rebuild from a set of uniquely identified bodies, in any input order.
+    ///
+    /// A rebuild is a pure function of the bodies, so rebuilding at the start
+    /// of a tick gives every query that tick one consistent candidate view.
+    pub fn rebuild(&mut self, bodies: &[(AgentId, BodyShape)]) {
+        self.max_half_extent_m = bodies
+            .iter()
+            .map(|(_, body)| body.circumradius_m())
+            .fold(0.0, f64::max);
+
+        self.bodies.clear();
+        self.bodies
+            .extend(bodies.iter().map(|(id, body)| (*id, body.bounds())));
+        self.bodies.sort_by_key(|(id, _)| *id);
+        debug_assert!(
+            self.bodies.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "BroadPhase requires unique AgentIds"
+        );
+
+        let mut entries: Vec<(Cell, AgentId)> = bodies
+            .iter()
+            .map(|(id, body)| (self.cell_of(body.centre()), *id))
+            .collect();
+        // Sorting by cell then id puts equal cells in ascending id order
+        // regardless of input order, so a cell's residents are documented.
+        entries.sort_by_key(|(cell, id)| (*cell, *id));
+        self.cells.clear();
+        for (cell, id) in entries {
+            match self.cells.last_mut() {
+                Some((last, ids)) if *last == cell => ids.push(id),
+                _ => self.cells.push((cell, vec![id])),
+            }
+        }
+    }
+
+    /// The bodies whose centre cell overlaps the axis-aligned `bounds`, in
+    /// ascending [`AgentId`] order.
+    ///
+    /// The result replaces `out`; `out` is only cleared and re-filled, so a
+    /// caller can reuse one buffer across a tick. This is the tight candidate
+    /// query; a caller that does not already know the candidate extents should
+    /// use [`Self::candidates_overlapping`].
+    pub fn candidates_in_aabb(&self, bounds: Aabb, out: &mut Vec<AgentId>) {
+        out.clear();
+        let low = self.cell_of(bounds.min);
+        let high = self.cell_of(bounds.max);
+        for y in low.y..=high.y {
+            for x in low.x..=high.x {
+                let cell = Cell { x, y };
+                if let Ok(position) = self.cells.binary_search_by_key(&cell, |(cell, _)| *cell) {
+                    out.extend_from_slice(&self.cells[position].1);
+                }
+            }
+        }
+        // Cells are visited in row-major order, which is not the documented
+        // order across cells; the ids within a cell are already ascending.
+        out.sort_unstable();
+    }
+
+    /// The bodies that may overlap `bounds`, in ascending [`AgentId`] order.
+    ///
+    /// The query widens `bounds` by the largest indexed body circumradius, so
+    /// every body whose extent reaches into `bounds` is returned; a caller
+    /// applies the exact shape test to reject the rest.
+    pub fn candidates_overlapping(&self, bounds: Aabb, out: &mut Vec<AgentId>) {
+        self.candidates_in_aabb(bounds.expand(self.max_half_extent_m), out);
+    }
+
+    /// Every unordered candidate pair `(first, second)`, `first < second`,
+    /// whose enclosing boxes overlap, in ascending `(AgentId, AgentId)` order.
+    ///
+    /// The pair set is a superset of every truly overlapping pair; a caller
+    /// applies the exact shape test to each pair. Each unordered pair appears
+    /// once and no pair repeats.
+    pub fn candidate_pairs(&self, out: &mut Vec<(AgentId, AgentId)>) {
+        out.clear();
+        let mut candidates: Vec<AgentId> = Vec::new();
+        for (first, first_bounds) in &self.bodies {
+            self.candidates_overlapping(*first_bounds, &mut candidates);
+            for second in &candidates {
+                if second.index() <= first.index() {
+                    continue;
+                }
+                if let Some(second_bounds) = self.bounds_of(*second)
+                    && first_bounds.overlaps(&second_bounds)
+                {
+                    out.push((*first, *second));
+                }
+            }
+        }
+    }
+
+    /// The enclosing box of one indexed body.
+    fn bounds_of(&self, id: AgentId) -> Option<Aabb> {
+        self.bodies
+            .binary_search_by_key(&id, |(indexed, _)| *indexed)
+            .ok()
+            .map(|position| self.bodies[position].1)
+    }
+
+    /// The cell containing a world position.
+    fn cell_of(&self, position: DVec2) -> Cell {
+        Cell {
+            x: (position.x / self.cell_size_m).floor() as i32,
+            y: (position.y / self.cell_size_m).floor() as i32,
+        }
+    }
+}
+
+/// The kernel's AgentStore adapter over [`BroadPhase`].
+///
+/// It maps each live agent to its body shape and rebuilds the broad phase from
+/// the shared, stable-order store, so all candidate queries this tick see every
+/// live agent of both modes and no dead slot.
+#[derive(Debug, Clone)]
+pub(crate) struct SpatialIndex {
+    grid: BroadPhase,
+    /// Reused body buffer, so a rebuild does not allocate inside the tick loop.
+    bodies: Vec<(AgentId, BodyShape)>,
 }
 
 impl Default for SpatialIndex {
@@ -74,14 +257,9 @@ impl SpatialIndex {
     /// A non-finite or non-positive edge falls back to [`GRID_CELL_SIZE_M`], so
     /// the index is always well defined.
     pub(crate) fn new(cell_size_m: f64) -> Self {
-        let cell_size_m = if cell_size_m.is_finite() && cell_size_m > 0.0 {
-            cell_size_m
-        } else {
-            GRID_CELL_SIZE_M
-        };
         Self {
-            cell_size_m,
-            cells: Vec::new(),
+            grid: BroadPhase::new(cell_size_m),
+            bodies: Vec::new(),
         }
     }
 
@@ -91,57 +269,25 @@ impl SpatialIndex {
     /// A rebuild is a pure function of agent state, so rebuilding at the start
     /// of a tick gives every query that tick one consistent candidate view.
     pub(crate) fn rebuild(&mut self, agents: &AgentStore) {
-        let mut entries: Vec<(Cell, AgentId)> = Vec::with_capacity(agents.len());
+        self.bodies.clear();
         for index in 0..agents.len() {
             if !agents.alive[index] {
                 continue;
             }
-            entries.push((
-                self.cell_of(agents.position[index]),
-                AgentId::from_index(index),
-            ));
+            self.bodies
+                .push((AgentId::from_index(index), query::agent_body(agents, index)));
         }
-        // A stable sort by cell preserves the ascending id order within a cell,
-        // so a cell's residents are already in the documented order.
-        entries.sort_by_key(|(cell, _)| *cell);
-        self.cells.clear();
-        for (cell, id) in entries {
-            match self.cells.last_mut() {
-                Some((last, ids)) if *last == cell => ids.push(id),
-                _ => self.cells.push((cell, vec![id])),
-            }
-        }
+        self.grid.rebuild(&self.bodies);
     }
 
-    /// The agents whose cell overlaps the axis-aligned box `[min, max]`, in
-    /// ascending [`AgentId`] order.
+    /// The live agents whose centre cell overlaps the axis-aligned box
+    /// `[min, max]`, in ascending [`AgentId`] order.
     ///
     /// The result replaces `out`; `out` is only cleared and re-filled, so a
     /// caller can reuse one buffer across a tick. The query is a candidate
     /// query, so a caller applies an exact shape test to each returned agent.
     pub(crate) fn candidates_in_aabb(&self, min: DVec2, max: DVec2, out: &mut Vec<AgentId>) {
-        out.clear();
-        let low = self.cell_of(min);
-        let high = self.cell_of(max);
-        for y in low.y..=high.y {
-            for x in low.x..=high.x {
-                let cell = Cell { x, y };
-                if let Ok(position) = self.cells.binary_search_by_key(&cell, |(cell, _)| *cell) {
-                    out.extend_from_slice(&self.cells[position].1);
-                }
-            }
-        }
-        // Cells are visited in row-major order, which is not the documented
-        // order across cells; the ids within a cell are already ascending.
-        out.sort_unstable();
-    }
-
-    /// The cell containing a world position.
-    fn cell_of(&self, position: DVec2) -> Cell {
-        Cell {
-            x: (position.x / self.cell_size_m).floor() as i32,
-            y: (position.y / self.cell_size_m).floor() as i32,
-        }
+        self.grid.candidates_in_aabb(Aabb::new(min, max), out);
     }
 }
 
@@ -320,9 +466,103 @@ mod tests {
 
     #[test]
     fn the_cell_size_falls_back_when_invalid() {
-        let zero = SpatialIndex::new(0.0);
-        assert!(zero.cell_size_m > 0.0);
-        let nan = SpatialIndex::new(f64::NAN);
-        assert!(nan.cell_size_m > 0.0);
+        let zero = BroadPhase::new(0.0);
+        assert!(zero.cell_size_m() > 0.0);
+        let nan = BroadPhase::new(f64::NAN);
+        assert!(nan.cell_size_m() > 0.0);
+    }
+
+    fn body(x: f64, y: f64, radius_m: f64) -> BodyShape {
+        BodyShape::Circle {
+            centre: DVec2::new(x, y),
+            radius_m,
+        }
+    }
+
+    #[test]
+    fn candidate_pairs_are_ascending_unique_and_skip_far_bodies() {
+        // Bodies 0 and 1 overlap; body 2 is far from both.
+        let bodies = vec![
+            (AgentId::from_index(2), body(50.0, 0.0, 0.5)),
+            (AgentId::from_index(0), body(0.0, 0.0, 0.5)),
+            (AgentId::from_index(1), body(0.5, 0.0, 0.5)),
+        ];
+        let mut phase = BroadPhase::default();
+        phase.rebuild(&bodies);
+        assert_eq!(phase.len(), 3);
+        let mut pairs = Vec::new();
+        phase.candidate_pairs(&mut pairs);
+        assert_eq!(
+            pairs,
+            vec![(AgentId::from_index(0), AgentId::from_index(1))]
+        );
+    }
+
+    #[test]
+    fn rebuild_is_independent_of_input_order() {
+        let mut forward = BroadPhase::default();
+        forward.rebuild(&[
+            (AgentId::from_index(0), body(0.0, 0.0, 1.0)),
+            (AgentId::from_index(1), body(1.0, 0.0, 1.0)),
+            (AgentId::from_index(2), body(2.0, 0.0, 1.0)),
+        ]);
+        let mut shuffled = BroadPhase::default();
+        shuffled.rebuild(&[
+            (AgentId::from_index(2), body(2.0, 0.0, 1.0)),
+            (AgentId::from_index(0), body(0.0, 0.0, 1.0)),
+            (AgentId::from_index(1), body(1.0, 0.0, 1.0)),
+        ]);
+        let (mut first, mut second) = (Vec::new(), Vec::new());
+        forward.candidate_pairs(&mut first);
+        shuffled.candidate_pairs(&mut second);
+        assert_eq!(first, second);
+        assert_eq!(
+            first,
+            vec![
+                (AgentId::from_index(0), AgentId::from_index(1)),
+                (AgentId::from_index(0), AgentId::from_index(2)),
+                (AgentId::from_index(1), AgentId::from_index(2)),
+            ]
+        );
+    }
+
+    #[test]
+    fn candidates_overlapping_returns_a_body_whose_centre_is_outside() {
+        // The body is large enough that its extent reaches into the query box
+        // even though its centre sits in a cell the tight query does not visit.
+        let mut phase = BroadPhase::default();
+        phase.rebuild(&[(AgentId::from_index(0), body(5.0, 0.0, 5.0))]);
+        assert!((phase.max_half_extent_m() - 5.0).abs() < 1e-12);
+        let bounds = Aabb::new(DVec2::new(-1.0, -1.0), DVec2::new(0.0, 1.0));
+        let mut out = Vec::new();
+        phase.candidates_overlapping(bounds, &mut out);
+        assert_eq!(out, vec![AgentId::from_index(0)]);
+        // The tight query, by contrast, misses a body whose centre is outside.
+        phase.candidates_in_aabb(bounds, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn the_body_shape_matches_the_agent_mode() {
+        let agents = store(&[
+            (AgentMode::Pedestrian, DVec2::new(1.0, 2.0)),
+            (AgentMode::Vehicle, DVec2::new(3.0, 4.0)),
+        ]);
+        assert_eq!(
+            query::agent_body(&agents, 0),
+            BodyShape::Circle {
+                centre: DVec2::new(1.0, 2.0),
+                radius_m: 0.25,
+            }
+        );
+        assert_eq!(
+            query::agent_body(&agents, 1),
+            BodyShape::Box {
+                centre: DVec2::new(3.0, 4.0),
+                heading_rad: 0.0,
+                length_m: 0.5,
+                width_m: 0.5,
+            }
+        );
     }
 }
