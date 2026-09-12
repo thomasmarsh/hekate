@@ -196,11 +196,12 @@ pub(crate) fn decide(
 /// v_target = sqrt(2 * bounded_deceleration * compliance * max(gap - reserve, 0))
 /// ```
 ///
-/// The kernel feeds this to [`crate::pedestrian::advance_speed`], so the
-/// per-step speed change still obeys the controller's acceleration bounds: a
-/// compliant wait is a bounded slowdown, never a teleport or a special
-/// trajectory. A zero willingness returns zero, which holds the pedestrian at
-/// rest.
+/// The kernel feeds this to the pedestrian controller's speed bound
+/// ([`crate::controller::PedestrianController::advance_speed`], whose initial
+/// model is [`crate::pedestrian::advance_speed`]), so the per-step speed change
+/// still obeys the controller's acceleration bounds: a compliant wait is a
+/// bounded slowdown, never a teleport or a special trajectory. A zero
+/// willingness returns zero, which holds the pedestrian at rest.
 pub(crate) fn wait_speed_target_mps(
     crossing_gap_m: f64,
     compliance: f64,

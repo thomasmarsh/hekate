@@ -11,9 +11,9 @@
 //! bounded-steering approximation of that interaction, not a reimplementation
 //! of the model's exponential force law, and no parameter here is calibrated
 //! against empirical trajectories. The vehicle model card lives with the IDM
-//! controller in [`crate::control`]; Increment 3's explicit, replaceable
-//! controller interfaces and the vehicle/pedestrian model-card pair are
-//! delivered by the increment's later slice.
+//! controller in [`crate::control`], and the kernel reaches both models only
+//! through [`crate::controller`], so either is replaceable without editing any
+//! interaction logic.
 //!
 //! ## State
 //!
@@ -25,7 +25,55 @@
 //! route entering at the path start, `length - arc` for a route entering at the
 //! path end. The projection is clamped to the path extent, so progress lies in
 //! `[0, length]`; a pedestrian that walks past the exit reports exactly
-//! `length` and despawns with [`crate::DespawnReason::ExitedPath`].
+//! `length` and despawns with [`crate::DespawnReason::ExitedPath`]. The
+//! kernel additionally tracks the pedestrian's waypoint cursor; the controller
+//! sees only its current target waypoint.
+//!
+//! ## Parameters
+//!
+//! Parameters are sampled per pedestrian from the scenario's
+//! `pedestrian_profiles` envelope and travel with the agent
+//! ([`crate::PedestrianProfile`]):
+//!
+//! - `radius_m` is the body radius (a pedestrian body is a circle);
+//! - `desired_speed_mps` is the free-walking speed target `v0`;
+//! - `compliance` belongs to the crossing decision
+//!   ([`crate::PedestrianComplianceDecision`]), not to this steering model.
+//!
+//! The controller never substitutes its own values for a parameter.
+//!
+//! ## Constants
+//!
+//! Model properties, not sampled, each documented on its own definition:
+//! [`SENSE_RADIUS_M`] (4 m, the neighbour horizon), [`PERSONAL_SPACE_M`] (0.5 m
+//! comfort spacing), [`MAX_TURN_RATE_RAD_S`] (2 rad/s),
+//! [`MAX_LATERAL_ACCEL_MPS2`] (2 m/s²), [`MIN_SPEED_FOR_LATERAL_BOUND_MPS`]
+//! (0.5 m/s floor in that bound), [`MAX_ACCEL_MPS2`] (1.5 m/s²),
+//! [`MAX_DECEL_MPS2`] (2.0 m/s²), [`AVOID_RADIAL_GAIN`] (1.0),
+//! [`AVOID_LATERAL_GAIN`] (0.5), [`TURN_SLOWDOWN_GAIN`] (0.75),
+//! [`MIN_TURN_SPEED_FRACTION`] (0.25), and [`CONTACT_MARGIN_M`] (0.05 m).
+//!
+//! ## Decision inputs
+//!
+//! The kernel passes three inputs and nothing else:
+//!
+//! - the sampled profile above;
+//! - the pedestrian's own state (position, heading, speed) and its current
+//!   waypoint target, one element of the route's derived waypoint plan;
+//! - the nearby bodies the kernel reported, in ascending [`AgentId`] order,
+//!   each as the vector to its nearest surface point (an exact circle for a
+//!   pedestrian, an exact oriented box for a vehicle), the signed
+//!   surface-to-surface clearance, and the neighbour's speed.
+//!
+//! The neighbour list is the kernel's own scan: every live agent in ascending
+//! [`AgentId`] order within [`SENSE_RADIUS_M`], so the interaction terms are
+//! summed in a stable order and no hash map is iterated for state-affecting
+//! logic.
+//!
+//! The kernel owns waypoint planning, the sense-radius scan, conflict
+//! collection and ordering, integration, the despawn test, and the compliance
+//! decision. A compliant `Wait` decision only lowers the speed target the kernel
+//! feeds to [`advance_speed`]; it never bypasses the bounds below.
 //!
 //! ## Waypoints
 //!
@@ -80,6 +128,16 @@
 //!   (`turn_slowdown_gain`), down to `min_turn_speed_fraction * v0`, so a
 //!   pedestrian corners slower than it walks straight but never stalls.
 //!
+//! ## Tie-breaks
+//!
+//! The spacing cap is the minimum over candidate bodies, and an exact tie is
+//! won by the lowest agent id because the scan replaces the incumbent only for
+//! a strictly smaller cap. A body whose nearest surface point coincides exactly
+//! with the pedestrian (a perfect overlap, an unreachable state) has no radial
+//! direction: the lower id is pushed left and the higher id right, so the pair
+//! separates deterministically. Waypoint ordering has its own documented
+//! tie-break (progress, then kind, then dense zone id) in [Waypoints](#waypoints).
+//!
 //! ## Emergency backstop
 //!
 //! The bounds above describe the steering model. On top of them the kernel
@@ -116,17 +174,6 @@
 //! its centre: in this kernel a vehicle's heading follows its path and can snap
 //! at a polyline vertex. Exact swept queries that close that gap are the broad
 //! phase and collision-query work of a later increment.
-//!
-//! ## Neighbour selection and tie-breaks
-//!
-//! The kernel scans every live agent in ascending [`AgentId`] order, so the
-//! interaction terms are summed in a stable order and no hash map is iterated
-//! for state-affecting logic. The spacing cap is the minimum over candidate
-//! bodies, and an exact tie is won by the lowest agent id because the scan
-//! replaces the incumbent only for a strictly smaller cap. A body whose nearest
-//! surface point coincides exactly with the pedestrian (a perfect overlap, an
-//! unreachable state) has no radial direction: the lower id is pushed left and
-//! the higher id right, so the pair separates deterministically.
 //!
 //! ## Determinism
 //!

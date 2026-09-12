@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T18:10:21Z
+updated: 2026-09-12T18:31:38Z
 summary: Phase 1 Increment 3 adds pedestrian bodies, demand, and waypoint/collision-avoidance control, contextual crossing-against-signal noncompliance, vehicle yielding to occupied crossings, and explicit controller interfaces so cars and pedestrians share one world, rule and event representation, and mixed benchmark.
-next: Add explicit, replaceable controller interfaces and model cards for the initial vehicle and pedestrian models over a minimum-separated mixed benchmark.
+next: Independently verify every Done-when criterion of this increment from the final tree, read-only, against the slice A–E evidence recorded in `# Result`.
 ---
 
 # Outcome
@@ -569,3 +569,153 @@ foundation.
   following vehicle, so a closely following vehicle that enters while clear can
   still meet a pedestrian that arrives afterwards; minimum-separation work
   (Increment 4) owns that gap.
+
+## Slice E — replaceable controller interfaces, model cards, mixed benchmark
+
+The kernel now reaches both modes only through explicit, replaceable controller
+interfaces, both initial models carry a complete model card, and a new
+minimum-separated mixed benchmark is the Increment 3 gate fixture. No schema
+change was needed, and no random stream, golden, or baseline moved.
+
+### Controller seam
+
+`crates/tangle-sim/src/controller.rs` (new) is the seam. `Simulation` holds
+`ControllerModels { vehicle: Box<dyn VehicleController>, pedestrian: Box<dyn
+PedestrianController> }`, chosen in one place by `ControllerModels::initial()`:
+
+- `VehicleController::desired_acceleration(profile, speed_mps, constraints)`
+  answers the longitudinal question; `IdmController` is the initial model and
+  delegates to the documented IDM in `crate::control`.
+- `PedestrianController::steer(profile, state, conflicts, dt)` plus
+  `advance_speed(speed, target, cap, dt)` answer the pedestrian question;
+  `WaypointController` is the initial model and delegates to the documented
+  waypoint controller in `crate::pedestrian`.
+
+`sim.rs` calls `self.controllers.<mode>` and keeps every interaction decision:
+constraint selection, leader and neighbour scans, stop-line and crossing-yield
+state, crossing occupancy, waypoint planning, conflict collection, both safety
+caps, and both emergency counters. The traits require `Debug + Send + Sync`, so
+`Simulation` stays `Send + Sync` for the viewer's Bevy `Resource` and for
+parallel replication; the first gate run caught exactly that, because without
+the bound the viewer's `Resource` derive stopped compiling. The public surface
+is one small type, `ControllerModelNames { vehicle, pedestrian }`, reported by
+`Simulation::controller_models()` so a run can record which models produced its
+trace; `Simulation::set_controller_models` (test-only) lets a unit test install
+a replacement. The seam is crate-internal in Phase 1, mirroring the shared
+spatial index.
+
+### Model cards
+
+Both cards were consolidated to the same inventory in the same order:
+`## State`, `## Parameters` (sampled), `## Constants` (model properties),
+`## Decision inputs`, `## Bounds`, `## Tie-breaks`, `## Emergency backstop`,
+with the equations and steering sections between them.
+
+- Vehicle (`crate::control`; IDM, Treiber, Hennecke & Helbing 2000): state is
+  the speed along the path with the front-bumper progress and body length that
+  turn a centre distance into a bumper gap; parameters are the sampled
+  `VehicleProfile` (`v0`, `T`, `a_max`, `b`, body size, and `compliance`, which
+  belongs to the signal decision); constants are `IDM_FREE_FLOW_EXPONENT` = 4,
+  `IDM_STANDSTILL_GAP_M` = 2.0, and `GAP_FLOOR_M`; decision inputs are up to
+  three kernel-selected constraints (nearest same-direction leader, a required
+  stop line, an occupied crossing yielded to), each as gap/speed/standstill;
+  bounds are the `[-b, +a_max]` command clamp plus the kernel's `[0, v0]`
+  integration; tie-breaks are the lowest-agent-id leader rule and the
+  strictly-smaller-gap replacement; the emergency backstop is the three position
+  caps, counted in `emergency_cap_steps`.
+- Pedestrian (`crate::pedestrian`; pure-pursuit waypoint seeking, Coulter 1992,
+  with a bounded social-force-style repulsion, Helbing & Molnár 1995): state
+  is world position, canonical heading, speed, route progress, and the waypoint
+  cursor; parameters are the sampled radius, desired speed, and compliance;
+  constants are the twelve documented controller constants; decision inputs are
+  the current waypoint target and the kernel's ascending-id, within-sense-radius
+  neighbour list of surface vectors, signed clearances, and neighbour speeds;
+  bounds are the turn-rate/lateral bound, `[0, v0]` speed, the speed-change
+  bounds, and the turn slowdown; tie-breaks are the minimum-cap rule (lowest id
+  wins an exact tie), the deterministic left/right separation of a perfect
+  overlap, and the waypoint order (progress, kind, dense id); the emergency
+  backstop is the contact-margin spacing cap, counted in
+  `pedestrian_cap_steps`.
+
+### Mixed benchmark
+
+`scenarios/benchmarks/mixed_interaction_v1.json5` (new) authors one 100 m
+east-west road movement with a `yield` rule, two signal-controlled crosswalks
+60 m apart (18/22 s and 22/18 s pedestrian phases), a walking path with a
+pedestrian route in each direction at each crosswalk, waiting areas on both
+kerbs of each, 300 vph vehicle demand, and 150 pph on each of the four
+pedestrian routes, all from general primitives.
+
+`crates/tangle-sim/tests/mixed_interaction.rs` (new, 4 tests) measures that
+fixture directly over a declared sweep of 24 seeds x 4000 ticks (200 s):
+
+- Completion gate: 0 non-finite states, 0 overlaps of any body pair, 0
+  cross-mode overlaps, 0 vehicle-initiated overlaps, 0 shed arrivals, both modes
+  admitted and completing through one event stream, every pedestrian first seen
+  before tick 2200 despawned by the end (route completion, not merely presence),
+  and no pedestrian stall reaching 1800 ticks (the longest legitimate
+  don't-walk wait is 22 s = 440 ticks). Seed 3 in detail: 18 vehicles
+  spawned/18 despawned, 49 pedestrians spawned/39 despawned, 33 yield
+  transitions, 5490 yielding vehicle-ticks, longest pedestrian stall 210 ticks,
+  0 dropped.
+- Minimum separation, tracked by the test (online metrics are Increment 4): over
+  24 seeds the minimum surface separation is 0.2313 m cross-mode (tick 3261,
+  agents 43 and 46), 0.0500 m pedestrian-pedestrian (the controller's contact
+  margin), and 0.0000 m vehicle-vehicle (the anti-overlap cap holds a follower's
+  bumper at the leader's rear, so touching is the closest non-overlapping
+  state). Cross-mode and pedestrian-pedestrian separation are asserted strictly
+  positive, every pair non-negative. A wider 40-seed sweep measured the same
+  minima and was clean.
+- Shared seam: both modes appear in one snapshot on one clock, all four
+  spawn/despawn counts are non-zero through the one typed event stream, and all
+  5490 yielding vehicle-ticks and all 33 yield transitions coincide with a
+  pedestrian body inside the shared authored crossing region the vehicle yields
+  to; `Simulation::controller_models()` reports `idm`/`waypoint`.
+- Same-seed reproducibility of the mixed trace, and different seeds diverge.
+
+The fixture's demand was fixed by measurement: at 600 vph with 300 pph per route
+the same geometry shows the slice-D residual (a vehicle already committed inside
+a region meets a pedestrian arriving afterwards) in 2 of 12 seeds with a worst
+penetration of 0.22 m, while the checked-in 300 vph / 150 pph is clean over 40
+seeds. The residual itself is unchanged and belongs to Increment 4.
+
+### Evidence
+
+- `crates/tangle-sim/src/controller.rs` tests: the reported model identities,
+  and a swap test that installs a fixed-brake vehicle stub and a standstill
+  pedestrian stub and shows the kernel honours them (the first vehicle on the
+  free road comes to rest, every pedestrian holds its entry point at zero speed)
+  while the initial IDM/waypoint models on the same scenario do not.
+- `crates/tangle-sim/tests/model_cards.rs` (new, 4 tests): reads both cards and
+  the seam with `include_str!` and asserts the seven-section inventory in order,
+  the cited model families (Intelligent Driver Model/Treiber; Coulter and
+  Helbing), each card naming its replaceable interface and its emergency
+  counter, the seam naming both traits and both cards, and the checked-in mixed
+  fixture reporting both model names.
+- `apps/tangle-cli/tests/scenarios.rs` now covers `mixed_interaction_v1` in both
+  benchmark lists and makes the demand test mode-aware (a spawned agent is
+  checked against its own mode's route and profile), since a mixed benchmark
+  admits pedestrians into the same spawned stream.
+- The five gates pass on the final tree: `cargo test --workspace --all-features`
+  (340 tests), `cargo clippy --workspace --all-targets --all-features -- -D
+  warnings`, `cargo fmt --all --check`,
+  `./scripts/check-dependency-direction.sh`, and `braintree check nodes`.
+- No schema, golden, or baseline file changed: `EVENT_VERSION` stays 1,
+  `schemas/scenario-source.schema.json` is untouched, and the walking trace,
+  scene, and Phase 1 baseline goldens are byte-identical.
+
+### Deferred (slice E residuals for the verifier)
+
+- A vehicle already committed inside a crossing region does not reserve it
+  against a pedestrian arriving afterwards, and a pedestrian's avoidance is a
+  bounded closing-component cap rather than a swept query. A committed vehicle
+  can therefore still overlap a late pedestrian in principle; Increment 4's
+  swept candidate bounds and TTC lookahead own closing it, and the fixture's
+  overlap exposure at its declared demand is measured above.
+- Pedestrian density above the fixture's can also produce long pedestrian holds
+  at a waypoint parked by another body (slice B's residual): at 250 vph with 250
+  pph per route the same geometry showed holds beyond 2000 ticks. The fixture
+  asserts a stall threshold and is clean at its declared demand.
+- `Event::Spawned` still does not carry the agent mode, and the presentation
+  projection (`crates/tangle-present/src/scene.rs`) still draws every body as a
+  vehicle; both stay outside this slice's write set and are unchanged.

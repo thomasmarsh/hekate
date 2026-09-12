@@ -1,0 +1,221 @@
+// Benchmark: two crosswalks on one road movement, with pedestrians crossing
+// both ways at each.
+//
+// One east-west road, two north-south walking paths crossing it, a crossing
+// region and a fixed-time pedestrian signal at each walking path, waiting areas
+// on both kerbs of each path, a pedestrian route in each direction at each
+// path, and demand for every route plus the road movement. A `yield` rule on the
+// road movement makes vehicles yield to whichever crossing a pedestrian
+// occupies. The layout is expressed entirely from general primitives, so no
+// field names a scenario kind.
+//
+// This is Increment 3's mixed gate fixture: two crosswalks and four pedestrian
+// routes give cross-mode encounters at both crossings under nominal demand, so
+// a test can track the minimum separation between bodies of both modes, the
+// absence of unresolved overlaps, and route completion. Neither mode is
+// oversaturated at this demand: no arrival is shed and no vehicle queues past a
+// crossing, so a completed run is the nominal case rather than a degraded one.
+// The two crosswalks sit 60 m apart on a 100 m road, so a queue at one crossing
+// never reaches the other. See PHASE_1_PLAN.md Increment 3.
+{
+  schema_version: 1,
+  id: 'mixed_interaction_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -60.0, y: -60.0 },
+        { x: 60.0, y: -60.0 },
+        { x: 60.0, y: 60.0 },
+        { x: -60.0, y: 60.0 },
+      ],
+    },
+  ],
+  regions: [
+    {
+      id: 'west_crossing_zone',
+      points: [
+        { x: -32.0, y: -4.0 },
+        { x: -28.0, y: -4.0 },
+        { x: -28.0, y: 4.0 },
+        { x: -32.0, y: 4.0 },
+      ],
+    },
+    {
+      id: 'east_crossing_zone',
+      points: [
+        { x: 28.0, y: -4.0 },
+        { x: 32.0, y: -4.0 },
+        { x: 32.0, y: 4.0 },
+        { x: 28.0, y: 4.0 },
+      ],
+    },
+    {
+      id: 'west_south_kerb',
+      points: [
+        { x: -33.0, y: -10.0 },
+        { x: -27.0, y: -10.0 },
+        { x: -27.0, y: -6.0 },
+        { x: -33.0, y: -6.0 },
+      ],
+    },
+    {
+      id: 'west_north_kerb',
+      points: [
+        { x: -33.0, y: 6.0 },
+        { x: -27.0, y: 6.0 },
+        { x: -27.0, y: 10.0 },
+        { x: -33.0, y: 10.0 },
+      ],
+    },
+    {
+      id: 'east_south_kerb',
+      points: [
+        { x: 27.0, y: -10.0 },
+        { x: 33.0, y: -10.0 },
+        { x: 33.0, y: -6.0 },
+        { x: 27.0, y: -6.0 },
+      ],
+    },
+    {
+      id: 'east_north_kerb',
+      points: [
+        { x: 27.0, y: 6.0 },
+        { x: 33.0, y: 6.0 },
+        { x: 33.0, y: 10.0 },
+        { x: 27.0, y: 10.0 },
+      ],
+    },
+  ],
+  paths: [
+    { id: 'ew_road', points: [ { x: -50.0, y: 0.0 }, { x: 50.0, y: 0.0 } ] },
+    { id: 'west_walk', points: [ { x: -30.0, y: -24.0 }, { x: -30.0, y: 24.0 } ] },
+    { id: 'east_walk', points: [ { x: 30.0, y: -24.0 }, { x: 30.0, y: 24.0 } ] },
+  ],
+  portals: [
+    { id: 'west_road_entry', path: 'ew_road', end: 'start', width_m: 7.0 },
+    { id: 'east_road_exit', path: 'ew_road', end: 'end', width_m: 7.0 },
+    { id: 'west_walk_south', path: 'west_walk', end: 'start', width_m: 3.0 },
+    { id: 'west_walk_north', path: 'west_walk', end: 'end', width_m: 3.0 },
+    { id: 'east_walk_south', path: 'east_walk', end: 'start', width_m: 3.0 },
+    { id: 'east_walk_north', path: 'east_walk', end: 'end', width_m: 3.0 },
+  ],
+  movements: [
+    { id: 'ew_through', from: 'west_road_entry', to: 'east_road_exit', path: 'ew_road', priority: 0 },
+  ],
+  crossings: [
+    {
+      id: 'west_crossing',
+      region: 'west_crossing_zone',
+      movements: [ 'ew_through' ],
+      pedestrian_signal: {
+        phases: [
+          { duration_s: 18.0, walk: true },
+          { duration_s: 22.0, walk: false },
+        ],
+      },
+    },
+    {
+      id: 'east_crossing',
+      region: 'east_crossing_zone',
+      movements: [ 'ew_through' ],
+      pedestrian_signal: {
+        phases: [
+          { duration_s: 22.0, walk: true },
+          { duration_s: 18.0, walk: false },
+        ],
+      },
+    },
+  ],
+  rules: [
+    { id: 'yield_to_crossings', movement: 'ew_through', kind: 'yield' },
+  ],
+  waiting_areas: [
+    { id: 'west_south_wait', region: 'west_south_kerb' },
+    { id: 'west_north_wait', region: 'west_north_kerb' },
+    { id: 'east_south_wait', region: 'east_south_kerb' },
+    { id: 'east_north_wait', region: 'east_north_kerb' },
+  ],
+  pedestrian_routes: [
+    {
+      id: 'west_to_north',
+      from: 'west_walk_south',
+      to: 'west_walk_north',
+      path: 'west_walk',
+      crossings: [ 'west_crossing' ],
+      waiting_areas: [ 'west_south_wait', 'west_north_wait' ],
+    },
+    {
+      id: 'west_to_south',
+      from: 'west_walk_north',
+      to: 'west_walk_south',
+      path: 'west_walk',
+      crossings: [ 'west_crossing' ],
+      waiting_areas: [ 'west_north_wait', 'west_south_wait' ],
+    },
+    {
+      id: 'east_to_north',
+      from: 'east_walk_south',
+      to: 'east_walk_north',
+      path: 'east_walk',
+      crossings: [ 'east_crossing' ],
+      waiting_areas: [ 'east_south_wait', 'east_north_wait' ],
+    },
+    {
+      id: 'east_to_south',
+      from: 'east_walk_north',
+      to: 'east_walk_south',
+      path: 'east_walk',
+      crossings: [ 'east_crossing' ],
+      waiting_areas: [ 'east_north_wait', 'east_south_wait' ],
+    },
+  ],
+  demand: [
+    {
+      id: 'road_inflow',
+      portal: 'west_road_entry',
+      rate_vph: 300.0,
+      routes: [ { movement: 'ew_through', weight: 1.0 } ],
+    },
+  ],
+  pedestrian_demand: [
+    {
+      id: 'west_footfall_north',
+      portal: 'west_walk_south',
+      rate_pph: 150.0,
+      routes: [ { route: 'west_to_north', weight: 1.0 } ],
+    },
+    {
+      id: 'west_footfall_south',
+      portal: 'west_walk_north',
+      rate_pph: 150.0,
+      routes: [ { route: 'west_to_south', weight: 1.0 } ],
+    },
+    {
+      id: 'east_footfall_north',
+      portal: 'east_walk_south',
+      rate_pph: 150.0,
+      routes: [ { route: 'east_to_north', weight: 1.0 } ],
+    },
+    {
+      id: 'east_footfall_south',
+      portal: 'east_walk_north',
+      rate_pph: 150.0,
+      routes: [ { route: 'east_to_south', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 9.0, max: 15.0 },
+    length_m: { min: 4.0, max: 5.2 },
+    width_m: { min: 1.7, max: 2.0 },
+    time_gap_s: { min: 1.0, max: 2.0 },
+    max_accel_mps2: { min: 1.2, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+  },
+  pedestrian_profiles: {
+    radius_m: { min: 0.20, max: 0.30 },
+    speed_mps: { min: 1.0, max: 1.6 },
+    compliance: { min: 0.2, max: 1.0 },
+  },
+}

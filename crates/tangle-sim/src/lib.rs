@@ -37,6 +37,7 @@ mod agent;
 mod compliance;
 mod config;
 mod control;
+mod controller;
 mod demand;
 mod event;
 mod index;
@@ -53,6 +54,7 @@ mod units;
 pub use agent::{AgentId, AgentMode};
 pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
 pub use config::{DEFAULT_STEP, RunConfig};
+pub use controller::ControllerModelNames;
 pub use event::{DespawnReason, EVENT_VERSION, Event};
 pub use pedestrian::{PedestrianWaypoint, PedestrianZone};
 pub use pedestrian_compliance::{

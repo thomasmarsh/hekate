@@ -7,6 +7,62 @@
 //! claim. Source: Martin Treiber, Ansgar Hennecke, and Dirk Helbing, "Congested
 //! Traffic States in Empirical Observations and Microscopic Simulations" (2000),
 //! which introduces the IDM; see `VISION.md` and `PHASE_1_PLAN.md` Increment 2.
+//! The kernel reaches it only through
+//! [`crate::controller::VehicleController`], so the model is replaceable
+//! without editing any interaction logic.
+//!
+//! ## State
+//!
+//! The controller's state is one vehicle's longitudinal state as the kernel
+//! holds it: the current speed `v` in m/s along the guide path, the path
+//! progress that fixes its position and its front-bumper progress, and the body
+//! length that turns a centre-to-centre distance into a bumper-to-bumper gap.
+//! Heading and lateral position follow the path: this model steers nothing,
+//! and Phase 1 has no lane changing or lateral negotiation. Its full output is
+//! one commanded acceleration.
+//!
+//! ## Parameters
+//!
+//! Parameters are sampled per vehicle from the scenario's `profiles` envelope
+//! and travel with the agent ([`VehicleProfile`]):
+//!
+//! - `desired_speed_mps` is `v0`, the free-flow speed;
+//! - `time_gap_s` is `T`, the desired following time gap;
+//! - `max_accel_mps2` is `a_max`, the maximum acceleration;
+//! - `comfortable_brake_mps2` is `b`, the comfortable deceleration;
+//! - `length_m` and `width_m` size the body box;
+//! - `compliance` belongs to the signal-compliance decision
+//!   ([`crate::compliance`]), not to this longitudinal model.
+//!
+//! The controller never substitutes its own values for a parameter, so a
+//! sampled profile fully determines the command.
+//!
+//! ## Constants
+//!
+//! Model properties, not sampled: the free-flow acceleration exponent `delta`
+//! ([`IDM_FREE_FLOW_EXPONENT`]), the leader standstill gap
+//! [`IDM_STANDSTILL_GAP_M`] used when the kernel builds a leader constraint,
+//! and [`GAP_FLOOR_M`], the floor on the gap divisor that keeps a touching or
+//! overlapping constraint finite instead of dividing by zero.
+//!
+//! ## Decision inputs
+//!
+//! The kernel selects the constraints and passes at most three, each as a gap
+//! in metres, a constraint speed in m/s, and a standstill gap in metres:
+//!
+//! - the nearest leader: a live vehicle ahead on the same guide path travelling
+//!   the same direction, measured bumper to bumper, with the leader's own
+//!   standstill gap [`IDM_STANDSTILL_GAP_M`];
+//! - a required stop line: stationary (`v_i = 0`) with a zero standstill gap,
+//!   present only while the recorded signal-compliance decision is to stop;
+//! - an occupied crossing the vehicle is obliged to yield to: stationary with a
+//!   zero standstill gap, present only while a pedestrian body overlaps the
+//!   crossing region and the vehicle's front bumper is still upstream.
+//!
+//! An empty list is free-flow driving. The model sees only these constraints,
+//! the sampled profile, and the current speed; the kernel owns which of them
+//! exist, and the position caps in [Emergency backstops](#emergency-backstops)
+//! are applied outside the model.
 //!
 //! ## Equations
 //!
@@ -35,12 +91,6 @@
 //!   line);
 //! - `s0_i` is the constraint's standstill gap in metres.
 //!
-//! Parameters `v0`, `T`, `a_max`, and `b` come from the vehicle's sampled
-//! [`VehicleProfile`]; the controller never substitutes its own values for
-//! them. The exponent `delta` and the leader standstill gap [`IDM_STANDSTILL_GAP_M`]
-//! are model constants: they are properties of the model rather than of a
-//! sampled vehicle.
-//!
 //! ## Bounds
 //!
 //! The raw acceleration is clamped to `[-b, +a_max]`, so the commanded
@@ -48,14 +98,26 @@
 //! commanded braking never exceeds the profile's comfortable deceleration.
 //! The kernel additionally integrates speed within `[0, v0]`.
 //!
+//! ## Tie-breaks
+//!
+//! The kernel passes at most one leader constraint, so the model itself never
+//! chooses between candidates. The kernel chooses deterministically: it scans
+//! live agents in ascending [`crate::AgentId`] order and replaces the current
+//! leader only for a strictly smaller gap, so two candidates at exactly equal
+//! gaps resolve to the lowest agent id, and equal positions therefore resolve
+//! by stable spawn order. Same-direction status is required, so an
+//! opposite-direction body on the same path is not a constraint for this
+//! model; opposite-direction and crossing-path interaction is later work.
+//!
 //! ## Emergency backstops
 //!
-//! The profile bound above describes the IDM command only. The kernel adds two
-//! position caps outside that clamp: the next speed may not pass the nearest
-//! leader's rear in one step, and it may not pass a required stop line. When a
-//! cap binds, the one-step deceleration it implies can exceed `b`, because the
-//! cap answers a physical constraint (not crossing a bumper or a line) rather
-//! than a comfort target. Each such step is counted in
+//! The profile bound above describes the IDM command only. The kernel adds
+//! three position caps outside that clamp: the next speed may not pass the
+//! nearest leader's rear in one step, it may not pass a required stop line, and
+//! it may not pass a vehicle's yield stop point short of an occupied crossing.
+//! When a cap binds, the one-step deceleration it implies can exceed `b`,
+//! because the cap answers a physical constraint (not crossing a bumper or a
+//! line) rather than a comfort target. Each such step is counted in
 //! `Simulation::emergency_cap_steps`, so a caller can assert that the backstop
 //! stayed idle: the controlled car-following benchmark requires `0`, and a
 //! signalized queue forming from free flow can legitimately engage it.
@@ -84,15 +146,6 @@
 //! vehicle's braking distance. The crossing entry, its region, and the movement
 //! it crosses all come from the shared scenario representation, so the rule is
 //! scenario data rather than a controller branch.
-//!
-//! ## Leader selection
-//!
-//! The kernel passes at most one leader constraint: the nearest live vehicle
-//! ahead on the same guide path travelling the same direction, measured
-//! bumper to bumper. Ties resolve to the lowest agent id (stable spawn order):
-//! the kernel scans agents in ascending id order and replaces the current
-//! leader only for a strictly smaller gap. Opposite-direction and crossing-path
-//! interactions are later increments.
 
 use crate::profile::VehicleProfile;
 
@@ -122,9 +175,10 @@ pub(crate) struct Constraint {
 
 /// Commanded acceleration in m/s² for one vehicle under IDM.
 ///
-/// `constraints` are the active leader and stop-line constraints; an empty
-/// slice is free-flow driving. The result is clamped to
-/// `[-comfortable_brake, +max_accel]`.
+/// `constraints` are the active leader, stop-line, and occupied-crossing
+/// constraints; an empty slice is free-flow driving. The result is clamped to
+/// `[-comfortable_brake, +max_accel]`. The kernel applies the position caps
+/// outside this command; see the module model card.
 pub(crate) fn desired_acceleration(
     profile: &VehicleProfile,
     speed_mps: f64,

@@ -24,7 +24,11 @@
 //! vehicle obliged by an authored `yield` rule brakes for the crossing it
 //! crosses while a pedestrian body overlaps the crossing region, using the
 //! shared spatial index ([`crate::index`]) and the shared typed event system
-//! ([`Event::Yielded`]).
+//! ([`Event::Yielded`]). Increment 3 slice E routes both modes through the
+//! explicit, replaceable controller interfaces ([`crate::controller`]): the
+//! kernel keeps every interaction decision and calls the vehicle longitudinal
+//! model and the pedestrian model through their traits, so the IDM and
+//! waypoint models are replaceable without editing the interaction logic.
 
 use glam::DVec2;
 use tangle_model::{
@@ -36,7 +40,8 @@ use tangle_model::{
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore};
 use crate::compliance::{self, ComplianceDecision, SignalAction};
 use crate::config::RunConfig;
-use crate::control::{self, Constraint, IDM_STANDSTILL_GAP_M};
+use crate::control::{Constraint, IDM_STANDSTILL_GAP_M};
+use crate::controller::{ControllerModelNames, ControllerModels};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
 use crate::event::{DespawnReason, Event};
 use crate::index::{self, SpatialIndex};
@@ -193,6 +198,9 @@ pub struct Simulation {
     config: RunConfig,
     tick: u64,
     agents: AgentStore,
+    /// The replaceable motion models the kernel drives both modes through; see
+    /// [`crate::controller`].
+    controllers: ControllerModels,
     demand: Vec<DemandRuntime<MovementId>>,
     pedestrian_demand: Vec<DemandRuntime<PedestrianRouteId>>,
     signals: Vec<SignalRuntime>,
@@ -336,6 +344,7 @@ impl Simulation {
             config,
             tick: 0,
             agents,
+            controllers: ControllerModels::initial(),
             demand,
             pedestrian_demand,
             signals,
@@ -624,6 +633,26 @@ impl Simulation {
         self.config.seed()
     }
 
+    /// Names of the motion models this run drives.
+    ///
+    /// The kernel reaches the vehicle longitudinal model and the pedestrian
+    /// model through the interfaces in [`crate::controller`], so this reports
+    /// the model identities a trace was produced with.
+    pub fn controller_models(&self) -> ControllerModelNames {
+        self.controllers.names()
+    }
+
+    /// Install replacement motion models.
+    ///
+    /// The kernel calls both modes through [`crate::controller::ControllerModels`],
+    /// so a unit test can swap a model and show that the interaction logic is
+    /// untouched. Production code chooses its models in
+    /// [`crate::controller::ControllerModels::initial`].
+    #[cfg(test)]
+    pub(crate) fn set_controller_models(&mut self, models: ControllerModels) {
+        self.controllers = models;
+    }
+
     fn announce_initial_population(&mut self) {
         for index in 0..self.agents.len() {
             if !self.agents.alive[index] {
@@ -776,7 +805,10 @@ impl Simulation {
             speed_mps: self.agents.speed_mps[index],
             target: target.position(),
         };
-        let mut steering = pedestrian::steer(&profile, &state, &self.conflicts, dt);
+        let mut steering = self
+            .controllers
+            .pedestrian
+            .steer(&profile, &state, &self.conflicts, dt);
         if let Some(decision) = decision
             && decision.action == PedestrianSignalAction::Wait
         {
@@ -789,7 +821,7 @@ impl Simulation {
             );
             steering.speed_target_mps = steering.speed_target_mps.min(stop_target);
         }
-        let (speed_mps, capped) = pedestrian::advance_speed(
+        let (speed_mps, capped) = self.controllers.pedestrian.advance_speed(
             state.speed_mps,
             steering.speed_target_mps,
             steering.spacing_cap_mps,
@@ -975,7 +1007,11 @@ impl Simulation {
         }
 
         let speed_mps = self.agents.speed_mps[index];
-        let accel = control::desired_acceleration(profile, speed_mps, &constraints[..count]);
+        let accel = self.controllers.vehicle.desired_acceleration(
+            profile,
+            speed_mps,
+            &constraints[..count],
+        );
         let mut new_speed = (speed_mps + accel * dt).clamp(0.0, profile.desired_speed_mps);
 
         if let Some(leader) = leader {

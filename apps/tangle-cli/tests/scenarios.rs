@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use tangle_cli::load_scenario;
 use tangle_sim::{
-    AgentId, ComplianceReason, Event, RunConfig, SignalAction, Simulation, SnapshotDetail,
+    AgentId, AgentMode, ComplianceReason, Event, RunConfig, SignalAction, Simulation,
+    SnapshotDetail,
 };
 
 fn repo_path(relative: &str) -> PathBuf {
@@ -57,6 +58,8 @@ fn benchmark_layouts_compile_from_general_primitives() {
         "four_leg_signal_v1",
         "car_following_v1",
         "red_light_compliance_v1",
+        "pedestrian_crossing_v1",
+        "mixed_interaction_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
@@ -143,6 +146,8 @@ fn benchmark_demand_generates_routed_vehicles() {
         "four_leg_signal_v1",
         "car_following_v1",
         "red_light_compliance_v1",
+        "pedestrian_crossing_v1",
+        "mixed_interaction_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
@@ -162,15 +167,32 @@ fn benchmark_demand_generates_routed_vehicles() {
                 })
                 .collect();
             for agent in arrivals {
-                spawned += 1;
-                assert!(
-                    sim.agent_route(agent).is_some(),
-                    "benchmark '{name}' admitted a vehicle without a route"
-                );
-                assert!(
-                    sim.agent_profile(agent).is_some(),
-                    "benchmark '{name}' admitted a vehicle without a profile"
-                );
+                // A benchmark with pedestrian demand admits pedestrians into the
+                // same event stream, so a spawned agent is checked against the
+                // route and profile of its own mode.
+                match sim.agent_mode(agent).expect("a spawned agent has a mode") {
+                    AgentMode::Vehicle => {
+                        spawned += 1;
+                        assert!(
+                            sim.agent_route(agent).is_some(),
+                            "benchmark '{name}' admitted a vehicle without a route"
+                        );
+                        assert!(
+                            sim.agent_profile(agent).is_some(),
+                            "benchmark '{name}' admitted a vehicle without a profile"
+                        );
+                    }
+                    AgentMode::Pedestrian => {
+                        assert!(
+                            sim.agent_pedestrian_route(agent).is_some(),
+                            "benchmark '{name}' admitted a pedestrian without a route"
+                        );
+                        assert!(
+                            sim.agent_pedestrian_profile(agent).is_some(),
+                            "benchmark '{name}' admitted a pedestrian without a profile"
+                        );
+                    }
+                }
             }
         }
         assert!(
