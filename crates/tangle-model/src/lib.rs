@@ -16,7 +16,12 @@ mod schema;
 mod source;
 mod validate;
 
-pub use compiled::{CompiledPath, CompiledPortal, CompiledScenario, IdMap, PathId, PortalId};
+pub use compiled::{
+    BoundaryId, CompiledBoundary, CompiledConflictRegion, CompiledCrossing, CompiledMovement,
+    CompiledPath, CompiledPolygon, CompiledPortal, CompiledRegion, CompiledRule, CompiledScenario,
+    CompiledSignal, CompiledSignalHead, CompiledSignalPhase, ConflictRegionId, CrossingId, IdMap,
+    MovementId, PathId, PortalId, RegionId, RuleId, SignalId,
+};
 pub use schema::{scenario_schema, scenario_schema_json};
 pub use source::{
     ConflictRegionSource, CoordinateSystem, CrossingSource, MovementSource, ParseError, PathEnd,

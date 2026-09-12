@@ -6,9 +6,13 @@
 //! arrays instead. The string-to-integer mapping is preserved in
 //! [`IdMap`] so run provenance can name any identifier the kernel carries.
 
+use std::collections::HashMap;
+
 use glam::DVec2;
 
-use crate::source::{PathEnd, PopulationSource, ScenarioSource};
+use crate::source::{
+    PathEnd, PopulationSource, RuleKind, ScenarioSource, SignalColor, SignalSource,
+};
 use crate::validate::{Diagnostic, validate};
 
 /// Dense index of a compiled guide path.
@@ -53,11 +57,165 @@ impl PortalId {
     }
 }
 
+/// Dense index of a compiled boundary polygon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BoundaryId(u32);
+
+impl BoundaryId {
+    /// Construct a dense boundary identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this boundary.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled traversable region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RegionId(u32);
+
+impl RegionId {
+    /// Construct a dense region identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this region.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled movement connector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MovementId(u32);
+
+impl MovementId {
+    /// Construct a dense movement identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this movement.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled pedestrian crossing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CrossingId(u32);
+
+impl CrossingId {
+    /// Construct a dense crossing identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this crossing.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled conflict region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConflictRegionId(u32);
+
+impl ConflictRegionId {
+    /// Construct a dense conflict-region identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this conflict region.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled control rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RuleId(u32);
+
+impl RuleId {
+    /// Construct a dense rule identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this rule.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled fixed-time signal controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SignalId(u32);
+
+impl SignalId {
+    /// Construct a dense signal identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this signal.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Stable string identifiers in dense-index order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdMap {
     paths: Vec<String>,
     portals: Vec<String>,
+    boundaries: Vec<String>,
+    regions: Vec<String>,
+    movements: Vec<String>,
+    crossings: Vec<String>,
+    conflict_regions: Vec<String>,
+    rules: Vec<String>,
+    signals: Vec<String>,
 }
 
 impl IdMap {
@@ -71,15 +229,90 @@ impl IdMap {
         &self.portals
     }
 
+    /// Boundary identifiers indexed by [`BoundaryId`].
+    pub fn boundaries(&self) -> &[String] {
+        &self.boundaries
+    }
+
+    /// Region identifiers indexed by [`RegionId`].
+    pub fn regions(&self) -> &[String] {
+        &self.regions
+    }
+
+    /// Movement identifiers indexed by [`MovementId`].
+    pub fn movements(&self) -> &[String] {
+        &self.movements
+    }
+
+    /// Crossing identifiers indexed by [`CrossingId`].
+    pub fn crossings(&self) -> &[String] {
+        &self.crossings
+    }
+
+    /// Conflict-region identifiers indexed by [`ConflictRegionId`].
+    pub fn conflict_regions(&self) -> &[String] {
+        &self.conflict_regions
+    }
+
+    /// Rule identifiers indexed by [`RuleId`].
+    pub fn rules(&self) -> &[String] {
+        &self.rules
+    }
+
+    /// Signal identifiers indexed by [`SignalId`].
+    pub fn signals(&self) -> &[String] {
+        &self.signals
+    }
+
     /// Look up the authored name of a compiled path.
     pub fn path_name(&self, id: PathId) -> Option<&str> {
-        self.paths.get(id.index()).map(String::as_str)
+        lookup(&self.paths, id.index())
     }
 
     /// Look up the authored name of a compiled portal.
     pub fn portal_name(&self, id: PortalId) -> Option<&str> {
-        self.portals.get(id.index()).map(String::as_str)
+        lookup(&self.portals, id.index())
     }
+
+    /// Look up the authored name of a compiled boundary.
+    pub fn boundary_name(&self, id: BoundaryId) -> Option<&str> {
+        lookup(&self.boundaries, id.index())
+    }
+
+    /// Look up the authored name of a compiled region.
+    pub fn region_name(&self, id: RegionId) -> Option<&str> {
+        lookup(&self.regions, id.index())
+    }
+
+    /// Look up the authored name of a compiled movement.
+    pub fn movement_name(&self, id: MovementId) -> Option<&str> {
+        lookup(&self.movements, id.index())
+    }
+
+    /// Look up the authored name of a compiled crossing.
+    pub fn crossing_name(&self, id: CrossingId) -> Option<&str> {
+        lookup(&self.crossings, id.index())
+    }
+
+    /// Look up the authored name of a compiled conflict region.
+    pub fn conflict_region_name(&self, id: ConflictRegionId) -> Option<&str> {
+        lookup(&self.conflict_regions, id.index())
+    }
+
+    /// Look up the authored name of a compiled rule.
+    pub fn rule_name(&self, id: RuleId) -> Option<&str> {
+        lookup(&self.rules, id.index())
+    }
+
+    /// Look up the authored name of a compiled signal.
+    pub fn signal_name(&self, id: SignalId) -> Option<&str> {
+        lookup(&self.signals, id.index())
+    }
+}
+
+/// Look up one name by dense index.
+fn lookup(names: &[String], index: usize) -> Option<&str> {
+    names.get(index).map(String::as_str)
 }
 
 /// A validated guide path with cached arc-length parameterization.
@@ -200,6 +433,377 @@ impl CompiledPortal {
     }
 }
 
+/// A closed polygon ring with cached area and centroid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledPolygon {
+    ring: Vec<DVec2>,
+    signed_area: f64,
+    centroid: DVec2,
+}
+
+impl CompiledPolygon {
+    /// Derive a polygon from its ring vertices, which must not repeat the
+    /// first point at the end.
+    fn new(ring: Vec<DVec2>) -> Self {
+        let (signed_area, centroid) = ring_geometry(&ring);
+        Self {
+            ring,
+            signed_area,
+            centroid,
+        }
+    }
+
+    /// Ring vertices in order; the last vertex connects back to the first.
+    pub fn ring(&self) -> &[DVec2] {
+        &self.ring
+    }
+
+    /// Enclosed area in square metres, always non-negative.
+    pub fn area(&self) -> f64 {
+        self.signed_area.abs()
+    }
+
+    /// Signed area in square metres; positive for counter-clockwise winding.
+    pub fn signed_area(&self) -> f64 {
+        self.signed_area
+    }
+
+    /// Area centroid in metres.
+    pub fn centroid(&self) -> DVec2 {
+        self.centroid
+    }
+}
+
+/// Signed area and centroid of a polygon ring; the centroid falls back to the
+/// vertex average for a degenerate ring, which validation rejects upstream.
+fn ring_geometry(ring: &[DVec2]) -> (f64, DVec2) {
+    let count = ring.len();
+    let mut twice_area = 0.0;
+    let mut weighted = DVec2::ZERO;
+    for index in 0..count {
+        let current = ring[index];
+        let next = ring[(index + 1) % count];
+        let cross = current.x * next.y - next.x * current.y;
+        twice_area += cross;
+        weighted += (current + next) * cross;
+    }
+    let signed_area = twice_area * 0.5;
+    if signed_area.abs() <= f64::EPSILON {
+        let average = if count == 0 {
+            DVec2::ZERO
+        } else {
+            ring.iter().copied().sum::<DVec2>() / count as f64
+        };
+        return (0.0, average);
+    }
+    (signed_area, weighted / (3.0 * twice_area))
+}
+
+/// A compiled boundary polygon marking the non-traversable world limits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledBoundary {
+    id: BoundaryId,
+    name: String,
+    polygon: CompiledPolygon,
+}
+
+impl CompiledBoundary {
+    /// Dense identifier of this boundary.
+    pub fn id(&self) -> BoundaryId {
+        self.id
+    }
+
+    /// Authored name of this boundary.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Derived ring geometry of this boundary.
+    pub fn polygon(&self) -> &CompiledPolygon {
+        &self.polygon
+    }
+}
+
+/// A compiled traversable region other than a guide path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledRegion {
+    id: RegionId,
+    name: String,
+    polygon: CompiledPolygon,
+}
+
+impl CompiledRegion {
+    /// Dense identifier of this region.
+    pub fn id(&self) -> RegionId {
+        self.id
+    }
+
+    /// Authored name of this region.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Derived ring geometry of this region.
+    pub fn polygon(&self) -> &CompiledPolygon {
+        &self.polygon
+    }
+}
+
+/// A compiled movement connector from one portal to another along a path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledMovement {
+    id: MovementId,
+    name: String,
+    from: PortalId,
+    to: PortalId,
+    path: PathId,
+    priority: u32,
+    entry: DVec2,
+    entry_heading: f64,
+    exit: DVec2,
+    exit_heading: f64,
+}
+
+impl CompiledMovement {
+    /// Dense identifier of this movement.
+    pub fn id(&self) -> MovementId {
+        self.id
+    }
+
+    /// Authored name of this movement.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Portal where the movement begins.
+    pub fn from(&self) -> PortalId {
+        self.from
+    }
+
+    /// Portal where the movement ends.
+    pub fn to(&self) -> PortalId {
+        self.to
+    }
+
+    /// Guide path the movement follows.
+    pub fn path(&self) -> PathId {
+        self.path
+    }
+
+    /// Lower values are honored before higher ones.
+    pub fn priority(&self) -> u32 {
+        self.priority
+    }
+
+    /// World position of the entry endpoint in metres.
+    pub fn entry(&self) -> DVec2 {
+        self.entry
+    }
+
+    /// Inward heading at the entry endpoint in radians.
+    pub fn entry_heading(&self) -> f64 {
+        self.entry_heading
+    }
+
+    /// World position of the exit endpoint in metres.
+    pub fn exit(&self) -> DVec2 {
+        self.exit
+    }
+
+    /// Heading at the exit endpoint in radians.
+    pub fn exit_heading(&self) -> f64 {
+        self.exit_heading
+    }
+}
+
+/// A compiled pedestrian crossing over a traversable region and its movements.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledCrossing {
+    id: CrossingId,
+    name: String,
+    region: RegionId,
+    movements: Vec<MovementId>,
+}
+
+impl CompiledCrossing {
+    /// Dense identifier of this crossing.
+    pub fn id(&self) -> CrossingId {
+        self.id
+    }
+
+    /// Authored name of this crossing.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Region the crossing occupies.
+    pub fn region(&self) -> RegionId {
+        self.region
+    }
+
+    /// Movements the crossing crosses, in authored order.
+    pub fn movements(&self) -> &[MovementId] {
+        &self.movements
+    }
+}
+
+/// A compiled conflict region shared by exactly two movements.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledConflictRegion {
+    id: ConflictRegionId,
+    name: String,
+    polygon: CompiledPolygon,
+    movements: [MovementId; 2],
+}
+
+impl CompiledConflictRegion {
+    /// Dense identifier of this conflict region.
+    pub fn id(&self) -> ConflictRegionId {
+        self.id
+    }
+
+    /// Authored name of this conflict region.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Derived ring geometry of this conflict region.
+    pub fn polygon(&self) -> &CompiledPolygon {
+        &self.polygon
+    }
+
+    /// The two movements whose envelopes conflict here.
+    pub fn movements(&self) -> [MovementId; 2] {
+        self.movements
+    }
+}
+
+/// A compiled control rule attached to one movement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledRule {
+    id: RuleId,
+    name: String,
+    movement: MovementId,
+    kind: RuleKind,
+    signal: Option<SignalId>,
+}
+
+impl CompiledRule {
+    /// Dense identifier of this rule.
+    pub fn id(&self) -> RuleId {
+        self.id
+    }
+
+    /// Authored name of this rule.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Movement this rule governs.
+    pub fn movement(&self) -> MovementId {
+        self.movement
+    }
+
+    /// Kind of control the rule applies.
+    pub fn kind(&self) -> RuleKind {
+        self.kind
+    }
+
+    /// Signal controller, present exactly for a signal rule.
+    pub fn signal(&self) -> Option<SignalId> {
+        self.signal
+    }
+}
+
+/// A compiled signal head controlling one movement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledSignalHead {
+    name: String,
+    movement: MovementId,
+}
+
+impl CompiledSignalHead {
+    /// Authored head identifier, unique within its signal.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Movement this head controls.
+    pub fn movement(&self) -> MovementId {
+        self.movement
+    }
+}
+
+/// One compiled signal phase.
+///
+/// `colors` is parallel to the owning signal's head list, so a phase always
+/// carries exactly one color per head.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledSignalPhase {
+    duration_s: f64,
+    start_s: f64,
+    colors: Vec<SignalColor>,
+}
+
+impl CompiledSignalPhase {
+    /// Phase duration in seconds.
+    pub fn duration_s(&self) -> f64 {
+        self.duration_s
+    }
+
+    /// Offset of this phase from the start of the cycle in seconds.
+    pub fn start_s(&self) -> f64 {
+        self.start_s
+    }
+
+    /// Color shown on each head, parallel to the signal's head list.
+    pub fn colors(&self) -> &[SignalColor] {
+        &self.colors
+    }
+
+    /// Color shown on the head at `head_index`, if it exists.
+    pub fn color(&self, head_index: usize) -> Option<SignalColor> {
+        self.colors.get(head_index).copied()
+    }
+}
+
+/// A compiled fixed-time signal controller.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledSignal {
+    id: SignalId,
+    name: String,
+    heads: Vec<CompiledSignalHead>,
+    phases: Vec<CompiledSignalPhase>,
+    cycle_s: f64,
+}
+
+impl CompiledSignal {
+    /// Dense identifier of this signal.
+    pub fn id(&self) -> SignalId {
+        self.id
+    }
+
+    /// Authored name of this signal.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Heads controlled together, in authored order.
+    pub fn heads(&self) -> &[CompiledSignalHead] {
+        &self.heads
+    }
+
+    /// Phases in cycle order, in authored order.
+    pub fn phases(&self) -> &[CompiledSignalPhase] {
+        &self.phases
+    }
+
+    /// Total cycle length in seconds: the sum of every phase duration.
+    pub fn cycle_s(&self) -> f64 {
+        self.cycle_s
+    }
+}
+
 /// A validated, immutable scenario ready for the kernel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledScenario {
@@ -207,6 +811,13 @@ pub struct CompiledScenario {
     schema_version: u32,
     paths: Vec<CompiledPath>,
     portals: Vec<CompiledPortal>,
+    boundaries: Vec<CompiledBoundary>,
+    regions: Vec<CompiledRegion>,
+    movements: Vec<CompiledMovement>,
+    crossings: Vec<CompiledCrossing>,
+    conflict_regions: Vec<CompiledConflictRegion>,
+    rules: Vec<CompiledRule>,
+    signals: Vec<CompiledSignal>,
     population: PopulationSource,
     id_map: IdMap,
 }
@@ -222,35 +833,155 @@ impl CompiledScenario {
             return Err(diagnostics);
         }
 
-        let mut path_names = Vec::with_capacity(source.paths.len());
+        // Validation guarantees these lookups succeed, so a missing name is a
+        // programming error rather than a user diagnostic.
+        let path_index = index_by_id(source.paths.iter().map(|path| path.id.as_str()));
+        let portal_index = index_by_id(source.portals.iter().map(|portal| portal.id.as_str()));
+        let region_index = index_by_id(source.regions.iter().map(|region| region.id.as_str()));
+        let movement_index =
+            index_by_id(source.movements.iter().map(|movement| movement.id.as_str()));
+        let signal_index = index_by_id(source.signals.iter().map(|signal| signal.id.as_str()));
+
         let mut paths = Vec::with_capacity(source.paths.len());
         for (index, path) in source.paths.iter().enumerate() {
-            path_names.push(path.id.clone());
             paths.push(compile_path(PathId::from_index(index), path));
         }
 
-        let mut portal_names = Vec::with_capacity(source.portals.len());
         let mut portals = Vec::with_capacity(source.portals.len());
         for (index, portal) in source.portals.iter().enumerate() {
-            let path_index = paths
-                .iter()
-                .position(|path| path.name == portal.path)
-                .expect("validation guarantees the path exists");
-            let path = &paths[path_index];
-            portal_names.push(portal.id.clone());
+            let path_id = PathId::from_index(path_index[portal.path.as_str()]);
+            let path = &paths[path_id.index()];
             portals.push(compile_portal(PortalId::from_index(index), portal, path));
         }
+
+        let boundaries: Vec<CompiledBoundary> = source
+            .boundaries
+            .iter()
+            .enumerate()
+            .map(|(index, boundary)| CompiledBoundary {
+                id: BoundaryId::from_index(index),
+                name: boundary.id.clone(),
+                polygon: CompiledPolygon::new(points_of(&boundary.points)),
+            })
+            .collect();
+
+        let regions: Vec<CompiledRegion> = source
+            .regions
+            .iter()
+            .enumerate()
+            .map(|(index, region)| CompiledRegion {
+                id: RegionId::from_index(index),
+                name: region.id.clone(),
+                polygon: CompiledPolygon::new(points_of(&region.points)),
+            })
+            .collect();
+
+        let movements: Vec<CompiledMovement> = source
+            .movements
+            .iter()
+            .enumerate()
+            .map(|(index, movement)| {
+                let from = PortalId::from_index(portal_index[movement.from.as_str()]);
+                let to = PortalId::from_index(portal_index[movement.to.as_str()]);
+                let entry_portal = &portals[from.index()];
+                let exit_portal = &portals[to.index()];
+                CompiledMovement {
+                    id: MovementId::from_index(index),
+                    name: movement.id.clone(),
+                    from,
+                    to,
+                    path: PathId::from_index(path_index[movement.path.as_str()]),
+                    priority: movement.priority,
+                    entry: entry_portal.position(),
+                    entry_heading: entry_portal.heading(),
+                    exit: exit_portal.position(),
+                    exit_heading: exit_portal.heading(),
+                }
+            })
+            .collect();
+
+        let crossings: Vec<CompiledCrossing> = source
+            .crossings
+            .iter()
+            .enumerate()
+            .map(|(index, crossing)| CompiledCrossing {
+                id: CrossingId::from_index(index),
+                name: crossing.id.clone(),
+                region: RegionId::from_index(region_index[crossing.region.as_str()]),
+                movements: crossing
+                    .movements
+                    .iter()
+                    .map(|movement| MovementId::from_index(movement_index[movement.as_str()]))
+                    .collect(),
+            })
+            .collect();
+
+        let conflict_regions: Vec<CompiledConflictRegion> = source
+            .conflict_regions
+            .iter()
+            .enumerate()
+            .map(|(index, conflict)| CompiledConflictRegion {
+                id: ConflictRegionId::from_index(index),
+                name: conflict.id.clone(),
+                polygon: CompiledPolygon::new(points_of(&conflict.points)),
+                movements: [
+                    MovementId::from_index(movement_index[conflict.movements[0].as_str()]),
+                    MovementId::from_index(movement_index[conflict.movements[1].as_str()]),
+                ],
+            })
+            .collect();
+
+        let signals: Vec<CompiledSignal> = source
+            .signals
+            .iter()
+            .enumerate()
+            .map(|(index, signal)| {
+                compile_signal(SignalId::from_index(index), signal, &movement_index)
+            })
+            .collect();
+
+        let rules: Vec<CompiledRule> = source
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| CompiledRule {
+                id: RuleId::from_index(index),
+                name: rule.id.clone(),
+                movement: MovementId::from_index(movement_index[rule.movement.as_str()]),
+                kind: rule.kind,
+                signal: rule
+                    .signal
+                    .as_ref()
+                    .map(|signal| SignalId::from_index(signal_index[signal.as_str()])),
+            })
+            .collect();
+
+        let id_map = IdMap {
+            paths: names(source.paths.iter().map(|path| &path.id)),
+            portals: names(source.portals.iter().map(|portal| &portal.id)),
+            boundaries: names(source.boundaries.iter().map(|boundary| &boundary.id)),
+            regions: names(source.regions.iter().map(|region| &region.id)),
+            movements: names(source.movements.iter().map(|movement| &movement.id)),
+            crossings: names(source.crossings.iter().map(|crossing| &crossing.id)),
+            conflict_regions: names(source.conflict_regions.iter().map(|conflict| &conflict.id)),
+            rules: names(source.rules.iter().map(|rule| &rule.id)),
+            signals: names(source.signals.iter().map(|signal| &signal.id)),
+        };
 
         Ok(Self {
             id: source.id,
             schema_version: source.schema_version,
             paths,
             portals,
+            boundaries,
+            regions,
+            movements,
+            crossings,
+            conflict_regions,
+            rules,
+            signals,
             population: source.population,
-            id_map: IdMap {
-                paths: path_names,
-                portals: portal_names,
-            },
+            id_map,
         })
     }
 
@@ -274,6 +1005,41 @@ impl CompiledScenario {
         &self.portals
     }
 
+    /// Compiled boundary polygons in dense-index order.
+    pub fn boundaries(&self) -> &[CompiledBoundary] {
+        &self.boundaries
+    }
+
+    /// Compiled traversable regions in dense-index order.
+    pub fn regions(&self) -> &[CompiledRegion] {
+        &self.regions
+    }
+
+    /// Compiled movements in dense-index order.
+    pub fn movements(&self) -> &[CompiledMovement] {
+        &self.movements
+    }
+
+    /// Compiled crossings in dense-index order.
+    pub fn crossings(&self) -> &[CompiledCrossing] {
+        &self.crossings
+    }
+
+    /// Compiled conflict regions in dense-index order.
+    pub fn conflict_regions(&self) -> &[CompiledConflictRegion] {
+        &self.conflict_regions
+    }
+
+    /// Compiled control rules in dense-index order.
+    pub fn rules(&self) -> &[CompiledRule] {
+        &self.rules
+    }
+
+    /// Compiled fixed-time signals in dense-index order.
+    pub fn signals(&self) -> &[CompiledSignal] {
+        &self.signals
+    }
+
     /// Population tuning carried through compilation.
     pub fn population(&self) -> &PopulationSource {
         &self.population
@@ -292,6 +1058,100 @@ impl CompiledScenario {
     /// Look up a compiled portal by dense identifier.
     pub fn portal(&self, id: PortalId) -> Option<&CompiledPortal> {
         self.portals.get(id.index())
+    }
+
+    /// Look up a compiled boundary by dense identifier.
+    pub fn boundary(&self, id: BoundaryId) -> Option<&CompiledBoundary> {
+        self.boundaries.get(id.index())
+    }
+
+    /// Look up a compiled region by dense identifier.
+    pub fn region(&self, id: RegionId) -> Option<&CompiledRegion> {
+        self.regions.get(id.index())
+    }
+
+    /// Look up a compiled movement by dense identifier.
+    pub fn movement(&self, id: MovementId) -> Option<&CompiledMovement> {
+        self.movements.get(id.index())
+    }
+
+    /// Look up a compiled crossing by dense identifier.
+    pub fn crossing(&self, id: CrossingId) -> Option<&CompiledCrossing> {
+        self.crossings.get(id.index())
+    }
+
+    /// Look up a compiled conflict region by dense identifier.
+    pub fn conflict_region(&self, id: ConflictRegionId) -> Option<&CompiledConflictRegion> {
+        self.conflict_regions.get(id.index())
+    }
+
+    /// Look up a compiled rule by dense identifier.
+    pub fn rule(&self, id: RuleId) -> Option<&CompiledRule> {
+        self.rules.get(id.index())
+    }
+
+    /// Look up a compiled signal by dense identifier.
+    pub fn signal(&self, id: SignalId) -> Option<&CompiledSignal> {
+        self.signals.get(id.index())
+    }
+}
+
+/// Map each identifier to its dense array index.
+fn index_by_id<'a>(ids: impl Iterator<Item = &'a str>) -> HashMap<&'a str, usize> {
+    ids.enumerate().map(|(index, id)| (id, index)).collect()
+}
+
+/// Clone a sequence of authored identifiers.
+fn names<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
+    ids.map(String::clone).collect()
+}
+
+/// Convert authored points to world vectors.
+fn points_of(points: &[crate::source::PointSource]) -> Vec<DVec2> {
+    points
+        .iter()
+        .map(|point| DVec2::new(point.x, point.y))
+        .collect()
+}
+
+/// Compile one fixed-time signal into dense heads and phases.
+fn compile_signal(
+    id: SignalId,
+    signal: &SignalSource,
+    movement_index: &HashMap<&str, usize>,
+) -> CompiledSignal {
+    let heads: Vec<CompiledSignalHead> = signal
+        .heads
+        .iter()
+        .map(|head| CompiledSignalHead {
+            name: head.id.clone(),
+            movement: MovementId::from_index(movement_index[head.movement.as_str()]),
+        })
+        .collect();
+    let head_index = index_by_id(signal.heads.iter().map(|head| head.id.as_str()));
+
+    let mut start_s = 0.0;
+    let mut phases = Vec::with_capacity(signal.phases.len());
+    for phase in &signal.phases {
+        // Validation guarantees every head appears exactly once per phase.
+        let mut colors = vec![SignalColor::Red; heads.len()];
+        for state in &phase.states {
+            colors[head_index[state.head.as_str()]] = state.color;
+        }
+        phases.push(CompiledSignalPhase {
+            duration_s: phase.duration_s,
+            start_s,
+            colors,
+        });
+        start_s += phase.duration_s;
+    }
+
+    CompiledSignal {
+        id,
+        name: signal.id.clone(),
+        heads,
+        phases,
+        cycle_s: start_s,
     }
 }
 
@@ -422,5 +1282,168 @@ mod tests {
         .expect("parses");
         let diagnostics = CompiledScenario::compile(source).expect_err("must reject");
         assert!(!diagnostics.is_empty());
+    }
+
+    /// A general four-way layout exercising every Increment 1 primitive.
+    const SIGNALIZED: &str = "
+    {
+      schema_version: 1,
+      id: 'four_leg',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [
+        { id: 'ew', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] },
+        { id: 'ns', points: [ { x: 0, y: -20 }, { x: 0, y: 20 } ] },
+      ],
+      portals: [
+        { id: 'west', path: 'ew', end: 'start', width_m: 3.5 },
+        { id: 'east', path: 'ew', end: 'end', width_m: 3.5 },
+        { id: 'south', path: 'ns', end: 'start', width_m: 3.5 },
+        { id: 'north', path: 'ns', end: 'end', width_m: 3.5 },
+      ],
+      boundaries: [ { id: 'world', points: [
+        { x: -30, y: -30 }, { x: 30, y: -30 }, { x: 30, y: 30 }, { x: -30, y: 30 }
+      ] } ],
+      regions: [ { id: 'crossing_area', points: [
+        { x: -3, y: -3 }, { x: 3, y: -3 }, { x: 3, y: 3 }, { x: -3, y: 3 }
+      ] } ],
+      movements: [
+        { id: 'ew_through', from: 'west', to: 'east', path: 'ew', priority: 0 },
+        { id: 'ns_through', from: 'south', to: 'north', path: 'ns', priority: 1 },
+      ],
+      crossings: [ { id: 'north_crossing', region: 'crossing_area',
+        movements: [ 'ew_through', 'ns_through' ] } ],
+      conflict_regions: [ { id: 'center', points: [
+        { x: -1, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 1 }, { x: -1, y: 1 }
+      ], movements: [ 'ew_through', 'ns_through' ] } ],
+      rules: [
+        { id: 'r_ew', movement: 'ew_through', kind: 'signal', signal: 'main' },
+        { id: 'r_ns', movement: 'ns_through', kind: 'signal', signal: 'main' },
+      ],
+      signals: [ { id: 'main',
+        heads: [ { id: 'ew', movement: 'ew_through' }, { id: 'ns', movement: 'ns_through' } ],
+        phases: [
+          { duration_s: 20.0, states: [ { head: 'ew', color: 'green' }, { head: 'ns', color: 'red' } ] },
+          { duration_s: 4.0, states: [ { head: 'ew', color: 'yellow' }, { head: 'ns', color: 'red' } ] },
+          { duration_s: 20.0, states: [ { head: 'ew', color: 'red' }, { head: 'ns', color: 'green' } ] },
+          { duration_s: 4.0, states: [ { head: 'ew', color: 'red' }, { head: 'ns', color: 'yellow' } ] },
+        ]
+      } ],
+    }
+    ";
+
+    fn signalized() -> CompiledScenario {
+        let source = parse_scenario_source(SIGNALIZED).expect("parses");
+        CompiledScenario::compile(source).expect("compiles")
+    }
+
+    #[test]
+    fn compiles_polygons_with_area_and_centroid() {
+        let scenario = signalized();
+        assert_eq!(scenario.boundaries().len(), 1);
+        let boundary = scenario
+            .boundary(BoundaryId::from_index(0))
+            .expect("boundary exists");
+        assert_eq!(boundary.name(), "world");
+        assert!((boundary.polygon().area() - 3600.0).abs() < 1e-9);
+        assert!(boundary.polygon().centroid().length() < 1e-9);
+
+        assert_eq!(scenario.regions().len(), 1);
+        let region = scenario
+            .region(RegionId::from_index(0))
+            .expect("region exists");
+        assert!((region.polygon().area() - 36.0).abs() < 1e-9);
+        assert!(region.polygon().centroid().length() < 1e-9);
+    }
+
+    #[test]
+    fn compiles_movement_endpoints_and_priority() {
+        let scenario = signalized();
+        let movement = scenario
+            .movement(MovementId::from_index(0))
+            .expect("movement exists");
+        assert_eq!(movement.from(), PortalId::from_index(0));
+        assert_eq!(movement.to(), PortalId::from_index(1));
+        assert_eq!(movement.path(), PathId::from_index(0));
+        assert_eq!(movement.priority(), 0);
+        assert!((movement.entry() - DVec2::new(-20.0, 0.0)).length() < 1e-9);
+        assert!((movement.exit() - DVec2::new(20.0, 0.0)).length() < 1e-9);
+        assert!(movement.entry_heading().abs() < 1e-9);
+
+        let crossing_movement = scenario
+            .movement(MovementId::from_index(1))
+            .expect("movement exists");
+        assert_eq!(crossing_movement.priority(), 1);
+        assert!((crossing_movement.entry_heading() - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compiles_crossings_and_conflict_regions() {
+        let scenario = signalized();
+        let crossing = scenario
+            .crossing(CrossingId::from_index(0))
+            .expect("crossing exists");
+        assert_eq!(crossing.region(), RegionId::from_index(0));
+        assert_eq!(
+            crossing.movements(),
+            [MovementId::from_index(0), MovementId::from_index(1)]
+        );
+
+        let conflict = scenario
+            .conflict_region(ConflictRegionId::from_index(0))
+            .expect("conflict region exists");
+        assert_eq!(
+            conflict.movements(),
+            [MovementId::from_index(0), MovementId::from_index(1)]
+        );
+        assert!((conflict.polygon().area() - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compiles_signals_with_cycle_length_and_phase_colors() {
+        let scenario = signalized();
+        let signal = scenario
+            .signal(SignalId::from_index(0))
+            .expect("signal exists");
+        assert_eq!(signal.heads().len(), 2);
+        assert_eq!(signal.phases().len(), 4);
+        assert!((signal.cycle_s() - 48.0).abs() < 1e-9);
+        assert!((signal.phases()[2].start_s() - 24.0).abs() < 1e-9);
+        assert_eq!(signal.phases()[0].color(0), Some(SignalColor::Green));
+        assert_eq!(signal.phases()[0].color(1), Some(SignalColor::Red));
+        assert_eq!(signal.heads()[0].movement(), MovementId::from_index(0));
+        assert_eq!(signal.heads()[1].name(), "ns");
+    }
+
+    #[test]
+    fn compiles_rules_and_the_id_map() {
+        let scenario = signalized();
+        let rule = scenario.rule(RuleId::from_index(0)).expect("rule exists");
+        assert_eq!(rule.movement(), MovementId::from_index(0));
+        assert_eq!(rule.kind(), RuleKind::Signal);
+        assert_eq!(rule.signal(), Some(SignalId::from_index(0)));
+
+        let id_map = scenario.id_map();
+        assert_eq!(
+            id_map.movement_name(MovementId::from_index(1)),
+            Some("ns_through")
+        );
+        assert_eq!(id_map.signal_name(SignalId::from_index(0)), Some("main"));
+        assert_eq!(
+            id_map.region_name(RegionId::from_index(0)),
+            Some("crossing_area")
+        );
+        assert_eq!(
+            id_map.conflict_region_name(ConflictRegionId::from_index(0)),
+            Some("center")
+        );
+        assert_eq!(id_map.rule_name(RuleId::from_index(0)), Some("r_ew"));
+        assert_eq!(
+            id_map.boundary_name(BoundaryId::from_index(0)),
+            Some("world")
+        );
+        assert_eq!(
+            id_map.crossing_name(CrossingId::from_index(0)),
+            Some("north_crossing")
+        );
     }
 }
