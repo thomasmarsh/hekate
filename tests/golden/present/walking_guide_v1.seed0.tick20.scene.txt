@@ -91,7 +91,7 @@ SceneFrame {
             heading_rad: 0.0,
             length_m: 4.5,
             width_m: 1.8,
-            kind: Vehicle,
+            mode: Vehicle,
             speed_mps: Some(
                 12.0,
             ),
@@ -116,7 +116,7 @@ SceneFrame {
             heading_rad: 0.0,
             length_m: 4.5,
             width_m: 1.8,
-            kind: Vehicle,
+            mode: Vehicle,
             speed_mps: Some(
                 12.0,
             ),
@@ -141,7 +141,7 @@ SceneFrame {
             heading_rad: 0.0,
             length_m: 4.5,
             width_m: 1.8,
-            kind: Vehicle,
+            mode: Vehicle,
             speed_mps: Some(
                 12.0,
             ),
@@ -166,7 +166,7 @@ SceneFrame {
             heading_rad: 0.0,
             length_m: 4.5,
             width_m: 1.8,
-            kind: Vehicle,
+            mode: Vehicle,
             speed_mps: Some(
                 12.0,
             ),
@@ -191,7 +191,7 @@ SceneFrame {
             heading_rad: 0.0,
             length_m: 4.5,
             width_m: 1.8,
-            kind: Vehicle,
+            mode: Vehicle,
             speed_mps: Some(
                 12.0,
             ),
@@ -216,7 +216,7 @@ SceneFrame {
             heading_rad: 0.0,
             length_m: 4.5,
             width_m: 1.8,
-            kind: Vehicle,
+            mode: Vehicle,
             speed_mps: Some(
                 12.0,
             ),
@@ -236,5 +236,13 @@ SceneFrame {
     overlays: Overlays {
         geometry: true,
         vectors: false,
+        safety: true,
+    },
+    safety: SafetyOverlay {
+        events: [],
+        marker_lifetime_ticks: 40,
+        occupied: [],
+        queued: [],
+        controlling: [],
     },
 }

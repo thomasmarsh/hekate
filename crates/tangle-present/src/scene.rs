@@ -12,9 +12,10 @@ use tangle_model::{
     BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, MovementId, PathId, PortalId,
     RegionId, RuleId, RuleKind, SignalId,
 };
-use tangle_sim::{AgentSample, ComplianceDecision, VehicleProfile};
+use tangle_sim::{AgentMode, AgentSample, ComplianceDecision, RegionKey, VehicleProfile};
 
 use crate::clock::Speed;
+use crate::safety::SafetyOverlay;
 
 /// Default rendered body length when a snapshot carries no motion detail.
 pub const DEFAULT_BODY_LENGTH_M: f64 = 4.5;
@@ -579,16 +580,49 @@ impl SceneGeometry {
     pub const fn bounds(&self) -> Option<(DVec2, DVec2)> {
         self.bounds
     }
-}
 
-/// What kind of body a backend is drawing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BodyKind {
-    /// A motor vehicle.
-    #[default]
-    Vehicle,
-    /// A pedestrian.
-    Pedestrian,
+    /// Ring vertices of the region `region` names, or `None` when the scenario
+    /// has no such region.
+    ///
+    /// The two region id spaces are separate, so a crossing key and a conflict
+    /// region key with the same dense index name different regions. A consumer
+    /// uses this to draw an occupancy overlay over the same ring the safety
+    /// layer crossed.
+    pub fn region_points(&self, region: RegionKey) -> Option<&[DVec2]> {
+        match region {
+            RegionKey::Crossing(crossing) => self
+                .crossings
+                .iter()
+                .find(|candidate| candidate.id == crossing)
+                .map(|scene| scene.points.as_slice()),
+            RegionKey::ConflictRegion(id) => self
+                .conflict_regions
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .map(|scene| scene.points.as_slice()),
+        }
+    }
+
+    /// Centre of the region `region` names: the mean of its ring vertices, or
+    /// `None` when the scenario has no such region or the ring is empty.
+    ///
+    /// The vertex mean is the anchor a marker for a region record sits at. It
+    /// is the area centroid for a convex ring and stays inside the ring for
+    /// every authored polygon, which is what a marker needs.
+    pub fn region_center(&self, region: RegionKey) -> Option<DVec2> {
+        let points = self.region_points(region)?;
+        if points.is_empty() {
+            return None;
+        }
+        let count = points.len() as f64;
+        Some(
+            points
+                .iter()
+                .copied()
+                .fold(DVec2::ZERO, |sum, point| sum + point)
+                / count,
+        )
+    }
 }
 
 /// One agent projected into the scene, with interpolation already applied.
@@ -604,8 +638,11 @@ pub struct SceneBody {
     pub length_m: f64,
     /// Rendered body width in metres.
     pub width_m: f64,
-    /// Body kind, for backend styling.
-    pub kind: BodyKind,
+    /// Which mode the body belongs to, so a backend styles a vehicle and a
+    /// pedestrian distinctly. A snapshot taken at `SnapshotDetail::Position`
+    /// carries no mode, and such a body reads as a vehicle, the same fallback
+    /// its body dimensions use.
+    pub mode: AgentMode,
     /// Longitudinal speed in metres per second, when known.
     pub speed_mps: Option<f64>,
     /// The guide path the body follows, when known.
@@ -639,7 +676,9 @@ impl SceneBody {
             heading_rad,
             length_m,
             width_m,
-            kind: BodyKind::Vehicle,
+            mode: sample
+                .motion
+                .map_or(AgentMode::Vehicle, |motion| motion.mode),
             speed_mps: sample.motion.map(|motion| motion.speed_mps),
             path: sample.motion.map(|motion| motion.path),
             path_distance_m: sample.motion.map(|motion| motion.path_distance_m),
@@ -738,6 +777,8 @@ pub enum Overlay {
     Geometry,
     /// Per-agent velocity vectors.
     Vectors,
+    /// Safety markers, body emphasis, and region occupancy.
+    Safety,
 }
 
 /// Which optional debug overlays are enabled.
@@ -747,6 +788,9 @@ pub struct Overlays {
     pub geometry: bool,
     /// Draw per-agent velocity vectors.
     pub vectors: bool,
+    /// Draw the frame's safety overlays: event markers, emphasized bodies, and
+    /// occupied regions.
+    pub safety: bool,
 }
 
 impl Default for Overlays {
@@ -754,6 +798,9 @@ impl Default for Overlays {
         Self {
             geometry: true,
             vectors: false,
+            // Safety markers last a couple of simulated seconds, so a run has
+            // them on by default: seeing a conflict is the point of watching.
+            safety: true,
         }
     }
 }
@@ -764,6 +811,7 @@ impl Overlays {
         match overlay {
             Overlay::Geometry => self.geometry = !self.geometry,
             Overlay::Vectors => self.vectors = !self.vectors,
+            Overlay::Safety => self.safety = !self.safety,
         }
     }
 }
@@ -800,6 +848,9 @@ pub struct SceneFrame {
     pub bodies: Vec<SceneBody>,
     /// Which overlays are enabled.
     pub overlays: Overlays,
+    /// Safety records and folded states projected for this frame; every safety
+    /// overlay is derived from this frame alone.
+    pub safety: SafetyOverlay,
 }
 
 impl SceneFrame {
@@ -878,14 +929,101 @@ mod tests {
     }
 
     #[test]
+    fn a_body_projects_the_mode_it_was_sampled_with() {
+        let vehicle = sample(0, AgentMode::Vehicle);
+        let pedestrian = sample(1, AgentMode::Pedestrian);
+        assert_eq!(
+            SceneBody::project(&[], &vehicle, 0.0).mode,
+            AgentMode::Vehicle
+        );
+        assert_eq!(
+            SceneBody::project(&[], &pedestrian, 0.0).mode,
+            AgentMode::Pedestrian
+        );
+        assert_eq!(AgentMode::Vehicle.label(), "vehicle");
+        assert_eq!(AgentMode::Pedestrian.label(), "pedestrian");
+
+        // A snapshot without motion detail carries no mode, so the body keeps
+        // the vehicle fallback its dimensions also use.
+        let coarse = AgentSample {
+            motion: None,
+            ..vehicle
+        };
+        let body = SceneBody::project(&[], &coarse, 0.0);
+        assert_eq!(body.mode, AgentMode::Vehicle);
+        assert_eq!(body.length_m, DEFAULT_BODY_LENGTH_M);
+    }
+
+    /// One observed sample with motion detail, so a body projects a mode.
+    fn sample(id: usize, mode: AgentMode) -> AgentSample {
+        use tangle_sim::MotionSample;
+        AgentSample {
+            id: tangle_sim::AgentId::from_index(id),
+            position: DVec2::ZERO,
+            heading_rad: 0.0,
+            motion: Some(MotionSample {
+                mode,
+                speed_mps: 1.0,
+                path: PathId::from_index(0),
+                path_distance_m: 0.0,
+                body_length_m: 0.5,
+                body_width_m: 0.5,
+                route: None,
+                profile: None,
+                pedestrian_route: None,
+                pedestrian_profile: None,
+                decision: None,
+                pedestrian_decision: None,
+                yield_crossing: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_region_key_resolves_in_its_own_id_space() {
+        use tangle_sim::RegionKey;
+
+        let geometry = SceneGeometry::from_scenario(&signalized());
+        let crossing = RegionKey::Crossing(CrossingId::from_index(0));
+        let conflict = RegionKey::ConflictRegion(ConflictRegionId::from_index(0));
+        // The crossing sits on the authored 6x6 region, the conflict region on
+        // the authored 2x2 one: one dense index, two different rings.
+        assert_eq!(
+            geometry.region_points(crossing),
+            Some(&geometry.regions()[0].points[..])
+        );
+        assert_eq!(
+            geometry.region_points(conflict),
+            Some(&geometry.conflict_regions()[0].points[..])
+        );
+        assert_ne!(
+            geometry.region_points(crossing),
+            geometry.region_points(conflict)
+        );
+        assert_eq!(geometry.region_center(crossing), Some(DVec2::ZERO));
+        assert_eq!(geometry.region_center(conflict), Some(DVec2::ZERO));
+        assert_eq!(
+            geometry.region_points(RegionKey::Crossing(CrossingId::from_index(9))),
+            None
+        );
+        assert_eq!(
+            geometry.region_center(RegionKey::ConflictRegion(ConflictRegionId::from_index(9))),
+            None
+        );
+    }
+
+    #[test]
     fn overlays_toggle_independently() {
         let mut overlays = Overlays::default();
         assert!(overlays.geometry);
         assert!(!overlays.vectors);
+        assert!(overlays.safety);
         overlays.toggle(Overlay::Geometry);
         overlays.toggle(Overlay::Vectors);
+        overlays.toggle(Overlay::Safety);
         assert!(!overlays.geometry);
         assert!(overlays.vectors);
+        assert!(!overlays.safety);
     }
 
     #[test]

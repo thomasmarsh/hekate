@@ -74,6 +74,7 @@ mod tests {
     use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
     use crate::clock::Speed;
+    use crate::safety::SafetyOverlay;
     use crate::scene::{FrameStatus, Overlays, SceneGeometry, Viewport};
 
     /// A minimal backend that records what it was asked to draw.
@@ -133,6 +134,7 @@ mod tests {
             geometry: Arc::new(SceneGeometry::from_scenario(&scenario)),
             bodies: Vec::new(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
     }
 

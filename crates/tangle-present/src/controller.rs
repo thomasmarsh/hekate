@@ -8,10 +8,11 @@
 use std::sync::Arc;
 
 use glam::DVec2;
-use tangle_sim::Snapshot;
+use tangle_sim::{Event, Snapshot};
 
 use crate::clock::PresentationClock;
 use crate::command::{RestartMode, ViewCommand};
+use crate::safety::{MARKER_LIFETIME_SECONDS, SafetyOverlay};
 use crate::scene::{FrameStatus, Overlays, SceneBody, SceneFrame, SceneGeometry, Viewport};
 
 /// Outcome of applying a [`ViewCommand`].
@@ -31,6 +32,7 @@ pub struct PresentationController {
     viewport: Viewport,
     selection: Option<usize>,
     overlays: Overlays,
+    safety: SafetyOverlay,
 }
 
 impl PresentationController {
@@ -43,6 +45,7 @@ impl PresentationController {
             viewport,
             selection: None,
             overlays: Overlays::default(),
+            safety: SafetyOverlay::new(marker_lifetime_ticks(step_secs)),
         }
     }
 
@@ -81,18 +84,38 @@ impl PresentationController {
         self.overlays
     }
 
+    /// The safety records and folded states the next frame projects.
+    pub const fn safety(&self) -> &SafetyOverlay {
+        &self.safety
+    }
+
+    /// Fold one completed step's records into the projected safety overlays.
+    ///
+    /// Call once per kernel step, with the tick that step produced, before
+    /// projecting the frame for it. The fold is deterministic and reads only
+    /// the records it is given, so the same run always projects the same
+    /// markers, emphasis, and occupancy.
+    pub fn observe_events(&mut self, tick: u64, events: &[Event]) {
+        self.safety.observe(tick, events);
+    }
+
     /// Consume frame time and return the whole steps to take now.
     pub fn advance(&mut self, frame_secs: f64) -> u64 {
         self.clock.advance(frame_secs)
     }
 
     /// Rebuild the clock after a restart, preserving speed and pause state.
+    ///
+    /// The event stream belongs to the run, so a restart also starts the
+    /// safety window and its folded states over; the marker lifetime follows
+    /// the new step.
     pub fn reset_clock(&mut self, step_secs: f64) {
         let speed = self.clock.speed();
         let paused = self.clock.is_paused();
         self.clock = PresentationClock::new(step_secs);
         self.clock.set_speed(speed);
         self.clock.set_paused(paused);
+        self.safety = SafetyOverlay::new(marker_lifetime_ticks(step_secs));
     }
 
     /// Clear the current selection.
@@ -122,6 +145,10 @@ impl PresentationController {
 
     /// Project one frame from the previous and current kernel snapshots,
     /// interpolating bodies by the clock's current sub-step progress.
+    ///
+    /// The safety overlays come from the records the host folded in with
+    /// [`Self::observe_events`], windowed to this frame's tick, so the frame
+    /// alone describes everything a backend draws.
     pub fn project(&self, previous: &Snapshot, current: &Snapshot) -> SceneFrame {
         let alpha = self.clock.alpha();
         let bodies: Vec<SceneBody> = current
@@ -144,8 +171,20 @@ impl PresentationController {
             geometry: Arc::clone(&self.geometry),
             bodies,
             overlays: self.overlays,
+            safety: self.safety.windowed_at(current.time().tick()),
         }
     }
+}
+
+/// Whole ticks a safety record stays in the marker window at `step_secs`.
+///
+/// One tick is the floor, so a step longer than the lifetime still shows a
+/// marker for the tick that produced it.
+fn marker_lifetime_ticks(step_secs: f64) -> u64 {
+    if !step_secs.is_finite() || step_secs <= 0.0 {
+        return 1;
+    }
+    (MARKER_LIFETIME_SECONDS / step_secs).ceil().max(1.0) as u64
 }
 
 /// The nearest body to `point` within the viewport's selection radius.
@@ -164,9 +203,10 @@ fn nearest_body(frame: &SceneFrame, point: DVec2) -> Option<&SceneBody> {
 mod tests {
     use super::*;
     use crate::command::ViewCommand;
+    use crate::safety::BodyEmphasis;
     use crate::scene::Overlay;
     use tangle_model::CompiledScenario;
-    use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
+    use tangle_sim::{AgentId, Event, RunConfig, Simulation, SnapshotDetail, ViolationKind};
 
     const STEP: f64 = 0.05;
 
@@ -208,6 +248,56 @@ mod tests {
         let prior = previous.agents()[0].position;
         let now = current.agents()[0].position;
         assert!((frame.bodies[0].position - (prior + now) * 0.5).length() < 1e-9);
+    }
+
+    #[test]
+    fn observed_records_reach_the_frame_and_a_restart_clears_them() {
+        let mut controller = controller();
+        let mut sim = Simulation::new(scenario(), RunConfig::new(0)).expect("builds");
+        let initial = sim.snapshot(SnapshotDetail::Full);
+        let empty = controller.project(&initial, &initial);
+        assert!(empty.safety_markers().is_empty());
+        assert!(empty.body_emphasis().is_empty());
+
+        let events = [
+            Event::Queue {
+                agent: AgentId::from_index(0),
+                joined: true,
+            },
+            Event::Violation {
+                agent: AgentId::from_index(1),
+                kind: ViolationKind::RanRedLight,
+            },
+        ];
+        controller.observe_events(0, &events);
+        let frame = controller.project(&initial, &initial);
+        // Both records sit at the frame's own tick and draw a marker.
+        assert_eq!(frame.safety_markers().len(), 2);
+        assert_eq!(
+            frame.body_emphasis(),
+            vec![(0, BodyEmphasis::Queue), (1, BodyEmphasis::Violation)]
+        );
+        assert_eq!(frame.events_involving(1).len(), 1);
+        assert_eq!(controller.safety().queued(), &[0]);
+        // Projecting is a pure read of the folded state.
+        assert_eq!(frame, controller.project(&initial, &initial));
+
+        // A record older than the marker window stops drawing a marker, while
+        // the open queue state it opened lasts until its closing edge.
+        for _ in 0..(marker_lifetime_ticks(STEP) + 1) {
+            sim.step();
+        }
+        let later = sim.snapshot(SnapshotDetail::Full);
+        let frame = controller.project(&later, &later);
+        assert!(frame.safety_markers().is_empty());
+        assert_eq!(frame.body_emphasis(), vec![(0, BodyEmphasis::Queue)]);
+
+        // A restart starts the run's records over with it.
+        controller.reset_clock(STEP);
+        assert!(controller.safety().is_empty());
+        let frame = controller.project(&later, &later);
+        assert!(frame.safety_markers().is_empty());
+        assert!(frame.body_emphasis().is_empty());
     }
 
     #[test]
