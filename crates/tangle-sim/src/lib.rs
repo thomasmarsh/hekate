@@ -40,6 +40,7 @@ mod control;
 mod demand;
 mod event;
 pub mod pedestrian;
+mod pedestrian_compliance;
 mod profile;
 mod rng;
 mod signal;
@@ -53,7 +54,11 @@ pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
 pub use config::{DEFAULT_STEP, RunConfig};
 pub use event::{DespawnReason, EVENT_VERSION, Event};
 pub use pedestrian::{PedestrianWaypoint, PedestrianZone};
+pub use pedestrian_compliance::{
+    PedestrianComplianceDecision, PedestrianComplianceReason, PedestrianSignalAction,
+};
 pub use profile::{PedestrianProfile, VehicleProfile};
+pub use signal::PedestrianSignalColor;
 pub use sim::{InitError, RunSummary, Simulation, StepOutput};
 pub use snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 pub use time::SimTime;

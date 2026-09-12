@@ -16,12 +16,17 @@
 //! replaces that constant-speed tracking with the documented pedestrian
 //! waypoint controller ([`crate::pedestrian`]): waypoint and path-progress
 //! tracking, bounded steering, and local collision avoidance against every
-//! nearby body. Mixed interaction beyond avoidance is a later slice.
+//! nearby body. Increment 3 slice C adds the fixed-time pedestrian signal state
+//! of a crossing ([`crate::signal`]) and the contextual pedestrian
+//! signal-compliance decision ([`crate::PedestrianComplianceDecision`]) that gates a
+//! compliant pedestrian's stopping profile and records a traceable reason.
+//! Mixed interaction beyond avoidance and pedestrian signal compliance is a
+//! later slice.
 
 use glam::DVec2;
 use tangle_model::{
-    CompiledMovement, CompiledPedestrianRoute, CompiledScenario, DemandId, MovementId, PathEnd,
-    PathId, PedestrianDemandId, PedestrianRouteId, PortalId, SignalColor, SignalId,
+    CompiledMovement, CompiledPedestrianRoute, CompiledScenario, CrossingId, DemandId, MovementId,
+    PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PortalId, SignalColor, SignalId,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore};
@@ -30,7 +35,8 @@ use crate::config::RunConfig;
 use crate::control::{self, Constraint, IDM_STANDSTILL_GAP_M};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
 use crate::event::{DespawnReason, Event};
-use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint};
+use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
+use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
 use crate::profile::{
     PedestrianProfile, VehicleProfile, sample_pedestrian_profile, sample_profile,
 };
@@ -38,7 +44,7 @@ use crate::rng::{
     STREAM_COMPLIANCE, STREAM_DEMAND, STREAM_PEDESTRIAN_DEMAND, STREAM_PROFILE, derive_stream,
     uniform01,
 };
-use crate::signal::{self, SignalRuntime};
+use crate::signal::{self, PedestrianSignalColor, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 use crate::time::SimTime;
 use crate::units::Seconds;
@@ -169,6 +175,9 @@ pub struct Simulation {
     pedestrian_demand: Vec<DemandRuntime<PedestrianRouteId>>,
     signals: Vec<SignalRuntime>,
     signal_heads: Vec<Option<(SignalId, usize)>>,
+    /// Pedestrian signal phase clock of every compiled crossing, indexed by
+    /// dense crossing id; `None` for an uncontrolled crossing.
+    pedestrian_signals: Vec<Option<SignalRuntime>>,
     /// Waypoints of every compiled pedestrian route, in travel order and
     /// indexed by dense route id.
     waypoints: Vec<Vec<PedestrianWaypoint>>,
@@ -236,6 +245,15 @@ impl Simulation {
             .map(|signal| SignalRuntime::new(signal.cycle_s()))
             .collect();
         let signal_heads = signal::movement_signal_map(&scenario);
+        let pedestrian_signals: Vec<Option<SignalRuntime>> = scenario
+            .crossings()
+            .iter()
+            .map(|crossing| {
+                crossing
+                    .pedestrian_signal()
+                    .map(|signal| SignalRuntime::new(signal.cycle_s()))
+            })
+            .collect();
         // Waypoint plans are derived once per run from the compiled routes, so
         // the tick loop only reads them.
         let waypoints: Vec<Vec<PedestrianWaypoint>> = scenario
@@ -294,6 +312,7 @@ impl Simulation {
             pedestrian_demand,
             signals,
             signal_heads,
+            pedestrian_signals,
             waypoints,
             conflicts: Vec::new(),
             events: Vec::new(),
@@ -350,6 +369,7 @@ impl Simulation {
                         pedestrian_route: self.agents.pedestrian_route[index],
                         pedestrian_profile: self.agents.pedestrian_profile[index],
                         decision: self.agents.decision[index],
+                        pedestrian_decision: self.agents.pedestrian_decision[index],
                     }),
                 },
             })
@@ -507,6 +527,38 @@ impl Simulation {
         self.agents.decision.get(agent.index()).copied().flatten()
     }
 
+    /// Most recent pedestrian signal-compliance decision of an agent.
+    ///
+    /// Present for a pedestrian on a route that reaches a signal-controlled
+    /// crossing, including a walk proceed, so every state-affecting pedestrian
+    /// signal decision is traceable. `None` for a pedestrian with no upcoming
+    /// signal-controlled crossing.
+    pub fn agent_pedestrian_decision(
+        &self,
+        agent: AgentId,
+    ) -> Option<PedestrianComplianceDecision> {
+        self.agents
+            .pedestrian_decision
+            .get(agent.index())
+            .copied()
+            .flatten()
+    }
+
+    /// Current pedestrian signal state of a crossing.
+    ///
+    /// `None` when the crossing is uncontrolled (carries no pedestrian signal).
+    /// This is the observable seam for the crossing's fixed-time pedestrian
+    /// signal; it reports the walk state only and makes no compliance decision.
+    pub fn crossing_signal(&self, crossing: CrossingId) -> Option<PedestrianSignalColor> {
+        let signal = self.scenario.crossing(crossing)?.pedestrian_signal()?;
+        let elapsed = self
+            .pedestrian_signals
+            .get(crossing.index())
+            .and_then(Option::as_ref)
+            .map_or(0.0, |runtime| runtime.elapsed_s());
+        signal::pedestrian_walk_at(signal, elapsed)
+    }
+
     /// Current display color of the signal head controlling a movement.
     ///
     /// `None` when the movement has no signal rule or no matching head. This is
@@ -547,6 +599,9 @@ impl Simulation {
         // Fixed-time phases advance with the authoritative clock, so the color
         // governing this interval is a function of simulation time only.
         for runtime in &mut self.signals {
+            runtime.advance(dt);
+        }
+        for runtime in self.pedestrian_signals.iter_mut().flatten() {
             runtime.advance(dt);
         }
 
@@ -618,6 +673,13 @@ impl Simulation {
     /// bodies ahead of it, and reports route progress as the projection of its
     /// world position onto the route path. See [`crate::pedestrian`] for the
     /// model card, its bounds, and its emergency spacing cap.
+    ///
+    /// When the route's upcoming crossing is signal-controlled, the pedestrian
+    /// first makes the contextual choice in [`crate::PedestrianComplianceDecision`]. A
+    /// `Wait` decision only reduces the commanded speed toward a bounded
+    /// stopping profile at the crossing, so a compliant wait and a
+    /// non-compliant crossing are both ordinary controller motion: nothing is
+    /// teleported and no step bypasses the controller's bounds.
     fn step_pedestrian(&mut self, index: usize, dt: f64) {
         let (Some(route_id), Some(profile)) = (
             self.agents.pedestrian_route[index],
@@ -641,6 +703,13 @@ impl Simulation {
             pedestrian::route_progress_m(self.agents.distance_m[index], direction, path_length_m);
         self.advance_waypoint(index, progress_m);
         let cursor = self.agents.pedestrian_waypoint_index[index];
+
+        // The pedestrian signal compliance decision is a pure function of the
+        // upcoming crossing's signal state and the pedestrian's state, so it is
+        // recomputed here and recorded before the step integrates.
+        let decision = self.pedestrian_signal_decision(index, route_id, cursor, progress_m);
+        self.agents.pedestrian_decision[index] = decision;
+
         let Some(target) = self.route_waypoints(route_id).get(cursor).copied() else {
             return;
         };
@@ -653,7 +722,19 @@ impl Simulation {
             speed_mps: self.agents.speed_mps[index],
             target: target.position(),
         };
-        let steering = pedestrian::steer(&profile, &state, &self.conflicts, dt);
+        let mut steering = pedestrian::steer(&profile, &state, &self.conflicts, dt);
+        if let Some(decision) = decision
+            && decision.action == PedestrianSignalAction::Wait
+        {
+            // Obey the signal with a bounded stopping profile toward the
+            // crossing; the speed-change bound is still applied downstream.
+            let stop_target = pedestrian_compliance::wait_speed_target_mps(
+                decision.crossing_gap_m,
+                profile.compliance,
+                pedestrian::MAX_DECEL_MPS2,
+            );
+            steering.speed_target_mps = steering.speed_target_mps.min(stop_target);
+        }
         let (speed_mps, capped) = pedestrian::advance_speed(
             state.speed_mps,
             steering.speed_target_mps,
@@ -712,6 +793,61 @@ impl Simulation {
             cursor += 1;
         }
         self.agents.pedestrian_waypoint_index[index] = cursor;
+    }
+
+    /// The pedestrian signal-compliance decision for the upcoming crossing.
+    ///
+    /// Returns `None` when the route reaches no signal-controlled crossing at or
+    /// after the cursor. The gap is the route distance from the pedestrian's
+    /// current progress to the crossing's stop point, positive while upstream.
+    fn pedestrian_signal_decision(
+        &self,
+        index: usize,
+        route_id: PedestrianRouteId,
+        cursor: usize,
+        progress_m: f64,
+    ) -> Option<PedestrianComplianceDecision> {
+        let direction = self.agents.direction[index];
+        let (crossing, stop_progress_m) =
+            self.next_crossing_waypoint(route_id, cursor, direction)?;
+        let signal = self.crossing_signal(crossing)?;
+        let gap_m = stop_progress_m - progress_m;
+        Some(pedestrian_compliance::decide(
+            signal,
+            gap_m,
+            self.agents.speed_mps[index],
+            self.agents.pedestrian_profile[index]?.compliance,
+            pedestrian::MAX_DECEL_MPS2,
+        ))
+    }
+
+    /// The first crossing waypoint at or after `cursor`, as its dense id and
+    /// route progress.
+    ///
+    /// The cursor only advances past a crossing once the pedestrian has reached
+    /// it, so the first crossing at or after the cursor is always the upcoming
+    /// one, whatever the target waypoint (a waiting area or the crossing).
+    fn next_crossing_waypoint(
+        &self,
+        route_id: PedestrianRouteId,
+        cursor: usize,
+        direction: f64,
+    ) -> Option<(CrossingId, f64)> {
+        let path_length_m = self
+            .scenario
+            .pedestrian_route(route_id)
+            .and_then(|route| self.scenario.path(route.path()))
+            .map_or(0.0, |path| path.length());
+        self.route_waypoints(route_id)
+            .iter()
+            .skip(cursor)
+            .find_map(|waypoint| match waypoint.zone() {
+                Some(PedestrianZone::Crossing(crossing)) => Some((
+                    crossing,
+                    pedestrian::waypoint_progress_m(*waypoint, direction, path_length_m),
+                )),
+                _ => None,
+            })
     }
 
     /// Gather the bodies a pedestrian must avoid, in ascending agent id order.
@@ -1078,12 +1214,14 @@ impl Simulation {
 
         // The body and gait are derived from the stable agent id, so a blocked
         // arrival re-derives the same profile on the next attempt. Pedestrians
-        // share the mode-neutral `profile` stream with vehicles, and agent ids
-        // are unique across modes, so no two agents share a generator.
+        // share the mode-neutral `profile` stream with vehicles for their body
+        // and gait and the `compliance` stream for their crossing propensity;
+        // agent ids are unique across modes, so no two agents share a generator.
         let agent_id = AgentId::from_index(self.agents.len());
         let profile = sample_pedestrian_profile(
             self.scenario.pedestrian_profiles(),
             &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
+            &mut derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get()),
         );
         // A pedestrian body is a circle, so its bounding box is the diameter on
         // both axes.

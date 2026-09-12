@@ -135,12 +135,14 @@
 //!
 //! ## Deferred
 //!
-//! Signal compliance, the choice to cross against a signal, and vehicle
-//! yielding to an occupied crossing are later Increment 3 slices: this
+//! Vehicle yielding to an occupied crossing is the next Increment 3 slice: this
 //! controller slows and steers around other bodies but encodes no signal rule,
 //! and no vehicle reacts to a pedestrian. A pedestrian can therefore be
 //! overlapped by a vehicle that is already committed to the crossing; closing
-//! that gap is exactly the vehicle-yielding work those slices own.
+//! that gap is exactly the vehicle-yielding work the next slice owns. Whether a
+//! pedestrian waits for a forbidding crossing signal is
+//! [`crate::PedestrianComplianceDecision`], which only reduces the commanded speed and
+//! never bypasses this controller's bounds.
 
 use glam::DVec2;
 use tangle_model::{
@@ -596,6 +598,7 @@ mod tests {
         PedestrianProfile {
             radius_m: 0.25,
             desired_speed_mps: 1.25,
+            compliance: 1.0,
         }
     }
 

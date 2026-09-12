@@ -758,6 +758,7 @@ pub struct CompiledCrossing {
     name: String,
     region: RegionId,
     movements: Vec<MovementId>,
+    pedestrian_signal: Option<CompiledPedestrianSignal>,
 }
 
 impl CompiledCrossing {
@@ -779,6 +780,77 @@ impl CompiledCrossing {
     /// Movements the crossing crosses, in authored order.
     pub fn movements(&self) -> &[MovementId] {
         &self.movements
+    }
+
+    /// Fixed-time pedestrian signal rule, present exactly when the crossing is
+    /// signal-controlled. `None` is an uncontrolled crossing.
+    pub fn pedestrian_signal(&self) -> Option<&CompiledPedestrianSignal> {
+        self.pedestrian_signal.as_ref()
+    }
+}
+
+/// A compiled fixed-time pedestrian signal rule embedded in one crossing.
+///
+/// Phases are contiguous and ordered by `start_s`, so the active phase at a
+/// cycle time is well defined; `cycle_s` is their total duration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledPedestrianSignal {
+    phases: Vec<CompiledPedestrianSignalPhase>,
+    cycle_s: f64,
+}
+
+impl CompiledPedestrianSignal {
+    /// Phases in cycle order, each with its offset from the cycle start.
+    pub fn phases(&self) -> &[CompiledPedestrianSignalPhase] {
+        &self.phases
+    }
+
+    /// Total phase duration in seconds, the length of one cycle.
+    pub fn cycle_s(&self) -> f64 {
+        self.cycle_s
+    }
+
+    /// Whether pedestrians may cross during the phase active at `elapsed_s`.
+    ///
+    /// A phase covers the half-open interval `[start_s, start_s + duration_s)`,
+    /// so a boundary tick belongs to the later phase. Returns `None` only for a
+    /// signal with no phases, which validation rejects.
+    pub fn walk_at(&self, elapsed_s: f64) -> Option<bool> {
+        let offset = if self.cycle_s > 0.0 {
+            elapsed_s.rem_euclid(self.cycle_s)
+        } else {
+            0.0
+        };
+        self.phases
+            .iter()
+            .rev()
+            .find(|phase| phase.start_s <= offset)
+            .map(|phase| phase.walk)
+    }
+}
+
+/// One compiled fixed-time pedestrian signal phase.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompiledPedestrianSignalPhase {
+    duration_s: f64,
+    start_s: f64,
+    walk: bool,
+}
+
+impl CompiledPedestrianSignalPhase {
+    /// Phase duration in seconds.
+    pub fn duration_s(&self) -> f64 {
+        self.duration_s
+    }
+
+    /// Offset of this phase from the start of the cycle in seconds.
+    pub fn start_s(&self) -> f64 {
+        self.start_s
+    }
+
+    /// Whether pedestrians may cross during this phase.
+    pub fn walk(&self) -> bool {
+        self.walk
     }
 }
 
@@ -1251,6 +1323,7 @@ impl CompiledProfile {
 pub struct CompiledPedestrianProfile {
     radius_m: ProfileRange,
     speed_mps: ProfileRange,
+    compliance: ProfileRange,
 }
 
 impl CompiledPedestrianProfile {
@@ -1258,6 +1331,7 @@ impl CompiledPedestrianProfile {
         Self {
             radius_m: ProfileRange::from_source(source.radius_m),
             speed_mps: ProfileRange::from_source(source.speed_mps),
+            compliance: ProfileRange::from_source(source.compliance),
         }
     }
 
@@ -1269,6 +1343,11 @@ impl CompiledPedestrianProfile {
     /// Desired walking speed distribution in metres per second.
     pub fn speed_mps(&self) -> ProfileRange {
         self.speed_mps
+    }
+
+    /// Signal-compliance propensity distribution, a fraction in `[0, 1]`.
+    pub fn compliance(&self) -> ProfileRange {
+        self.compliance
     }
 }
 
@@ -1398,6 +1477,10 @@ impl CompiledScenario {
                     .iter()
                     .map(|movement| MovementId::from_index(movement_index[movement.as_str()]))
                     .collect(),
+                pedestrian_signal: crossing
+                    .pedestrian_signal
+                    .as_ref()
+                    .map(compile_pedestrian_signal),
             })
             .collect();
 
@@ -1789,6 +1872,26 @@ fn compile_signal(
     }
 }
 
+/// Compile one crossing's embedded pedestrian signal into contiguous phases.
+fn compile_pedestrian_signal(
+    signal: &crate::source::PedestrianSignalSource,
+) -> CompiledPedestrianSignal {
+    let mut start_s = 0.0;
+    let mut phases = Vec::with_capacity(signal.phases.len());
+    for phase in &signal.phases {
+        phases.push(CompiledPedestrianSignalPhase {
+            duration_s: phase.duration_s,
+            start_s,
+            walk: phase.walk,
+        });
+        start_s += phase.duration_s;
+    }
+    CompiledPedestrianSignal {
+        phases,
+        cycle_s: start_s,
+    }
+}
+
 fn compile_path(id: PathId, path: &crate::source::PathSource) -> CompiledPath {
     let points: Vec<DVec2> = path
         .points
@@ -2030,6 +2133,67 @@ mod tests {
             [MovementId::from_index(0), MovementId::from_index(1)]
         );
         assert!((conflict.polygon().area() - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compiles_a_pedestrian_signal_with_phase_offsets_and_walk_intervals() {
+        let source = parse_scenario_source(
+            r#"{
+                schema_version: 1, id: 'crossing', coordinate_system: { x: 'east_m', y: 'north_m' },
+                paths: [ { id: 'walk', points: [ { x: 0, y: -20 }, { x: 0, y: 20 } ] },
+                         { id: 'road', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] } ],
+                portals: [ { id: 'south', path: 'walk', end: 'start', width_m: 2.0 },
+                           { id: 'north', path: 'walk', end: 'end', width_m: 2.0 },
+                           { id: 'west', path: 'road', end: 'start', width_m: 2.0 },
+                           { id: 'east', path: 'road', end: 'end', width_m: 2.0 } ],
+                regions: [ { id: 'area', points: [
+                    { x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 } ] } ],
+                movements: [ { id: 'm', from: 'west', to: 'east', path: 'road', priority: 0 } ],
+                crossings: [ { id: 'cross', region: 'area', movements: [ 'm' ],
+                    pedestrian_signal: { phases: [
+                        { duration_s: 18.0, walk: true },
+                        { duration_s: 6.0, walk: false },
+                    ] } } ],
+                pedestrian_profiles: {
+                    radius_m: { min: 0.2, max: 0.2 },
+                    speed_mps: { min: 1.2, max: 1.2 },
+                    compliance: { min: 0.3, max: 0.7 },
+                },
+            }"#,
+        )
+        .expect("parses");
+        let scenario = CompiledScenario::compile(source).expect("compiles");
+        let signal = scenario
+            .crossing(CrossingId::from_index(0))
+            .expect("crossing exists")
+            .pedestrian_signal()
+            .expect("signal exists");
+        assert_eq!(signal.phases().len(), 2);
+        assert!((signal.cycle_s() - 24.0).abs() < 1e-9);
+        assert!((signal.phases()[1].start_s() - 18.0).abs() < 1e-9);
+        assert!(signal.phases()[0].walk());
+        assert!(!signal.phases()[1].walk());
+        // Half-open phases: a boundary tick belongs to the later phase.
+        assert_eq!(signal.walk_at(0.0), Some(true));
+        assert_eq!(signal.walk_at(17.999), Some(true));
+        assert_eq!(signal.walk_at(18.0), Some(false));
+        assert_eq!(signal.walk_at(24.0), Some(true));
+
+        let profiles = scenario.pedestrian_profiles();
+        assert!((profiles.compliance().min() - 0.3).abs() < 1e-9);
+        assert!((profiles.compliance().max() - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_crossing_without_a_pedestrian_signal_is_uncontrolled() {
+        let scenario = signalized();
+        assert!(
+            scenario
+                .crossing(CrossingId::from_index(0))
+                .expect("crossing exists")
+                .pedestrian_signal()
+                .is_none()
+        );
     }
 
     #[test]

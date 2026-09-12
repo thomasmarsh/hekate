@@ -176,6 +176,37 @@ pub struct CrossingSource {
     pub region: String,
     /// Movements the crossing crosses.
     pub movements: Vec<String>,
+    /// Fixed-time pedestrian signal rule for this crossing.
+    ///
+    /// Omitted (the default) is an uncontrolled crossing: pedestrians cross it
+    /// freely, subject to ordinary interaction. Additive schema version 1
+    /// field, mirroring the `stop_line_m`/`compliance` precedent.
+    #[serde(default)]
+    pub pedestrian_signal: Option<PedestrianSignalSource>,
+}
+
+/// A fixed-time pedestrian signal rule embedded in one crossing.
+///
+/// It is the pedestrian analogue of [`SignalSource`] but its controlled object
+/// is the owning crossing rather than a movement, so a pedestrian rule needs no
+/// vehicle signal. Its phases alternate a walk interval, during which crossing
+/// is permitted, and a don't-walk interval, during which the signal forbids
+/// crossing; the phases are contiguous and cover the cycle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PedestrianSignalSource {
+    /// Phases in cycle order.
+    pub phases: Vec<PedestrianSignalPhaseSource>,
+}
+
+/// One fixed-time pedestrian signal phase.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PedestrianSignalPhaseSource {
+    /// Phase duration in seconds.
+    pub duration_s: f64,
+    /// Whether pedestrians may cross during this phase.
+    pub walk: bool,
 }
 
 /// A named waiting area where pedestrians stage between crossings.
@@ -462,8 +493,9 @@ impl Default for ProfileSource {
 ///
 /// Every generated pedestrian samples one value from each range from the
 /// `profile` random stream using its stable agent id, so its body and gait are
-/// stable for the run. A pedestrian body is a circle, so the physical range is
-/// a radius rather than a length and width.
+/// stable for the run. Its signal-compliance propensity is sampled from the
+/// separate `compliance` stream under the same agent id. A pedestrian body is a
+/// circle, so the physical range is a radius rather than a length and width.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PedestrianProfileSource {
@@ -471,6 +503,15 @@ pub struct PedestrianProfileSource {
     pub radius_m: ProfileRangeSource,
     /// Desired walking speed in metres per second.
     pub speed_mps: ProfileRangeSource,
+    /// Signal-compliance propensity, a fraction of the pedestrian's bounded
+    /// stopping deceleration they are willing to use to wait at a crossing.
+    ///
+    /// `1.0` waits whenever a bounded stop is possible and `0.0` never waits.
+    /// One value per pedestrian is drawn from the `compliance` random stream.
+    /// Additive schema version 1 field: omitted means the fully compliant
+    /// default.
+    #[serde(default = "default_compliance")]
+    pub compliance: ProfileRangeSource,
 }
 
 impl Default for PedestrianProfileSource {
@@ -482,6 +523,7 @@ impl Default for PedestrianProfileSource {
                 max: 0.30,
             },
             speed_mps: ProfileRangeSource { min: 1.0, max: 1.6 },
+            compliance: default_compliance(),
         }
     }
 }
@@ -686,5 +728,60 @@ mod tests {
             "crossing_route"
         );
         assert_eq!(source.pedestrian_profiles.speed_mps.max, 1.5);
+    }
+
+    #[test]
+    fn parses_a_pedestrian_signal_and_compliance_range() {
+        let input = r#"{
+            schema_version: 1, id: 'x', coordinate_system: { x: 'a', y: 'b' },
+            paths: [ { id: 'walk', points: [ { x: 0, y: 0 }, { x: 20, y: 0 } ] } ],
+            portals: [ { id: 'south', path: 'walk', end: 'start', width_m: 2.0 },
+                       { id: 'north', path: 'walk', end: 'end', width_m: 2.0 } ],
+            regions: [ { id: 'corner', points: [
+                { x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }
+            ] } ],
+            crossings: [ { id: 'cross', region: 'corner', movements: [ 'through' ],
+                pedestrian_signal: { phases: [
+                    { duration_s: 20.0, walk: true },
+                    { duration_s: 20.0, walk: false },
+                ] } } ],
+            pedestrian_profiles: {
+                radius_m: { min: 0.2, max: 0.3 },
+                speed_mps: { min: 1.1, max: 1.5 },
+                compliance: { min: 0.4, max: 0.9 },
+            },
+        }"#;
+        let source = parse_scenario_source(input).expect("parses");
+        let signal = source.crossings[0]
+            .pedestrian_signal
+            .as_ref()
+            .expect("pedestrian signal parses");
+        assert_eq!(signal.phases.len(), 2);
+        assert!(signal.phases[0].walk);
+        assert_eq!(signal.phases[0].duration_s, 20.0);
+        assert!(!signal.phases[1].walk);
+        assert_eq!(source.pedestrian_profiles.compliance.min, 0.4);
+        assert_eq!(source.pedestrian_profiles.compliance.max, 0.9);
+    }
+
+    #[test]
+    fn an_omitted_pedestrian_signal_is_uncontrolled_and_compliance_defaults() {
+        let input = r#"{
+            schema_version: 1, id: 'x', coordinate_system: { x: 'a', y: 'b' },
+            paths: [ { id: 'walk', points: [ { x: 0, y: 0 }, { x: 20, y: 0 } ] } ],
+            portals: [ { id: 'south', path: 'walk', end: 'start', width_m: 2.0 },
+                       { id: 'north', path: 'walk', end: 'end', width_m: 2.0 } ],
+            regions: [ { id: 'corner', points: [
+                { x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }
+            ] } ],
+            crossings: [ { id: 'cross', region: 'corner', movements: [ 'through' ] } ],
+        }"#;
+        let source = parse_scenario_source(input).expect("parses");
+        assert!(source.crossings[0].pedestrian_signal.is_none());
+        assert_eq!(
+            source.pedestrian_profiles.compliance,
+            default_compliance(),
+            "an omitted pedestrian compliance range defaults to fully compliant"
+        );
     }
 }

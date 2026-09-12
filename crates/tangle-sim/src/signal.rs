@@ -15,7 +15,49 @@
 //! red or yellow head is the contextual compliance decision in
 //! [`crate::compliance`]; this module only reports the authored color.
 
-use tangle_model::{CompiledScenario, RuleKind, SignalColor, SignalId};
+use tangle_model::{CompiledPedestrianSignal, CompiledScenario, RuleKind, SignalColor, SignalId};
+
+/// Runtime pedestrian signal state of one crossing.
+///
+/// This is the pedestrian-facing signal a crossing shows, separate from the
+/// [`SignalColor`] heads that control vehicle movements. It is derived from the
+/// crossing's fixed-time pedestrian signal phase and makes no compliance
+/// decision of its own; whether a pedestrian obeys it is
+/// [`crate::pedestrian_compliance`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PedestrianSignalColor {
+    /// The crossing permits pedestrians to cross.
+    Walk,
+    /// The crossing forbids pedestrians to cross.
+    DontWalk,
+}
+
+impl PedestrianSignalColor {
+    /// Short stable label for inspectors and traces.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Walk => "walk",
+            Self::DontWalk => "don't walk",
+        }
+    }
+
+    /// Map a compiled walk interval to the crossing's display state.
+    pub(crate) const fn from_walk(walk: bool) -> Self {
+        if walk { Self::Walk } else { Self::DontWalk }
+    }
+}
+
+/// Pedestrian signal state of `signal` at the given cycle time.
+///
+/// Returns `None` only for a signal with no phases, which validation rejects.
+pub(crate) fn pedestrian_walk_at(
+    signal: &CompiledPedestrianSignal,
+    elapsed_s: f64,
+) -> Option<PedestrianSignalColor> {
+    signal
+        .walk_at(elapsed_s)
+        .map(PedestrianSignalColor::from_walk)
+}
 
 /// Runtime phase state for one compiled signal.
 #[derive(Debug, Clone, Copy, PartialEq)]

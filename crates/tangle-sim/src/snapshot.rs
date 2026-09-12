@@ -9,6 +9,7 @@ use tangle_model::{MovementId, PathId, PedestrianRouteId};
 
 use crate::agent::{AgentId, AgentMode};
 use crate::compliance::ComplianceDecision;
+use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
 use crate::time::SimTime;
 
@@ -57,6 +58,10 @@ pub struct MotionSample {
     /// vehicles. The snapshot deliberately carries only this small record, not
     /// the controller's internal state.
     pub decision: Option<ComplianceDecision>,
+    /// Most recent pedestrian signal-compliance decision, present for a
+    /// pedestrian on a route that reaches a signal-controlled crossing. As with
+    /// `decision`, only the small record is carried, not internal state.
+    pub pedestrian_decision: Option<PedestrianComplianceDecision>,
 }
 
 /// One agent as observed at a single instant.

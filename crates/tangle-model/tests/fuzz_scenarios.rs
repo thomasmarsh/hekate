@@ -12,10 +12,11 @@
 use tangle_model::{
     CompiledScenario, ConflictRegionSource, CrossingSource, DemandSource, MovementSource, PathEnd,
     PathSource, PedestrianDemandSource, PedestrianProfileSource, PedestrianRouteShareSource,
-    PedestrianRouteSource, PointSource, PolygonSource, PopulationSource, PortalSource,
-    ProfileRangeSource, ProfileSource, RouteShareSource, RuleKind, RuleSource, ScenarioSource,
-    SignalColor, SignalHeadSource, SignalPhaseSource, SignalSource, SignalStateSource,
-    WaitingAreaSource, parse_scenario_source, validate,
+    PedestrianRouteSource, PedestrianSignalPhaseSource, PedestrianSignalSource, PointSource,
+    PolygonSource, PopulationSource, PortalSource, ProfileRangeSource, ProfileSource,
+    RouteShareSource, RuleKind, RuleSource, ScenarioSource, SignalColor, SignalHeadSource,
+    SignalPhaseSource, SignalSource, SignalStateSource, WaitingAreaSource, parse_scenario_source,
+    validate,
 };
 
 /// Declared generation limits: the boundary above which the gate makes no
@@ -158,6 +159,25 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
             id: rng.id(),
             region: rng.id(),
             movements: (0..rng.below(3)).map(|_| rng.id()).collect(),
+            // Half the crossings are signal-controlled, and occasionally a phase
+            // has a non-positive duration so the pedestrian-signal diagnostic
+            // branch is exercised.
+            pedestrian_signal: if rng.below(2) == 0 {
+                None
+            } else {
+                Some(PedestrianSignalSource {
+                    phases: (0..rng.below(MAX_COLLECTION))
+                        .map(|_| PedestrianSignalPhaseSource {
+                            duration_s: if rng.below(4) == 0 {
+                                -1.0
+                            } else {
+                                rng.positive()
+                            },
+                            walk: rng.below(2) == 0,
+                        })
+                        .collect(),
+                })
+            },
         })
         .collect();
     let conflict_regions: Vec<ConflictRegionSource> = (0..rng.below(MAX_COLLECTION))
@@ -294,6 +314,7 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
         pedestrian_profiles: PedestrianProfileSource {
             radius_m: rng.range(),
             speed_mps: rng.range(),
+            compliance: rng.range(),
         },
         population: PopulationSource {
             vehicle_count: rng.below(8),
@@ -471,6 +492,7 @@ fn consistent_source(rng: &mut Rng) -> ScenarioSource {
             id: "cross".to_owned(),
             region: "area".to_owned(),
             movements: vec!["ew_through".to_owned(), "ns_through".to_owned()],
+            pedestrian_signal: None,
         }],
         waiting_areas: vec![WaitingAreaSource {
             id: "wait".to_owned(),

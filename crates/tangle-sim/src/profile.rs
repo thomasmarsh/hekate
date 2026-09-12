@@ -5,7 +5,8 @@
 //! signal-compliance propensity comes from its own `compliance` substream (see
 //! [`crate::rng`]), so the two concerns never share a mutable generator. A
 //! pedestrian samples its body and gait from the same mode-neutral `profile`
-//! stream under its own stable agent id.
+//! stream and its crossing-compliance propensity from the `compliance` stream,
+//! both under its own stable agent id.
 
 use rand_chacha::ChaCha20Rng;
 use tangle_model::{CompiledPedestrianProfile, CompiledProfile};
@@ -46,21 +47,29 @@ pub struct PedestrianProfile {
     pub radius_m: f64,
     /// Desired walking speed in metres per second.
     pub desired_speed_mps: f64,
+    /// Crossing-compliance propensity in `[0, 1]`, drawn from the `compliance`
+    /// stream. See [`crate::pedestrian_compliance`] for how the crossing
+    /// decision uses it.
+    pub compliance: f64,
 }
 
-/// Draw one pedestrian profile from its own `profile` substream.
+/// Draw one pedestrian profile from its own `profile` substream and its
+/// compliance propensity from its own `compliance` substream.
 ///
-/// Both draws come from the same stream in a fixed order, so a pedestrian's
-/// body and gait are stable for the run. The stream is keyed by the stable
-/// agent id, which is unique across modes, so vehicle and pedestrian profiles
-/// never share a generator.
+/// The radius and gait draws come from the `profile` stream in a fixed order, so
+/// a pedestrian's body and gait are stable for the run; compliance comes from
+/// the separate `compliance` stream so it can be resampled without disturbing
+/// the physical draws. Both streams are keyed by the stable agent id, which is
+/// unique across modes, so no two agents share a generator.
 pub(crate) fn sample_pedestrian_profile(
     profile: &CompiledPedestrianProfile,
-    rng: &mut ChaCha20Rng,
+    profile_rng: &mut ChaCha20Rng,
+    compliance_rng: &mut ChaCha20Rng,
 ) -> PedestrianProfile {
     PedestrianProfile {
-        radius_m: profile.radius_m().sample(uniform01(rng)),
-        desired_speed_mps: profile.speed_mps().sample(uniform01(rng)),
+        radius_m: profile.radius_m().sample(uniform01(profile_rng)),
+        desired_speed_mps: profile.speed_mps().sample(uniform01(profile_rng)),
+        compliance: profile.compliance().sample(uniform01(compliance_rng)),
     }
 }
 
@@ -181,9 +190,16 @@ mod tests {
         let source = parse_scenario_source(PEDESTRIAN_CONSTANT).expect("parses");
         let scenario = CompiledScenario::compile(source).expect("compiles");
         let profile = scenario.pedestrian_profiles();
-        let sampled = sample_pedestrian_profile(profile, &mut derive_stream(1, STREAM_PROFILE, 0));
+        let sampled = sample_pedestrian_profile(
+            profile,
+            &mut derive_stream(1, STREAM_PROFILE, 0),
+            &mut derive_stream(1, STREAM_COMPLIANCE, 0),
+        );
         assert!((sampled.radius_m - 0.25).abs() < 1e-9);
         assert!((sampled.desired_speed_mps - 1.2).abs() < 1e-9);
+        // The constant scenario omits `pedestrian_profiles.compliance`, so it
+        // defaults to the fully compliant propensity.
+        assert!((sampled.compliance - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -192,9 +208,10 @@ mod tests {
         // the additive default envelope.
         let compiled = scenario();
         let profile = compiled.pedestrian_profiles();
-        let mut rng = derive_stream(9, STREAM_PROFILE, 3);
+        let mut profile_rng = derive_stream(9, STREAM_PROFILE, 3);
+        let mut compliance_rng = derive_stream(9, STREAM_COMPLIANCE, 3);
         for _ in 0..200 {
-            let sampled = sample_pedestrian_profile(profile, &mut rng);
+            let sampled = sample_pedestrian_profile(profile, &mut profile_rng, &mut compliance_rng);
             assert!(
                 sampled.radius_m >= profile.radius_m().min() - 1e-9
                     && sampled.radius_m <= profile.radius_m().max() + 1e-9,
@@ -206,6 +223,11 @@ mod tests {
                     && sampled.desired_speed_mps <= profile.speed_mps().max() + 1e-9,
                 "speed {} left its authored range",
                 sampled.desired_speed_mps
+            );
+            assert!(
+                (0.0..=1.0).contains(&sampled.compliance),
+                "compliance {} left [0, 1]",
+                sampled.compliance
             );
         }
     }

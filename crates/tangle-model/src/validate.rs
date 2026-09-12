@@ -64,6 +64,10 @@ pub enum DiagnosticCode {
     CrossingUnknownRegion,
     /// A crossing references a movement that is not declared.
     CrossingUnknownMovement,
+    /// A pedestrian signal declares no phases.
+    CrossingPedestrianSignalEmpty,
+    /// A pedestrian signal phase duration is non-finite or non-positive.
+    CrossingPedestrianSignalPhaseInvalid,
     /// A conflict region does not name exactly two distinct movements.
     ConflictArity,
     /// A conflict region references a movement that is not declared.
@@ -155,6 +159,8 @@ impl DiagnosticCode {
             Self::CrossingEmpty => "E_CROSSING_EMPTY",
             Self::CrossingUnknownRegion => "E_CROSSING_UNKNOWN_REGION",
             Self::CrossingUnknownMovement => "E_CROSSING_UNKNOWN_MOVEMENT",
+            Self::CrossingPedestrianSignalEmpty => "E_CROSSING_PEDESTRIAN_SIGNAL_EMPTY",
+            Self::CrossingPedestrianSignalPhaseInvalid => "E_CROSSING_PEDESTRIAN_SIGNAL_PHASE",
             Self::ConflictArity => "E_CONFLICT_ARITY",
             Self::ConflictUnknownMovement => "E_CONFLICT_UNKNOWN_MOVEMENT",
             Self::RuleUnknownMovement => "E_RULE_UNKNOWN_MOVEMENT",
@@ -679,7 +685,12 @@ fn validate_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>)
     for (field, range) in ranges {
         validate_profile_range(source, field, range, diagnostics);
     }
-    validate_compliance_range(source, source.profiles.compliance, diagnostics);
+    validate_compliance_range(
+        source,
+        "profiles.compliance",
+        source.profiles.compliance,
+        diagnostics,
+    );
 }
 
 fn validate_pedestrian_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
@@ -696,12 +707,19 @@ fn validate_pedestrian_profiles(source: &ScenarioSource, diagnostics: &mut Vec<D
     for (field, range) in ranges {
         validate_profile_range(source, field, range, diagnostics);
     }
+    validate_compliance_range(
+        source,
+        "pedestrian_profiles.compliance",
+        source.pedestrian_profiles.compliance,
+        diagnostics,
+    );
 }
 
 /// A compliance propensity is a fraction, so unlike the physical ranges it is
 /// allowed to be zero but must stay within `[0, 1]`.
 fn validate_compliance_range(
     source: &ScenarioSource,
+    field: &str,
     range: ProfileRangeSource,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -711,7 +729,7 @@ fn validate_compliance_range(
             DiagnosticCode::ProfileComplianceInvalid,
             Some(source.id.clone()),
             format!(
-                "profiles.compliance must be finite, within [0, 1], and non-inverted, got [{}, {}]",
+                "{field} must be finite, within [0, 1], and non-inverted, got [{}, {}]",
                 range.min, range.max
             ),
         ));
@@ -937,6 +955,30 @@ fn validate_crossings(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
                         crossing.id, movement
                     ),
                 ));
+            }
+        }
+        if let Some(signal) = &crossing.pedestrian_signal {
+            if signal.phases.is_empty() {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::CrossingPedestrianSignalEmpty,
+                    Some(crossing.id.clone()),
+                    format!(
+                        "crossing '{}' pedestrian signal needs at least one phase",
+                        crossing.id
+                    ),
+                ));
+            }
+            for (index, phase) in signal.phases.iter().enumerate() {
+                if !phase.duration_s.is_finite() || phase.duration_s <= 0.0 {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::CrossingPedestrianSignalPhaseInvalid,
+                        Some(crossing.id.clone()),
+                        format!(
+                            "crossing '{}' pedestrian signal phase {} duration must be finite and positive, got {}",
+                            crossing.id, index, phase.duration_s
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -1716,6 +1758,50 @@ mod tests {
     #[test]
     fn accepts_a_pedestrian_route_and_demand() {
         assert_eq!(validate(&base(PEDESTRIAN)), Vec::new());
+    }
+
+    #[test]
+    fn accepts_a_pedestrian_signal_and_compliance_range() {
+        let with_signal = PEDESTRIAN.replace(
+            "crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ] } ]",
+            "crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ], \
+             pedestrian_signal: { phases: [ { duration_s: 20.0, walk: true }, \
+             { duration_s: 20.0, walk: false } ] } } ]",
+        );
+        assert!(
+            with_signal.contains("pedestrian_signal"),
+            "fixture must be rewritten"
+        );
+        assert_eq!(validate(&base(&with_signal)), Vec::new());
+
+        let with_compliance = PEDESTRIAN.replace(
+            "pedestrian_profiles: { radius_m: { min: 0.2, max: 0.3 },\n            speed_mps: { min: 1.0, max: 1.6 } }",
+            "pedestrian_profiles: { radius_m: { min: 0.2, max: 0.3 },\n            speed_mps: { min: 1.0, max: 1.6 }, compliance: { min: 0.0, max: 0.8 } }",
+        );
+        assert_eq!(validate(&base(&with_compliance)), Vec::new());
+    }
+
+    #[test]
+    fn flags_pedestrian_signal_and_compliance_errors() {
+        let empty = PEDESTRIAN.replace(
+            "crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ] } ]",
+            "crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ], \
+             pedestrian_signal: { phases: [] } } ]",
+        );
+        assert!(codes(&base(&empty)).contains(&"E_CROSSING_PEDESTRIAN_SIGNAL_EMPTY"));
+
+        let bad_phase = PEDESTRIAN.replace(
+            "crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ] } ]",
+            "crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ], \
+             pedestrian_signal: { phases: [ { duration_s: 0.0, walk: true } ] } } ]",
+        );
+        assert!(codes(&base(&bad_phase)).contains(&"E_CROSSING_PEDESTRIAN_SIGNAL_PHASE"));
+
+        let bad_compliance = PEDESTRIAN.replace(
+            "pedestrian_profiles: { radius_m: { min: 0.2, max: 0.3 },\n            speed_mps: { min: 1.0, max: 1.6 } }",
+            "pedestrian_profiles: { radius_m: { min: 0.2, max: 0.3 },\n            speed_mps: { min: 1.0, max: 1.6 }, compliance: { min: 0.5, max: 1.5 } }",
+        );
+        assert!(codes(&base(&bad_compliance)).contains(&"E_PROFILE_COMPLIANCE"));
     }
 
     #[test]

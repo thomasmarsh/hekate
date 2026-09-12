@@ -1,12 +1,12 @@
 // Benchmark: a pedestrian crossing over a single road movement.
 //
 // One east-west road, one north-south walking path crossing it, a crossing
-// region over the road movement, a waiting area on the south kerb, one
-// pedestrian route through both, and demand for each mode. The layout is
-// expressed entirely from general primitives, so no field names a scenario
-// kind. Pedestrian signal compliance and vehicle yielding are later slices;
-// this benchmark exercises pedestrian bodies, demand, route assignment, and
-// admission into the shared world. See PHASE_1_PLAN.md Increment 3.
+// region over the road movement, a fixed-time pedestrian signal on the crossing,
+// a waiting area on the south kerb, one pedestrian route through both, and
+// demand for each mode. The layout is expressed entirely from general
+// primitives, so no field names a scenario kind. A full pedestrian compliance
+// range makes some pedestrians cross against the signal; vehicle yielding to an
+// occupied crossing is a later slice. See PHASE_1_PLAN.md Increment 3.
 {
   schema_version: 1,
   id: 'pedestrian_crossing_v1',
@@ -56,7 +56,17 @@
     { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0 },
   ],
   crossings: [
-    { id: 'road_crossing', region: 'crossing_zone', movements: [ 'ew_through' ] },
+    {
+      id: 'road_crossing',
+      region: 'crossing_zone',
+      movements: [ 'ew_through' ],
+      pedestrian_signal: {
+        phases: [
+          { duration_s: 18.0, walk: true },
+          { duration_s: 22.0, walk: false },
+        ],
+      },
+    },
   ],
   waiting_areas: [ { id: 'south_wait', region: 'south_kerb' } ],
   pedestrian_routes: [
@@ -96,5 +106,6 @@
   pedestrian_profiles: {
     radius_m: { min: 0.20, max: 0.30 },
     speed_mps: { min: 1.0, max: 1.6 },
+    compliance: { min: 0.2, max: 1.0 },
   },
 }

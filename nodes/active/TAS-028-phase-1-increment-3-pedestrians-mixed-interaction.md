@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T17:42:30Z
+updated: 2026-09-12T17:57:04Z
 summary: Phase 1 Increment 3 adds pedestrian bodies, demand, and waypoint/collision-avoidance control, contextual crossing-against-signal noncompliance, vehicle yielding to occupied crossings, and explicit controller interfaces so cars and pedestrians share one world, rule and event representation, and mixed benchmark.
-next: Add pedestrian signal compliance as a contextual choice over a physically possible movement, deciding only from the named `compliance` stream whether to cross against the signal, with no teleport and no special trajectory.
+next: Add vehicle yielding and stopping response to an occupied crossing in the shared rule, spatial-index, and event representation.
 ---
 
 # Outcome
@@ -306,4 +306,136 @@ pedestrian circle without a translation; exact swept queries belong to the
 broad-phase/collision-query increment.
 - `Event::Spawned` still does not carry the agent mode and `SceneBody::project`
 still draws every body as a vehicle (slice A's deferral, unchanged).
+
+## Slice C — pedestrian signal compliance
+
+A crossing now carries a fixed-time pedestrian signal, and a pedestrian makes a
+contextual choice to wait at it or cross against it. The choice is a choice over
+a physically possible movement: a compliance wait only reduces the commanded
+speed toward a bounded stopping profile, and a noncompliant crossing is
+unchanged waypoint-controller motion. No schema version 2 and no Phase 2 field
+was added.
+
+### Schema (additive to version 1)
+
+`crates/tangle-model/src/source.rs` adds:
+
+- `CrossingSource.pedestrian_signal: Option<PedestrianSignalSource>`, an
+  embedded fixed-time controller whose contiguous phases each carry a
+  `duration_s` and a `walk` flag. Omitted means an uncontrolled crossing, so
+  every existing document is unchanged. This is the crossing's pedestrian rule:
+  it names no movement and needs no vehicle signal, mirroring the
+  `stop_line_m`/`compliance` additive-field precedent and the `signals`
+  fixed-time controller precedent.
+- `PedestrianProfileSource.compliance: ProfileRangeSource`, the pedestrian's
+  crossing-compliance propensity in `[0, 1]`, serde-defaulted to `1.0` (fully
+  compliant), mirroring `ProfileSource.compliance`.
+
+`crates/tangle-model/src/validate.rs` adds
+`E_CROSSING_PEDESTRIAN_SIGNAL_EMPTY` and `E_CROSSING_PEDESTRIAN_SIGNAL_PHASE`
+(a signal needs a phase, and every phase duration must be finite and positive),
+reuses `E_PROFILE_COMPLIANCE` for the pedestrian propensity range, and applies
+the existing duplicate-id check to the embedded signal. `compiled.rs` compiles
+`CompiledCrossing::pedestrian_signal()` as `Option<CompiledPedestrianSignal>`
+with contiguous `CompiledPedestrianSignalPhase` offsets, `cycle_s`, and
+`walk_at(elapsed_s)` (half-open phases), and `CompiledPedestrianProfile` gains
+`compliance()`. `schemas/scenario-source.schema.json` is regenerated and the
+checked-in-schema drift test passes.
+
+### Kernel
+
+- `crates/tangle-sim/src/signal.rs` adds `PedestrianSignalColor { Walk, DontWalk
+}` and `pedestrian_walk_at`, the pedestrian-facing signal state derived from the
+  crossing's fixed-time phase clock (reusing the existing `SignalRuntime`), so
+  the state is a function of the crossing's elapsed and remaining cycle time.
+- `crates/tangle-sim/src/pedestrian_compliance.rs` is the documented decision
+  model card. A pedestrian approaching a signal-controlled crossing records a
+  `PedestrianComplianceDecision` (`action` Wait/Cross, `reason`, `signal`,
+  `crossing_gap_m`, `required_decel_mps2`). Inputs are the signal state, the
+  route distance to the crossing stop point, the current walking speed, the
+  urgency `required_deceleration = v²/(2·gap)`, and the stable propensity. The
+  rule mirrors the vehicle compliance model exactly:
+  `wait  when  required_deceleration <= bounded_deceleration * compliance`,
+  with the pedestrian's comfortable braking taken as the controller's own
+  bounded stopping deceleration (`pedestrian::MAX_DECEL_MPS2`, since the
+  pedestrian profile carries no brake parameter). Reasons are `Walk`,
+  `AtCrossing`, `CannotStop`, `CompliantWait`, and `NonCompliantCross`; the
+  comparison is inclusive, so the boundary decision is `Wait` (the documented
+  tie-breaker).
+- The propensity is drawn once per pedestrian from the **existing named
+  `compliance` stream**, keyed by the stable shared agent id
+  (`sample_pedestrian_profile` takes a separate `compliance` rng). Pedestrian
+  body and gait still come from `profile`; no physical draw moved, and `demand`
+  and `pedestrian_demand` are untouched. Vehicles and pedestrians never share an
+  agent id, so no compliance substream is shared, and the decision adds no
+  per-tick randomness: it is a deterministic function of its context.
+- `sim.rs` computes and records the decision before integrating each
+  pedestrian's step. A `Wait` decision only sets the speed target to the bounded
+  stopping profile
+  `wait_speed_target_mps = sqrt(2 * bounded_deceleration * compliance * max(gap - STOP_RESERVE_M, 0))`,
+  which is fed through the controller's `advance_speed`; the positive
+  `STOP_RESERVE_M` keeps the braking decision strictly inside the wait regime so
+  it cannot flicker, and the pedestrian stops just short of the crossing
+  waypoint. A `Cross` decision, including a noncompliant run, imposes nothing
+  and the pedestrian proceeds under ordinary waypoint control at its bounded
+  speed. There is no positional cap, no teleport, and no special trajectory.
+- New public surface: `Simulation::crossing_signal(CrossingId) ->
+  Option<PedestrianSignalColor>` (the observable signal-state seam),
+  `Simulation::agent_pedestrian_decision(AgentId)`,
+  `MotionSample::pedestrian_decision`, and the re-exported
+  `PedestrianSignalColor`, `PedestrianSignalAction`,
+  `PedestrianComplianceReason`, and `PedestrianComplianceDecision`.
+
+### Scenario
+
+`scenarios/benchmarks/pedestrian_crossing_v1.json5` now gives `road_crossing` a
+pedestrian signal (18 s walk, 22 s don't-walk) and a
+`pedestrian_profiles.compliance` range of `[0.2, 1.0]`, so one run exercises both
+a compliant wait and a noncompliant crossing.
+
+### Evidence
+
+- `crates/tangle-model/src/{source,validate,compiled}.rs` tests parse the new
+  crossing field and its additive defaults, flag the empty-signal and
+  bad-phase-duration diagnostics and an out-of-range pedestrian compliance
+  range, accept a complete signal, and compile phase offsets, `cycle_s`,
+  `walk_at`, and the pedestrian compliance accessor.
+  `crates/tangle-model/tests/fuzz_scenarios.rs` generates the embedded signal
+  (including non-positive phases) and the compliance range, so the
+  "arbitrary sources never panic" property covers them.
+- `crates/tangle-sim/src/pedestrian_compliance.rs` unit tests cover the walk,
+  at-crossing, compliant-wait, noncompliant-cross, and cannot-stop boundaries,
+  the inclusive tie-breaker, the zero-compliance limit, and the bounded-stop
+  waiting profile.
+- `crates/tangle-sim/tests/pedestrian_compliance.rs` (new, 7 tests): the
+  fixed-time signal phase boundaries and cycle wrap, an uncontrolled crossing
+  reporting no signal, a compliant pedestrian waiting before a forbidding signal
+  and crossing on the walk interval (never passing the crossing stop point,
+  never exceeding its bounded speed, and despawning), a zero-compliance
+  pedestrian recording the noncompliant choice and crossing the forbidding
+  signal under bounded speed, a per-step no-teleport bound for both beats,
+  same-seed reproducibility of the mixed trace, and `demand`/vehicle-arrival
+  isolation from the pedestrian compliance setting (the road arrival trace is
+  byte-identical for compliance `[0, 0]` and `[1, 1]`).
+- `crates/tangle-sim/src/rng.rs` proves a pedestrian `compliance` draw leaves the
+  vehicle `demand`, `profile`, and `compliance` sequences byte-identical.
+- The five gates pass on the final tree: `cargo test --workspace --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+  `braintree check nodes`. The walking trace golden, the scene golden, and the
+  Phase 1 baseline are unchanged; no vehicle behaviour changed.
+
+### Deferred to later slices
+
+- Vehicle yielding and stopping at an occupied crossing (slice D): no vehicle
+  reacts to a pedestrian, `nearest_leader` and `entry_clear` still act only on
+  the same path, so a vehicle on a green can still overlap a noncompliant
+  pedestrian that is crossing against the signal.
+- The waiting stop point is the crossing's route waypoint (the projected region
+  centroid), so a compliant pedestrian stops at the crossing rather than at a
+  kerbside waiting-area waypoint it may have already passed; treating a waiting
+  area as the staging hold point is later work.
+- `Event::Spawned` still does not carry the agent mode and `SceneBody::project`
+  still draws every body as a vehicle (slice A's deferral, unchanged); the
+  pedestrian decision is not yet projected into the presentation inspector.
 

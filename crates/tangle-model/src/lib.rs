@@ -19,20 +19,22 @@ mod validate;
 pub use compiled::{
     BoundaryId, CompiledBoundary, CompiledConflictRegion, CompiledCrossing, CompiledDemand,
     CompiledMovement, CompiledPath, CompiledPedestrianDemand, CompiledPedestrianProfile,
-    CompiledPedestrianRoute, CompiledPedestrianRouteShare, CompiledPolygon, CompiledPortal,
-    CompiledProfile, CompiledRegion, CompiledRouteShare, CompiledRule, CompiledScenario,
-    CompiledSignal, CompiledSignalHead, CompiledSignalPhase, CompiledWaitingArea, ConflictRegionId,
-    CrossingId, DemandId, IdMap, MovementId, PathId, PedestrianDemandId, PedestrianRouteId,
-    PortalId, ProfileRange, RegionId, RuleId, SignalId, WaitingAreaId,
+    CompiledPedestrianRoute, CompiledPedestrianRouteShare, CompiledPedestrianSignal,
+    CompiledPedestrianSignalPhase, CompiledPolygon, CompiledPortal, CompiledProfile,
+    CompiledRegion, CompiledRouteShare, CompiledRule, CompiledScenario, CompiledSignal,
+    CompiledSignalHead, CompiledSignalPhase, CompiledWaitingArea, ConflictRegionId, CrossingId,
+    DemandId, IdMap, MovementId, PathId, PedestrianDemandId, PedestrianRouteId, PortalId,
+    ProfileRange, RegionId, RuleId, SignalId, WaitingAreaId,
 };
 pub use schema::{scenario_schema, scenario_schema_json};
 pub use source::{
     ConflictRegionSource, CoordinateSystem, CrossingSource, DemandSource, MovementSource,
     ParseError, PathEnd, PathSource, PedestrianDemandSource, PedestrianProfileSource,
-    PedestrianRouteShareSource, PedestrianRouteSource, PointSource, PolygonSource,
-    PopulationSource, PortalSource, ProfileRangeSource, ProfileSource, RouteShareSource, RuleKind,
-    RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioSource, SignalColor, SignalHeadSource,
-    SignalPhaseSource, SignalSource, SignalStateSource, WaitingAreaSource, parse_scenario_source,
+    PedestrianRouteShareSource, PedestrianRouteSource, PedestrianSignalPhaseSource,
+    PedestrianSignalSource, PointSource, PolygonSource, PopulationSource, PortalSource,
+    ProfileRangeSource, ProfileSource, RouteShareSource, RuleKind, RuleSource,
+    SUPPORTED_SCHEMA_VERSION, ScenarioSource, SignalColor, SignalHeadSource, SignalPhaseSource,
+    SignalSource, SignalStateSource, WaitingAreaSource, parse_scenario_source,
 };
 pub use validate::{Diagnostic, DiagnosticCode, validate};
 

@@ -9,6 +9,7 @@ use glam::DVec2;
 use tangle_model::{MovementId, PathId, PedestrianRouteId};
 
 use crate::compliance::ComplianceDecision;
+use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
 
 /// Which mode of agent a slot holds.
@@ -103,6 +104,9 @@ pub(crate) struct AgentStore {
     /// Most recent signal-compliance decision, present for signal-controlled
     /// vehicles. `None` for vehicles with no signal rule.
     pub(crate) decision: Vec<Option<ComplianceDecision>>,
+    /// Most recent pedestrian signal-compliance decision, present for a
+    /// pedestrian approaching a signal-controlled crossing.
+    pub(crate) pedestrian_decision: Vec<Option<PedestrianComplianceDecision>>,
 }
 
 impl AgentStore {
@@ -125,6 +129,7 @@ impl AgentStore {
         self.pedestrian_profile.push(init.pedestrian_profile);
         self.pedestrian_waypoint_index.push(0);
         self.decision.push(None);
+        self.pedestrian_decision.push(None);
         id
     }
 
@@ -183,6 +188,7 @@ mod tests {
             pedestrian_profile: Some(PedestrianProfile {
                 radius_m: 0.25,
                 desired_speed_mps: 1.2,
+                compliance: 1.0,
             }),
             ..init(5.0)
         });

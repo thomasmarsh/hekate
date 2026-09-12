@@ -71,6 +71,10 @@
       "description": "Pedestrian physical and behavior profile distributions.",
       "$ref": "#/$defs/PedestrianProfileSource",
       "default": {
+        "compliance": {
+          "max": 1.0,
+          "min": 1.0
+        },
         "radius_m": {
           "max": 0.3,
           "min": 0.2
@@ -253,6 +257,18 @@
             "type": "string"
           }
         },
+        "pedestrian_signal": {
+          "description": "Fixed-time pedestrian signal rule for this crossing.\n\nOmitted (the default) is an uncontrolled crossing: pedestrians cross it\nfreely, subject to ordinary interaction. Additive schema version 1\nfield, mirroring the `stop_line_m`/`compliance` precedent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PedestrianSignalSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "region": {
           "description": "Traversable region the crossing occupies.",
           "type": "string"
@@ -411,9 +427,17 @@
       ]
     },
     "PedestrianProfileSource": {
-      "description": "Pedestrian physical and behavior profile distributions.\n\nEvery generated pedestrian samples one value from each range from the\n`profile` random stream using its stable agent id, so its body and gait are\nstable for the run. A pedestrian body is a circle, so the physical range is\na radius rather than a length and width.",
+      "description": "Pedestrian physical and behavior profile distributions.\n\nEvery generated pedestrian samples one value from each range from the\n`profile` random stream using its stable agent id, so its body and gait are\nstable for the run. Its signal-compliance propensity is sampled from the\nseparate `compliance` stream under the same agent id. A pedestrian body is a\ncircle, so the physical range is a radius rather than a length and width.",
       "type": "object",
       "properties": {
+        "compliance": {
+          "description": "Signal-compliance propensity, a fraction of the pedestrian's bounded\nstopping deceleration they are willing to use to wait at a crossing.\n\n`1.0` waits whenever a bounded stop is possible and `0.0` never waits.\nOne value per pedestrian is drawn from the `compliance` random stream.\nAdditive schema version 1 field: omitted means the fully compliant\ndefault.",
+          "$ref": "#/$defs/ProfileRangeSource",
+          "default": {
+            "max": 1.0,
+            "min": 1.0
+          }
+        },
         "radius_m": {
           "description": "Body radius in metres.",
           "$ref": "#/$defs/ProfileRangeSource"
@@ -492,6 +516,43 @@
         "from",
         "to",
         "path"
+      ]
+    },
+    "PedestrianSignalPhaseSource": {
+      "description": "One fixed-time pedestrian signal phase.",
+      "type": "object",
+      "properties": {
+        "duration_s": {
+          "description": "Phase duration in seconds.",
+          "type": "number",
+          "format": "double"
+        },
+        "walk": {
+          "description": "Whether pedestrians may cross during this phase.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "duration_s",
+        "walk"
+      ]
+    },
+    "PedestrianSignalSource": {
+      "description": "A fixed-time pedestrian signal rule embedded in one crossing.\n\nIt is the pedestrian analogue of [`SignalSource`] but its controlled object\nis the owning crossing rather than a movement, so a pedestrian rule needs no\nvehicle signal. Its phases alternate a walk interval, during which crossing\nis permitted, and a don't-walk interval, during which the signal forbids\ncrossing; the phases are contiguous and cover the cycle.",
+      "type": "object",
+      "properties": {
+        "phases": {
+          "description": "Phases in cycle order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PedestrianSignalPhaseSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "phases"
       ]
     },
     "PointSource": {

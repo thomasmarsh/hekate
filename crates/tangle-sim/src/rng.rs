@@ -161,6 +161,38 @@ mod tests {
     }
 
     #[test]
+    fn pedestrian_compliance_draws_do_not_perturb_other_streams() {
+        // A pedestrian draws its crossing-compliance propensity from the
+        // `compliance` stream under its own stable agent id. The vehicle
+        // `demand`, `profile`, and `compliance` sequences under a different
+        // agent id are therefore byte-identical with and without pedestrian
+        // compliance draws.
+        fn vehicle_streams(
+            root: u64,
+            vehicle_id: u32,
+            pedestrian_id: u32,
+            pedestrian_draws: usize,
+        ) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+            let mut pedestrian = derive_stream(root, STREAM_COMPLIANCE, pedestrian_id);
+            for _ in 0..pedestrian_draws {
+                let _ = uniform01(&mut pedestrian);
+            }
+
+            let sequence = |name: &str| {
+                let mut rng = derive_stream(root, name, vehicle_id);
+                (0..8).map(|_| rng.next_u64()).collect()
+            };
+            (
+                sequence(STREAM_DEMAND),
+                sequence(STREAM_PROFILE),
+                sequence(STREAM_COMPLIANCE),
+            )
+        }
+
+        assert_eq!(vehicle_streams(31, 1, 2, 0), vehicle_streams(31, 1, 2, 4));
+    }
+
+    #[test]
     fn an_extra_compliance_draw_does_not_perturb_demand_or_profile() {
         // The stream-isolation contract: drawing from one named stream cannot
         // reshuffle another, so an added compliance draw leaves the demand and
