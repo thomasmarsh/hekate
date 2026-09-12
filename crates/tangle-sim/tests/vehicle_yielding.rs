@@ -25,7 +25,12 @@ const STEP_S: f64 = 0.05;
 const BENCHMARK: &str = include_str!("../../../scenarios/benchmarks/pedestrian_crossing_v1.json5");
 
 /// The benchmark's crossing entry along the road, in metres on the x axis.
+///
+/// The crossing region spans `x in [-2, 2]`, so a forward vehicle (entering at
+/// the path start) reaches the entry at `x = -2`; a backward vehicle (entering at
+/// the path end) reaches it at `x = +2`.
 const CROSSING_ENTRY_X: f64 = -2.0;
+const BACKWARD_CROSSING_ENTRY_X: f64 = 2.0;
 
 fn scenario(text: &str) -> CompiledScenario {
     let source = parse_scenario_source(text).expect("scenario parses");
@@ -44,6 +49,34 @@ fn without_yield_rule() -> String {
     assert!(
         text.len() < BENCHMARK.len(),
         "the benchmark's yield rule block was not found verbatim"
+    );
+    text
+}
+
+/// The benchmark with its road movement reversed, so vehicles enter at the path
+/// end and travel backward (`direction = -1`) onto the same crossing.
+///
+/// `movement_entry` sends a movement backward when its `from` portal is on the
+/// path end. Reversing only the movement's portals and its demand portal leaves
+/// every other authored primitive (the crossing, its pedestrian signal, the
+/// pedestrian route, and the `yield` rule) byte-identical, so the same fixture
+/// exercises the yield path in the backward direction.
+fn backward_benchmark() -> String {
+    let text = BENCHMARK
+        .replace(
+            "{ id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0 }",
+            "{ id: 'ew_through', from: 'east_exit', to: 'west_entry', path: 'ew_road', priority: 0 }",
+        )
+        .replace("portal: 'west_entry',", "portal: 'east_exit',");
+    assert_eq!(
+        text.matches("from: 'east_exit'").count(),
+        1,
+        "the benchmark's road movement was not reversed verbatim"
+    );
+    assert_eq!(
+        text.matches("portal: 'east_exit',").count(),
+        1,
+        "the benchmark's vehicle demand portal was not redirected to the path end"
     );
     text
 }
@@ -403,6 +436,52 @@ fn the_mixed_yielding_run_reproduces_for_the_same_seed() {
     }
     assert_eq!(trace(7), trace(7));
     assert_ne!(trace(7), trace(8), "different seeds diverge");
+}
+
+#[test]
+fn a_backward_vehicle_brakes_before_an_occupied_crossing() {
+    // A movement that enters at the path end travels backward. The yield path
+    // must use one progress convention: when the entry was measured as travel
+    // progress while the vehicle front used the signed convention, the gap was
+    // a whole path length too large for `direction = -1`, so a backward vehicle
+    // emitted `Event::Yielded` and reported yielding without ever braking. This
+    // runs the same benchmark with only the road movement reversed.
+    let text = backward_benchmark();
+    let mut saw_yield = false;
+    let mut min_yielding_speed = f64::INFINITY;
+    for seed in 0..6u64 {
+        let mut sim = sim(&text, seed);
+        for _ in 0..4000 {
+            let events: Vec<Event> = sim.step().events().to_vec();
+            saw_yield |= events
+                .iter()
+                .any(|event| matches!(event, Event::Yielded { yielding: true, .. }));
+            for sample in agents(&sim) {
+                let motion = sample.motion.expect("full detail");
+                if motion.mode != AgentMode::Vehicle
+                    || sim.agent_yield_crossing(sample.id).is_none()
+                {
+                    continue;
+                }
+                // The leading bumper travels toward smaller x, so it reaches the
+                // region's +x face; it must hold clear of it.
+                let front = sample.position.x - motion.body_length_m * 0.5;
+                assert!(
+                    front >= BACKWARD_CROSSING_ENTRY_X - 1e-6,
+                    "seed {seed}: agent {} yielded with its front bumper at {front}, \
+                     past the crossing entry",
+                    sample.id.get()
+                );
+                min_yielding_speed = min_yielding_speed.min(motion.speed_mps);
+            }
+        }
+    }
+    assert!(saw_yield, "no backward vehicle ever yielded");
+    assert!(
+        min_yielding_speed < 1.0,
+        "a backward yielding vehicle must brake to a stop before the crossing, \
+         lowest yielding speed {min_yielding_speed} m/s"
+    );
 }
 
 #[test]

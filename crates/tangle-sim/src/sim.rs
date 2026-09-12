@@ -67,14 +67,15 @@ use crate::units::Seconds;
 /// check; exact box queries spanning crossing paths are Increment 4 work.
 const MIN_SPAWN_CLEARANCE_M: f64 = 1.0;
 
-/// Extra metres added around a crossing region's bounding box when querying the
-/// shared spatial index for candidate bodies.
+/// Minimum metres added around a crossing region's bounding box when querying
+/// the shared spatial index for candidate bodies.
 ///
-/// It only widens the candidate query: the query covers the largest pedestrian
-/// radius (0.30 m) plus a buffer, and the exact circle-versus-ring test then
-/// decides whether a body actually occupies the region. A margin keeps the
-/// candidate set independent of any one sampled body's size.
-const CROSSING_QUERY_MARGIN_M: f64 = 0.5;
+/// [`Simulation::crossing_query_margin_m`] widens by the scenario's largest
+/// authored pedestrian radius and never narrows below this floor. It only
+/// widens the candidate query: the exact circle-versus-ring test still decides
+/// whether a body actually occupies the region, so a margin keeps the candidate
+/// set independent of any one sampled body's size.
+const MIN_CROSSING_QUERY_MARGIN_M: f64 = 0.5;
 
 /// Metres short of a crossing entry a yielding vehicle comes to rest.
 ///
@@ -1134,12 +1135,18 @@ impl Simulation {
         best.map(|(crossing, _)| crossing)
     }
 
-    /// Travel progress of a crossing region's entry along a vehicle path: the
-    /// least progress among the region's ring vertices projected onto the path.
+    /// Directional path progress (`direction * arc`) of a crossing region's
+    /// entry along a vehicle path: the least progress among the region's ring
+    /// vertices projected onto the path.
     ///
-    /// That is the first point of the region the vehicle reaches. Using the
-    /// crossing's shared authored region keeps its geometry and its vehicle
-    /// rule in one representation.
+    /// That is the first point of the region the vehicle reaches. The progress
+    /// uses the same `direction`-signed convention as [`Self::signal_decision`]
+    /// and [`Self::nearest_leader`], so a vehicle front
+    /// (`direction * distance_m + body_length/2`) and this entry are directly
+    /// comparable in either travel direction; mixing in the pedestrian helper's
+    /// travel-progress convention would offset a backward movement by the whole
+    /// path length. Using the crossing's shared authored region keeps its
+    /// geometry and its vehicle rule in one representation.
     fn crossing_entry_progress(
         &self,
         crossing: CrossingId,
@@ -1148,14 +1155,29 @@ impl Simulation {
     ) -> Option<f64> {
         let region = self.scenario.crossing(crossing)?.region();
         let ring = self.scenario.region(region)?.polygon().ring();
-        let length = path.length();
         let mut entry: Option<f64> = None;
         for &vertex in ring {
-            let arc_m = pedestrian::closest_arc(path, vertex);
-            let progress = pedestrian::route_progress_m(arc_m, direction, length);
+            let progress = direction * pedestrian::closest_arc(path, vertex);
             entry = Some(entry.map_or(progress, |current| current.min(progress)));
         }
         entry
+    }
+
+    /// Candidate-query margin in metres around a crossing region's bounding box.
+    ///
+    /// The widest body the occupancy test must consider is a pedestrian circle
+    /// of the scenario's largest authored radius, so the margin is that radius:
+    /// a larger body can reach into the region from farther outside the box. The
+    /// floor covers a non-finite or degenerate authored range. This keeps the
+    /// candidate set permissive for any sampled body rather than trusting a
+    /// fixed constant against an unbounded authored radius.
+    fn crossing_query_margin_m(&self) -> f64 {
+        let radius_m = self.scenario.pedestrian_profiles().radius_m().max();
+        if radius_m.is_finite() && radius_m > MIN_CROSSING_QUERY_MARGIN_M {
+            radius_m
+        } else {
+            MIN_CROSSING_QUERY_MARGIN_M
+        }
     }
 
     /// Stop constraint for a vehicle yielding to an occupied crossing.
@@ -1201,7 +1223,7 @@ impl Simulation {
             return false;
         };
         let bounds = bounding_box(ring);
-        let margin = DVec2::splat(CROSSING_QUERY_MARGIN_M);
+        let margin = DVec2::splat(self.crossing_query_margin_m());
         self.spatial
             .candidates_in_aabb(bounds.0 - margin, bounds.1 + margin, &mut self.candidates);
         for candidate in &self.candidates {
@@ -2021,5 +2043,84 @@ mod tests {
         let mut sim = Simulation::new(scenario, RunConfig::new(0)).expect("builds");
         assert!(sim.step().is_empty());
         assert_eq!(sim.agent_count(), 0);
+    }
+
+    /// A minimal crossing scenario whose authored pedestrian radius is far
+    /// above the candidate-margin floor.
+    const WIDE_PEDESTRIAN_CROSSING: &str = r#"
+    {
+      schema_version: 1,
+      id: 'wide_pedestrian_crossing',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      regions: [
+        {
+          id: 'crossing_zone',
+          points: [
+            { x: -2.0, y: -4.0 },
+            { x: 2.0, y: -4.0 },
+            { x: 2.0, y: 4.0 },
+            { x: -2.0, y: 4.0 },
+          ],
+        },
+      ],
+      paths: [ { id: 'road', points: [ { x: -40.0, y: 0.0 }, { x: 40.0, y: 0.0 } ] } ],
+      portals: [
+        { id: 'west_entry', path: 'road', end: 'start', width_m: 7.0 },
+        { id: 'east_exit', path: 'road', end: 'end', width_m: 7.0 },
+      ],
+      movements: [
+        { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'road', priority: 0 },
+      ],
+      crossings: [
+        { id: 'road_crossing', region: 'crossing_zone', movements: [ 'ew_through' ] },
+      ],
+      rules: [ { id: 'yield_to_road_crossing', movement: 'ew_through', kind: 'yield' } ],
+      demand: [
+        {
+          id: 'road_inflow',
+          portal: 'west_entry',
+          rate_vph: 1.0,
+          routes: [ { movement: 'ew_through', weight: 1.0 } ],
+        },
+      ],
+      pedestrian_profiles: {
+        radius_m: { min: 4.0, max: 4.0 },
+        speed_mps: { min: 1.0, max: 1.6 },
+      },
+    }
+    "#;
+
+    /// A body whose centre is outside the region's widened bounding box still
+    /// reaches into the crossing, so the candidate query must widen by the
+    /// authored radius rather than a fixed constant.
+    #[test]
+    fn the_crossing_candidate_query_covers_a_far_over_large_pedestrian() {
+        let source = parse_scenario_source(WIDE_PEDESTRIAN_CROSSING).expect("scenario parses");
+        let scenario = CompiledScenario::compile(source).expect("scenario compiles");
+        let mut sim = Simulation::new(scenario, RunConfig::new(0)).expect("simulation builds");
+        // The crossing spans x in [-2, 2]; the centre at x = 5.9 is 3.9 m past
+        // the +x face, beyond both the 0.5 m floor and the grid cell that covers
+        // the widened box, yet within the 4.0 m body radius. Only a margin
+        // derived from the authored radius returns it as a candidate.
+        sim.agents.push(AgentInit {
+            mode: AgentMode::Pedestrian,
+            path: PathId::from_index(0),
+            distance_m: 45.9,
+            speed_mps: 0.0,
+            position: DVec2::new(5.9, 0.0),
+            heading_rad: 0.0,
+            body_length_m: 8.0,
+            body_width_m: 8.0,
+            direction: 1.0,
+            movement: None,
+            profile: None,
+            pedestrian_route: None,
+            pedestrian_profile: None,
+        });
+        sim.spatial.rebuild(&sim.agents);
+        assert!(
+            sim.crossing_occupied(CrossingId::from_index(0)),
+            "a far over-large pedestrian body reaching into the crossing must be a candidate"
+        );
     }
 }
