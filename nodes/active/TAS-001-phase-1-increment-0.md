@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T01:30:53Z
+updated: 2026-09-12T02:29:21Z
 summary: Deliver Phase 1 Increment 0, the pinned workspace and visible walking skeleton.
-next: [[TAS-002-rust-workspace-ci]]
+next: [[TAS-003-scenario-source-parse]]
 ---
 
 # Outcome
