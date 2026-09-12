@@ -181,7 +181,7 @@ mod tests {
     use glam::DVec2;
     use tangle_model::{CompiledScenario, parse_scenario_source};
     use tangle_present::{
-        BackendCapabilities, FrameStatus, Overlays, SceneGeometry, Speed, Viewport,
+        BackendCapabilities, FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport,
     };
     use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
@@ -316,6 +316,7 @@ mod tests {
             geometry: Arc::new(SceneGeometry::from_scenario(&scenario)),
             bodies: Vec::new(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
     }
 

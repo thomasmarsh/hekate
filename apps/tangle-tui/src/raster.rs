@@ -7,7 +7,9 @@
 //! world therefore covers twice as many columns as rows.
 
 use glam::DVec2;
-use tangle_present::{SceneFrame, Viewport};
+use std::collections::BTreeMap;
+use tangle_present::{BodyEmphasis, SceneFrame, Viewport};
+use tangle_sim::EventKind;
 
 use crate::grid::{Cell, CellGrid};
 use crate::palette::Rgb;
@@ -47,6 +49,55 @@ pub const SELECTED_COLOR: Rgb = Rgb::new(255, 140, 51);
 pub const SELECTED_BACKGROUND: Rgb = Rgb::new(64, 30, 8);
 /// Velocity-vector color.
 pub const VECTOR_COLOR: Rgb = Rgb::new(89, 179, 255);
+/// Contact emphasis color.
+pub const COLLISION_COLOR: Rgb = Rgb::new(242, 64, 64);
+/// Near-miss emphasis color.
+pub const NEAR_MISS_COLOR: Rgb = Rgb::new(250, 186, 38);
+/// Violation emphasis color.
+pub const VIOLATION_COLOR: Rgb = Rgb::new(217, 89, 242);
+/// Standstill emphasis color.
+pub const QUEUE_COLOR: Rgb = Rgb::new(89, 191, 242);
+/// Controller-state emphasis color.
+pub const CONTROL_COLOR: Rgb = Rgb::new(140, 217, 140);
+/// Occupied-region overlay color.
+pub const OCCUPIED_COLOR: Rgb = Rgb::new(250, 158, 46);
+
+/// Color one body emphasis draws.
+pub const fn emphasis_color(emphasis: BodyEmphasis) -> Rgb {
+    match emphasis {
+        BodyEmphasis::Collision => COLLISION_COLOR,
+        BodyEmphasis::NearMiss => NEAR_MISS_COLOR,
+        BodyEmphasis::Violation => VIOLATION_COLOR,
+        BodyEmphasis::Queue => QUEUE_COLOR,
+        BodyEmphasis::ControlTransition => CONTROL_COLOR,
+    }
+}
+
+/// Glyph one safety-marker kind draws, or `None` for a record with no marker.
+pub const fn marker_glyph(kind: EventKind) -> Option<char> {
+    match kind {
+        EventKind::Collision => Some('X'),
+        EventKind::NearMiss => Some('~'),
+        EventKind::Violation => Some('!'),
+        EventKind::Entry | EventKind::Exit => Some('x'),
+        EventKind::Queue => Some('q'),
+        EventKind::Yielded | EventKind::ControlTransition => Some('c'),
+        EventKind::Spawned | EventKind::Despawned => None,
+    }
+}
+
+/// Color one safety-marker kind draws.
+pub const fn marker_color(kind: EventKind) -> Rgb {
+    match kind {
+        EventKind::Collision => COLLISION_COLOR,
+        EventKind::NearMiss => NEAR_MISS_COLOR,
+        EventKind::Violation => VIOLATION_COLOR,
+        EventKind::Entry | EventKind::Exit => OCCUPIED_COLOR,
+        EventKind::Queue => QUEUE_COLOR,
+        EventKind::Yielded | EventKind::ControlTransition => CONTROL_COLOR,
+        EventKind::Spawned | EventKind::Despawned => BODY_COLOR,
+    }
+}
 
 const PATH_GLYPH: char = '*';
 const PORTAL_GLYPH: char = '=';
@@ -60,6 +111,8 @@ const RULE_GLYPH: char = 'o';
 const SIGNAL_GLYPH: char = 'S';
 const BODY_GLYPH: char = '#';
 const VECTOR_GLYPH: char = '.';
+/// Glyph traced along an occupied region's ring.
+const OCCUPIED_GLYPH: char = 'x';
 /// Half-width of a rendered signal-head gate in world metres.
 pub const SIGNAL_GATE_HALF_WIDTH_M: f64 = 1.5;
 /// Perpendicular offset of a rendered rule marker from its movement entry, in
@@ -116,7 +169,12 @@ impl Rasterizer {
         if frame.overlays.geometry {
             self.draw_geometry(&mut grid, frame);
         }
-        self.draw_bodies(&mut grid, frame);
+        // One emphasis per emphasized body, so a body is styled once.
+        let emphasis: BTreeMap<usize, BodyEmphasis> = frame.body_emphasis().into_iter().collect();
+        self.draw_bodies(&mut grid, frame, &emphasis);
+        if frame.overlays.safety {
+            self.draw_safety(&mut grid, frame);
+        }
         if frame.overlays.vectors {
             self.draw_vectors(&mut grid, frame);
         }
@@ -239,7 +297,12 @@ impl Rasterizer {
         }
     }
 
-    fn draw_bodies(&self, grid: &mut CellGrid, frame: &SceneFrame) {
+    fn draw_bodies(
+        &self,
+        grid: &mut CellGrid,
+        frame: &SceneFrame,
+        emphasis: &BTreeMap<usize, BodyEmphasis>,
+    ) {
         for body in &frame.bodies {
             let selected = frame.status.selection == Some(body.id);
             let (sin, cos) = body.heading_rad.sin_cos();
@@ -285,6 +348,8 @@ impl Rasterizer {
 
             let (fg, bg) = if selected {
                 (SELECTED_COLOR, SELECTED_BACKGROUND)
+            } else if let Some(emphasis) = emphasis.get(&body.id) {
+                (emphasis_color(*emphasis), BACKGROUND)
             } else {
                 (BODY_COLOR, BACKGROUND)
             };
@@ -304,6 +369,30 @@ impl Rasterizer {
             // Always mark the center so a sub-cell body stays visible.
             let center = self.project(frame.viewport, body.position);
             grid.put(center.0.round() as i64, center.1.round() as i64, cell);
+        }
+    }
+
+    /// Draw the frame's safety overlays: occupied-region rings and event
+    /// markers, both derived from the frame's projected safety data.
+    fn draw_safety(&self, grid: &mut CellGrid, frame: &SceneFrame) {
+        let occupied = Cell::new(OCCUPIED_GLYPH, OCCUPIED_COLOR, BACKGROUND);
+        for region in frame.occupied_regions() {
+            let Some(points) = frame.region_points(region.region()) else {
+                continue;
+            };
+            self.draw_ring(grid, frame.viewport, points, occupied);
+        }
+
+        for marker in frame.safety_markers() {
+            let Some(glyph) = marker_glyph(marker.kind()) else {
+                continue;
+            };
+            let point = self.project(frame.viewport, marker.position());
+            grid.put(
+                point.0.round() as i64,
+                point.1.round() as i64,
+                Cell::new(glyph, marker_color(marker.kind()), BACKGROUND),
+            );
         }
     }
 
@@ -362,7 +451,7 @@ mod tests {
     use std::sync::Arc;
 
     use tangle_model::{CompiledScenario, parse_scenario_source};
-    use tangle_present::{FrameStatus, Overlays, SceneGeometry, Speed, Viewport};
+    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport};
     use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
     fn scenario() -> CompiledScenario {
@@ -401,6 +490,7 @@ mod tests {
                 .map(|sample| tangle_present::SceneBody::project(&[], sample, 0.0))
                 .collect(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
     }
 
@@ -447,6 +537,7 @@ mod tests {
             geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
             bodies: Vec::new(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
     }
 

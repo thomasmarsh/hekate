@@ -229,6 +229,7 @@ fn handle_key(session: &mut ViewerSession, key: KeyEvent) -> bool {
         KeyCode::Char('n') => session.apply(ViewCommand::Restart(RestartMode::NextSeed)),
         KeyCode::Char('g') => session.apply(ViewCommand::ToggleOverlay(Overlay::Geometry)),
         KeyCode::Char('v') => session.apply(ViewCommand::ToggleOverlay(Overlay::Vectors)),
+        KeyCode::Char('b') => session.apply(ViewCommand::ToggleOverlay(Overlay::Safety)),
         KeyCode::Tab => session.select_next(),
         KeyCode::Esc => session.apply(ViewCommand::ClearSelection),
         KeyCode::Char('+' | '=') => session.apply(ViewCommand::Zoom(ZOOM_IN)),

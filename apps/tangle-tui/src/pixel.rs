@@ -8,15 +8,17 @@
 //! pixels, so the picture stays square when the terminal scales the image to a
 //! cell rectangle.
 
+use std::collections::BTreeMap;
+
 use glam::DVec2;
-use tangle_present::{SceneFrame, Viewport};
+use tangle_present::{BodyEmphasis, SceneFrame, Viewport};
 
 use crate::palette::Rgb;
 use crate::raster::{
     BACKGROUND, BODY_COLOR, BOUNDARY_COLOR, CELL_ASPECT, CONFLICT_COLOR, CROSSING_COLOR,
-    MOVEMENT_COLOR, PATH_COLOR, PORTAL_COLOR, REGION_COLOR, RULE_COLOR, RULE_MARKER_OFFSET_M,
-    Rasterizer, SELECTED_BACKGROUND, SELECTED_COLOR, SIGNAL_COLOR, SIGNAL_GATE_HALF_WIDTH_M,
-    VECTOR_COLOR,
+    MOVEMENT_COLOR, OCCUPIED_COLOR, PATH_COLOR, PORTAL_COLOR, REGION_COLOR, RULE_COLOR,
+    RULE_MARKER_OFFSET_M, Rasterizer, SELECTED_BACKGROUND, SELECTED_COLOR, SIGNAL_COLOR,
+    SIGNAL_GATE_HALF_WIDTH_M, VECTOR_COLOR, emphasis_color, marker_color, marker_glyph,
 };
 
 /// Default pixels per terminal column.
@@ -180,7 +182,12 @@ impl PixelRasterizer {
         if frame.overlays.geometry {
             self.draw_geometry(&mut image, frame);
         }
-        self.draw_bodies(&mut image, frame);
+        // One emphasis per emphasized body, so a body is styled once.
+        let emphasis: BTreeMap<usize, BodyEmphasis> = frame.body_emphasis().into_iter().collect();
+        self.draw_bodies(&mut image, frame, &emphasis);
+        if frame.overlays.safety {
+            self.draw_safety(&mut image, frame);
+        }
         if frame.overlays.vectors {
             self.draw_vectors(&mut image, frame);
         }
@@ -288,7 +295,12 @@ impl PixelRasterizer {
         }
     }
 
-    fn draw_bodies(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+    fn draw_bodies(
+        &self,
+        image: &mut RgbaImage,
+        frame: &SceneFrame,
+        emphasis: &BTreeMap<usize, BodyEmphasis>,
+    ) {
         for body in &frame.bodies {
             let selected = frame.status.selection == Some(body.id);
             let (sin, cos) = body.heading_rad.sin_cos();
@@ -334,6 +346,9 @@ impl PixelRasterizer {
 
             let (fill, outline) = if selected {
                 (SELECTED_COLOR, SELECTED_BACKGROUND)
+            } else if let Some(emphasis) = emphasis.get(&body.id) {
+                let color = emphasis_color(*emphasis);
+                (color, color)
             } else {
                 (BODY_COLOR, BODY_COLOR)
             };
@@ -369,6 +384,28 @@ impl PixelRasterizer {
         }
     }
 
+    /// Draw the frame's safety overlays: occupied-region outlines and event
+    /// markers, both derived from the frame's projected safety data.
+    fn draw_safety(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+        for region in frame.occupied_regions() {
+            let Some(points) = frame.region_points(region.region()) else {
+                continue;
+            };
+            self.draw_ring(image, frame.viewport, points, OCCUPIED_COLOR);
+        }
+
+        for marker in frame.safety_markers() {
+            let Some(_) = marker_glyph(marker.kind()) else {
+                continue;
+            };
+            let color = marker_color(marker.kind());
+            let (x, y) = self.project(frame.viewport, marker.position());
+            // A cross, so a marker stays visible over a body's outline.
+            image.segment((x - 2.0, y), (x + 2.0, y), color, 0);
+            image.segment((x, y - 2.0), (x, y + 2.0), color, 0);
+        }
+    }
+
     fn draw_vectors(&self, image: &mut RgbaImage, frame: &SceneFrame) {
         for body in &frame.bodies {
             let Some(speed) = body.speed_mps else {
@@ -393,7 +430,7 @@ mod tests {
     use std::sync::Arc;
 
     use tangle_model::{CompiledScenario, parse_scenario_source};
-    use tangle_present::{FrameStatus, Overlays, SceneGeometry, Speed};
+    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed};
     use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
     fn scenario() -> CompiledScenario {
@@ -432,6 +469,7 @@ mod tests {
                 .map(|sample| tangle_present::SceneBody::project(&[], sample, 0.0))
                 .collect(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
     }
 
@@ -483,6 +521,7 @@ mod tests {
             geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
             bodies: Vec::new(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
     }
 

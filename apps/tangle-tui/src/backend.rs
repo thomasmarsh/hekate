@@ -222,7 +222,9 @@ mod tests {
     use super::*;
     use glam::DVec2;
     use tangle_model::parse_scenario_source;
-    use tangle_present::{FrameStatus, Overlays, SceneBody, SceneGeometry, Speed, Viewport};
+    use tangle_present::{
+        FrameStatus, Overlays, SafetyOverlay, SceneBody, SceneGeometry, Speed, Viewport,
+    };
     use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
     fn scenario() -> Arc<CompiledScenario> {
@@ -261,6 +263,7 @@ mod tests {
                 .map(|sample| SceneBody::project(&[], sample, 0.0))
                 .collect(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
     }
 

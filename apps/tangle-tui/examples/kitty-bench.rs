@@ -26,9 +26,10 @@ use std::time::{Duration, Instant};
 use glam::DVec2;
 use tangle_model::CompiledScenario;
 use tangle_present::{
-    BodyKind, FrameStatus, Overlays, RendererBackend, SceneBody, SceneFrame, SceneGeometry, Speed,
-    Viewport, load_scenario,
+    FrameStatus, Overlays, RendererBackend, SafetyOverlay, SceneBody, SceneFrame, SceneGeometry,
+    Speed, Viewport, load_scenario,
 };
+use tangle_sim::AgentMode;
 use tangle_tui::{KittyBackend, Multiplexer, TuiSession};
 
 /// The example's boxed error type, matching the backend contract.
@@ -127,7 +128,7 @@ fn measure_dense<W: Write>(
                 heading_rad: (index as f64 * 0.11).sin(),
                 length_m: 2.6,
                 width_m: 1.2,
-                kind: BodyKind::Vehicle,
+                mode: AgentMode::Vehicle,
                 speed_mps: Some(6.0),
                 path: None,
                 path_distance_m: None,
@@ -152,6 +153,7 @@ fn measure_dense<W: Write>(
         geometry,
         bodies,
         overlays: Overlays::default(),
+        safety: SafetyOverlay::default(),
     };
 
     for _ in 0..10 {

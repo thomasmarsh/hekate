@@ -8,7 +8,9 @@
 use std::sync::Arc;
 
 use tangle_model::CompiledScenario;
-use tangle_present::{SceneBody, SceneFrame, decision_summary, intent_summary, profile_summary};
+use tangle_present::{
+    SceneBody, SceneFrame, decision_summary, event_summary, intent_summary, profile_summary,
+};
 
 use crate::backend::RunInfo;
 
@@ -100,21 +102,23 @@ impl Hud {
         match frame.status.selection {
             Some(id) => frame.body(id).map_or_else(
                 || format!("Agent #{id} is no longer alive."),
-                |body| self.describe(body),
+                |body| self.describe(body, frame),
             ),
             None => "\
 space pause   . step   1/2/3 speed   r restart   n next seed   \
-WASD/arrows pan   +/- zoom   tab select   g geometry   v vectors   \
+WASD/arrows pan   +/- zoom   tab select   g geometry   v vectors   b safety   \
 esc clear   q quit"
                 .to_owned(),
         }
     }
 
-    /// The same agent fields the Bevy inspector shows, on one line.
-    fn describe(&self, body: &SceneBody) -> String {
+    /// The same agent fields the Bevy inspector shows, on one line, followed by
+    /// the recent records the body took part in.
+    fn describe(&self, body: &SceneBody, frame: &SceneFrame) -> String {
         let mut out = format!(
-            "Agent #{id}   position ({x:.2}, {y:.2}) m   heading {heading:.1}°",
+            "Agent #{id} ({mode})   position ({x:.2}, {y:.2}) m   heading {heading:.1}°",
             id = body.id,
+            mode = body.mode.label(),
             x = body.position.x,
             y = body.position.y,
             heading = body.heading_rad.to_degrees(),
@@ -146,6 +150,13 @@ esc clear   q quit"
         }
 
         out.push_str(&format!("   decision {}", decision_summary(body.decision)));
+
+        // The event links: what the body was recently part of. The footer is
+        // one line, so only the most recent records are named.
+        let links = frame.events_involving(body.id);
+        if let Some(latest) = links.last() {
+            out.push_str(&format!("   link {}", event_summary(*latest)));
+        }
         out
     }
 }
@@ -158,8 +169,8 @@ mod tests {
 
     use glam::DVec2;
     use tangle_model::parse_scenario_source;
-    use tangle_present::{FrameStatus, Overlays, SceneGeometry, Speed, Viewport};
-    use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
+    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport};
+    use tangle_sim::{AgentId, Event, RunConfig, Simulation, SnapshotDetail, ViolationKind};
 
     fn scenario() -> Arc<CompiledScenario> {
         let source = parse_scenario_source(
@@ -199,7 +210,17 @@ mod tests {
                 .map(|sample| tangle_present::SceneBody::project(&[], sample, 0.0))
                 .collect(),
             overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
         }
+    }
+
+    /// The same frame with `events` folded in at its own tick.
+    fn frame_with_events(selection: Option<usize>, events: &[Event]) -> SceneFrame {
+        let mut frame = frame(selection);
+        let mut safety = SafetyOverlay::new(40);
+        safety.observe(frame.tick, events);
+        frame.safety = safety;
+        frame
     }
 
     #[test]
@@ -254,7 +275,6 @@ mod tests {
     #[test]
     fn the_inspector_reports_the_latest_decision_reason() {
         use tangle_model::{MovementId, PathId, SignalColor};
-        use tangle_present::BodyKind;
         use tangle_sim::{ComplianceReason, SignalAction, VehicleProfile};
 
         let hud = Hud::new(scenario());
@@ -264,7 +284,7 @@ mod tests {
             heading_rad: 0.0,
             length_m: 4.0,
             width_m: 2.0,
-            kind: BodyKind::Vehicle,
+            mode: tangle_sim::AgentMode::Vehicle,
             speed_mps: Some(0.0),
             path: Some(PathId::from_index(0)),
             path_distance_m: Some(30.0),
@@ -286,7 +306,21 @@ mod tests {
                 required_decel_mps2: 0.0,
             }),
         };
-        let text = hud.describe(&body);
+        let events = [
+            Event::NearMiss {
+                agent: AgentId::from_index(0),
+                other: AgentId::from_index(3),
+                clearance_m: 0.5,
+                entering: true,
+            },
+            Event::Violation {
+                agent: AgentId::from_index(0),
+                kind: ViolationKind::RanRedLight,
+            },
+        ];
+        let frame = frame_with_events(Some(0), &events);
+        let text = hud.describe(&body, &frame);
+        assert!(text.contains("Agent #0 (vehicle)"), "{text}");
         assert!(text.contains("decision stop (compliant stop)"), "{text}");
         assert!(text.contains("head red"), "{text}");
         // A demand vehicle reports its route, sampled profile, and IDM intent.
@@ -296,6 +330,17 @@ mod tests {
         assert!(
             text.contains("intent follow IDM under sampled profile bounds"),
             "{text}"
+        );
+        // The footer names the most recent record the body took part in, with
+        // the body it was about.
+        assert!(
+            text.contains("link t25 violation  #0  ran_red_light"),
+            "{text}"
+        );
+        let nearest = hud.describe(&body, &frame_with_events(Some(0), &events[..1]));
+        assert!(
+            nearest.contains("link t25 near miss began  #0 + #3  clearance 0.50 m"),
+            "{nearest}"
         );
     }
 }

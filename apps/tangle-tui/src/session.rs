@@ -286,6 +286,8 @@ impl<B: SessionBackend> TuiSession<B> {
     fn step_once(&mut self) {
         self.prev = self.curr.clone();
         let output = self.sim.step();
+        self.controller
+            .observe_events(output.time().tick(), output.events());
         for event in output.events() {
             match event {
                 Event::Spawned { .. } => self.spawned += 1,
