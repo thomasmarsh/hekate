@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T22:08:16Z
+updated: 2026-09-12T22:39:42Z
 summary: Phase 1 Increment 4 adds a deterministic uniform-grid broad phase, exact and swept geometry queries, typed safety events with a versioned union, online TTC/minimum-separation and PET occupancy, and viewer event overlays and inspector links.
-next: Add online time-to-collision and minimum-separation tracking, and conflict-region occupancy intervals for PET.
+next: Add viewer overlays and inspector links from an event to its participants, and carry the agent mode through SceneBody::project (F5).
 ---
 
 # Outcome
@@ -430,6 +430,163 @@ crate-internal; `BodyShape::inflated` stays crate-private. Consumers updated:
 - The cast bisects to a fixed resolution rather than carrying a
   continuous-advancement fast path; slice C adds one cast per close candidate
   pair per tick, and the Lipschitz certificate keeps that bounded.
+
+## Slice D — online TTC, minimum separation, and PET occupancy intervals
+
+Slice D adds the online interaction metrics the plan asks for: the simulator
+itself reports how close its bodies came to a conflict, rather than a post-hoc
+analysis of recorded trajectories. Like slices A–C it does not rewire the tick.
+The pass observes the integrated state after the safety records are emitted and
+before new demand is admitted, reads every input by reference, and emits no
+event, so the walking trace golden, the scene golden, and the Phase 1 baseline
+are byte-identical and no golden was regenerated.
+
+### Definitions
+
+`crates/tangle-sim/src/metrics.rs` owns the pass and its model card states the
+definitions, units, applicability, and tie-breaks:
+
+- **Time to collision** (`time_to_collision(first, second, step)`) predicts
+  contact from the state the tick produced: the tick-end poses plus the tick's own
+  displacement as each body's velocity. `Some(0.0)` when the pair already touches
+  or overlaps — the overlap itself is carried by `Event::Collision`;
+  `Some(seconds)` when the pair is closing and the predicted contact is within
+  `TTC_HORIZON_S` (5 s); `None` when the pair is not closing (receding, parallel,
+  or keeping a constant separation), when the predicted contact is beyond the
+  horizon, or when the extrapolated paths' closest approach stays clear of
+  contact, so a pair whose paths cross but pass clear reports no value. "Closing"
+  is the sign of the clearance rate at the observed state, the shared
+  `clearance_rate` the swept cast uses. The first contact fraction is a bisection:
+  the relative translations at which two convex bodies touch form the Minkowski
+  difference of their shapes, a convex set, so the touching fractions are a
+  single interval. A cheap necessary condition first rejects pairs whose centres
+  cannot come within the sum of their circumradii anywhere in the window, which
+  is 89% of the observed candidate pairs on the mixed benchmark and keeps the
+  pass bounded. Reported to `TTC_TIME_TOLERANCE_S` (1e-6 s).
+- **Minimum separation** (`tick_minimum_clearance_m(first, second)`) is the least
+  signed clearance over the tick from the same exact query the geometry layer
+  exposes: both endpoints, plus the located closest approach when the pair closes
+  and then separates inside the tick. A pair that stays disjoint has a signed
+  clearance that is convex in the tick fraction, so the located turning point is
+  the exact minimum; a pair that touches has one interval of contact and the
+  located turning point is its entry, so a contacting pair never reports a clear
+  separation. A mid-tick penetration deeper than that entry is not reported; the
+  contact record carries the contact. Reported to `SEPARATION_RESOLUTION_M`
+  (1e-6 m).
+- **Candidate set**: a `SweptBroadPhase` over both bodies grown by half
+  `INTERACTION_RANGE_M` (20 m) — the same slice-A/B machinery the safety pass
+  uses, with the wider margin, so the safety pass's near-miss pair set is a
+  subset of this one. Pairs are ascending `(AgentId, AgentId)` with
+  `first < second`, the canonical pair spelling the collision records use. A pair
+  that stays outside the range for a whole run has no recorded separation and no
+  recorded time to collision.
+- **Conflict-region occupancy intervals and PET**: occupancy edges are read from
+  the existing `Event::Entry`/`Event::Exit` state for every `RegionKey` (crossing
+  regions and authored conflict regions), so the module adds no second occupancy
+  predicate and cannot disagree with `safety.rs` about when a body is in a
+  region. An occupancy's boundaries are the ends of the ticks that reported them,
+  so PET is tick-quantized and converges with the step; a despawn closes an open
+  occupancy at its tick, because `Event::Despawned` closes the agent's stream. A
+  `PostEncroachment` is recorded between two successive recorded occupancies of
+  one region when they are by different bodies and do not overlap in time;
+  overlapping occupancies have no post-encroachment time (the bodies were in the
+  region together), and a re-entry is an ordinary occupancy that forms a
+  succession with the occupancy before and after it. Occupancies are stored in
+  close order — tick order, then the safety pass's ascending-`AgentId` order
+  within a tick — so the successions, their records, and the minimum are
+  deterministic. Every running minimum keeps the first value it saw on a tie.
+
+### Public surface
+
+`tangle_sim::{InteractionMetrics, MetricMinimum, ModePair, PostEncroachment,
+RegionOccupancy, INTERACTION_RANGE_M, TTC_HORIZON_S, TTC_TIME_TOLERANCE_S,
+SEPARATION_RESOLUTION_M, time_to_collision, tick_minimum_clearance_m}` and
+`Simulation::interaction_metrics()`. `InteractionMetrics` exposes the tick and
+run minima of time to collision and separation, the per-mode-pair and per-pair
+separation minima (cross-mode is `ModePair::VehiclePedestrian`), the recorded
+post-encroachments and the minimum PET, and one region's completed occupancies.
+The pass itself and the bisection helpers it shares with `crate::swept` stay
+crate-internal; `SweptBroadPhase::first_fraction` and `clearance_rate` became
+`pub(crate)` so the metric reuses one definition of "still closing" and one
+bisection instead of restating them. No event variant was added, so
+`EVENT_VERSION` stays 2.
+
+### Schema impact
+
+None. No scenario-source or record schema changed, so schema version 1 is
+unchanged and no schema regeneration or drift-test update was needed.
+
+### Evidence
+
+- Unit tests in `metrics.rs`: the analytic circle crossing (`3 - 1/sqrt(2)` s)
+  and its invariance under a finer step; touching and overlapping pairs reported
+  as zero; parallel, perpendicular, receding, passing-clear, and beyond-horizon
+  pairs reported as not applicable; the located closest approach of a
+  hand-computed pass-by and the endpoint cases of a monotone pair; the candidate
+  grid covering an in-range pair and excluding a pair outside the range; and PET
+  successions by hand — different bodies, same-body re-entry, an overlapping
+  succession that records nothing, and a despawn closing an occupancy.
+- `crates/tangle-sim/tests/metrics.rs` — six differential tests against
+  references built from the observed frames:
+  - a constant-speed lane (the walking skeleton) reports exactly the 15.5 m gap
+    with no TTC, no PET, and no cross-mode record, identically at steps 0.05,
+    0.0125, and 0.003125, and its per-pair and per-mode-pair records hold the
+    same value;
+  - 610 pedestrian-pair observations on `mixed_interaction_v1` at three steps
+    match the closed-form quadratic first root of two moving circles to
+    `TTC_TIME_TOLERANCE_S`, including agreement on applicability;
+  - every recorded separation equals the all-pairs minimum over the observed
+    frames to a nanometre, per mode pair as well as overall, whenever the closest
+    pair is inside the range (step 0.05: 2.2454 m cross-mode among mode-pair
+    minima 6.5214 / 2.2454 / 59.5511 m; step 0.0125: 14.6728 m cross-mode);
+  - 175 post-encroachment records on `perpendicular_conflict_v1` over three steps
+    and three seeds match an independently detected continuous occupancy
+    (64 / 59 / 52 records per step), where both sides measure occupancy with the
+    safety layer's conservative body radius: the worst deviation is 0.0925 s at
+    step 0.05, 0.0233 s at 0.0125, and 0.0059 s at 0.003125 — proportional to the
+    step and inside the declared 4-step bound at every step, so the metric
+    converges as the step does;
+  - the per-pair separation record equals the least of that pair's per-tick
+    sweeps over 800 ticks of the conflict benchmark;
+  - a run whose metrics are read after every tick is byte-identical in event
+    stream and frame fingerprints to one whose metrics are never read.
+- All five gates pass on the final tree: `cargo test --workspace --all-features`
+  (including the canonical trace, its hash, the Phase 1 baseline, and the scene
+  goldens, all unchanged), `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings`, `cargo fmt --all --check`,
+  `./scripts/check-dependency-direction.sh`, and `braintree check nodes`.
+
+### Measured cost
+
+The pass is always on. On `mixed_interaction_v1` (about 15 candidate pairs per
+tick) it adds roughly 22 µs per tick in a release build against roughly 7 µs for
+the rest of the tick, so a run remains about 1750x faster than wall-clock; in an
+unoptimized test build the same work is about 8x more expensive and the
+benchmark-heavy suites are the ones that notice (the mixed-interaction suite goes
+from about 7 s to about 23 s).
+
+### Deferred
+
+- Optimizing the pass: profiling candidates are the TTC bisections (the dominant
+  cost), a per-pair clearance cache that would let the rate reuse the endpoint
+  clearances it recomputes, and a coarser declared resolution. Increment 5's
+  "profiler captures before optimization" owns that work.
+- Whether the pass should be switchable off for throughput-sensitive runs is a
+  coordinator decision: it would change `RunConfig`/provenance, and slice E does
+  not need it.
+- The minimum separation of a pair that contacts reports the contact entry rather
+  than the deepest mid-tick penetration; a consumer that needs penetration depth
+  should read the contact record's `clearance_m` or ask for an exact penetration
+  query.
+- The relevance range (20 m) and the TTC horizon (5 s) are declared reporting
+  constants like the near-miss threshold, not calibrated measures.
+- Region occupancy still uses the slice-C swept bounding circle, so a metric
+  occupancy boundary can precede the exact body-versus-ring crossing by up to the
+  sweep margin; the PET differential test measures that bound.
+- PET is only defined for successive occupancies that do not overlap, so a region
+  two bodies occupy together reports occupancy but no PET.
+- Throughput/level-of-service metrics, metric definition versions, and
+  disaggregation by movement are Increment 5 and 6 work, not this slice.
 
 # Limitations
 
