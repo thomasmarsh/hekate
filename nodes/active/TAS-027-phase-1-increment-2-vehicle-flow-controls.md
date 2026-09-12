@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T16:37:55Z
+updated: 2026-09-12T16:39:53Z
 summary: Phase 1 Increment 2 turns portals into demand, gives cars an IDM longitudinal controller with stop-line, signal, leader, queue, and exit behavior, and records reproducible contextual red-light decisions.
-next: Implement the contextual red-light decision over signal state, distance, speed, urgency, and the compliance profile, and record traceable decision reasons for the inspector.
+next: Implement the contextual red-light decision over signal state, distance to the new authored stop_line_m, speed, urgency, and the compliance profile, and record traceable decision reasons for the inspector.
 ---
 
 # Outcome
@@ -78,10 +78,10 @@ contextual red-light decision and the inspector decision records remain.
   profile vehicle (the static walking population stays constant-speed and its
   golden trace is unchanged), follows the nearest same-direction leader bumper
   to bumper with a stable lowest-id tie-break, admits demand vehicles at a
-  **safe entry speed** (`sqrt(v_leader^2 + 2*b*gap)`) so comfortable braking
-  stays sufficient, holds the front bumper at a red/yellow stop line, and
-  keeps two last-resort caps that make overlap impossible: the next speed may
-  not pass the leader's rear or a stop line in one step.
+  **safe entry speed** that keeps comfortable braking sufficient, holds the
+  front bumper at a red/yellow stop line, and keeps two last-resort caps that
+  make overlap impossible: the next speed may not pass the leader's rear or a
+  stop line in one step.
 - `scenarios/benchmarks/car_following_v1.json5` is the controlled
   car-following benchmark; `four_leg_signal_v1.json5` now authors
   `stop_line_m: 34.0` just upstream of its conflict region so the signal queue
@@ -100,6 +100,33 @@ Evidence:
   and asserts every command stays inside the sampled profile bounds
   (`speed in [0, v0]`, `accel in [-b, +a_max]`) with no body overlap while
   braking under real following.
+
+## Slice A admission seam reconciliation
+
+Slice B reconciles slice A's landed spawn admission so the Increment 2 gate
+("accelerations/braking/speeds within profile bounds and no body overlap") can
+hold. Slice A admitted every demand vehicle at its full sampled desired speed;
+with clearance-only acceptance, a full-speed insert behind a slow leader forced
+emergency braking far beyond the comfortable bound.
+
+The reconciliation changes only the admitted speed, not admission acceptance:
+
+```text
+v_entry = min(v0, sqrt(v_leader^2 + 2 * b * max(gap - s0, 0)))
+```
+
+`v0` and `b` are the same sampled `VehicleProfile` fields, `gap` is the
+bumper-to-bumper gap to the nearest live leader ahead on the entry path, and
+`s0` is the model standstill gap (2.0 m). The vehicle enters no faster than the
+speed from which `b` brings it to the leader's speed within the gap, then
+accelerates toward `v0`. `entry_clear` acceptance and its clearance timing are
+unchanged, so slice A's spawn/drop/queue tests still hold.
+
+Exploratory probe evidence (not committed as a test): 16 seeds each at rates
+600, 1200, and 1800 vph over a 400 m corridor, with both a tight and a wide
+profile envelope, produced zero steps whose deceleration exceeded `-b` and a
+minimum bumper-to-bumper gap of 0.66 m. Before the reconciliation the same
+envelopes produced emergency decelerations above 40 m/s².
 
 ## Slice A — demand, profiles, admission
 
