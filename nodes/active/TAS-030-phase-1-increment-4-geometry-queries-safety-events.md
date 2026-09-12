@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T23:00:22Z
+updated: 2026-09-12T23:19:27Z
 summary: Phase 1 Increment 4 adds a deterministic uniform-grid broad phase, exact and swept geometry queries, typed safety events with a versioned union, online TTC/minimum-separation and PET occupancy, and viewer event overlays and inspector links.
 next: Independent read-only verification of every Increment 4 Done-when criterion against the integrated tree.
 ---
@@ -749,6 +749,116 @@ the frame.
 - The Bevy viewer draws markers as circles and the terminal as one glyph per
   kind, so the two backends agree on position, colour family, and kind but not
   on the exact silhouette; a character cell affords only a glyph.
+
+## Slice G — review-finding closeout
+
+Slice G closes the three P2 test-quality findings of the independent read-only
+slice-F verification. No simulation behavior, schema, public presentation
+surface, or golden changed. The one non-test change is the terminal emphasis
+gate recorded under F3, which the new test found and which aligns the terminal
+with `Overlay::Safety`'s own recorded contract.
+
+### F1 — unfalsifiable candidate assertion in `geometry_queries.rs`
+
+`candidate_pairs_never_exceed_the_enclosing_box_test` asserted
+`bounds_gap_m(&first_bounds, &second_bounds) <= QUERY_TOLERANCE_M` after already
+asserting the two boxes overlap, and `bounds_gap_m` clamped each axis gap at
+zero, so the value was always exactly `0.0` and the assertion could not fail.
+The finding's preferred replacement — bounding a rejected candidate's signed
+clearance by the contact band — is false, and was measured false before being
+implemented: a broad phase is an enclosing-box filter, not a near-contact
+filter, and on the fixed world sweep seed 2 has rejected candidate `(1, 2)` at
+`0.3362705201374694 m` of real clearance. Slice G instead deletes the vacuous
+assertion and the now-unused `bounds_gap_m` helper, corrects the doc comment to
+state the true invariant and to record explicitly that a rejected candidate
+carries no clearance bound, and replaces the deleted line with a completeness
+check against the independent brute-force predicate: every pair
+`reference_intersects` accepts must be in the candidate set. The test now
+asserts the sandwich property — exact intersections are a subset of the
+candidates, and the candidates are a subset of the box-overlap relation — so
+every assertion in it is falsifiable.
+
+Falsification (each mutation run against the fixed test, then reverted):
+
+- returning only non-overlapping pairs from `BroadPhase::candidate_pairs` fails
+  the box-overlap assertion: `candidate (0, 1) must have overlapping enclosing
+  boxes: seed 1`;
+- returning no pairs at all fails the completeness assertion: `intersecting pair
+  (0, 12) must be a candidate: seed 1`.
+
+### F2 — always-true disjunction in `safety_events.rs`
+
+`pair_records_match_an_independent_swept_query` asserted `!near_this_tick ||
+contact_this_tick` inside `if contacting`, where `contact_this_tick` had just
+been asserted equal to the true `contacting` flag, so the disjunction was always
+true. Slice G removes it, records each pair's *begin* keys in two sets
+(`contact_begins`, `near_miss_begins`), and asserts after the tick loop that the
+sets are disjoint: no pair may begin a contact and a near miss in the same tick.
+Reading only the emitted stream makes the check order-independent, strictly
+stronger than the in-loop order-dependent near-miss/contact cross-check it
+replaced. The per-tick band-predicate assertions that carry the emission rule
+are unchanged.
+
+Falsification: a mutation that pushes a `NearMiss { entering: true }` from the
+contact branch fails the unchanged band-predicate assertion, and with that
+assertion temporarily masked the new structural check fires on its own:
+`pair(s) began a contact and a near miss in the same tick: [(15, 16, 1222)]`.
+
+### F3 — no app-layer overlay test, and the wiring defect it caught
+
+The finding's second half was the real gap. The pure overlay derivation the apps
+consume was already covered in `tangle-present` — `src/safety.rs` unit tests
+over synthetic records, `src/controller.rs` tests through the controller, and
+`tests/safety_overlays.rs` over a real `mixed_interaction_v1` stream — and the
+terminal inspector link was already covered by `hud.rs`'s
+`the_inspector_reports_the_latest_decision_reason`, which reads
+`events_involving` through `Hud::describe`. What no test under `apps/` exercised
+was the mapping from projected overlays to draws. Slice G adds it at all three
+backends:
+
+- **Viewer.** `draw_safety_overlays` is split so the overlay-to-shape mapping is
+  a pure `safety_overlay_shapes(&SceneFrame) -> Vec<SafetyOverlayShape>`
+  (`Ring`/`Circle` in world metres) that the Bevy system then renders. The drawn
+  picture is unchanged: the occupied ring, one emphasis ring per body, one link
+  ring per record participant of the selected body, and markers last, all
+  suppressed while `Overlays::safety` is off. Three tests over a two-vehicle
+  crossing frame assert the exact shape plan (order, palette, radii), the
+  overlay switch, and the link ring for either selected body.
+- **Terminal cell backend.** `raster.rs` gains two tests that rasterize such a
+  frame and assert the occupied-region ring, the contact and standstill marker
+  glyphs in their own colours, and an emphasized body in its emphasis colour,
+  and that `Overlays::safety = false` removes them while the body keeps drawing.
+- **Terminal pixel backend.** `pixel.rs` gains the same pair of tests over a
+  synthetic two-body frame, so the Kitty path's parallel `draw_safety` is
+  covered too.
+
+The cell-backend test found a real wiring defect. Both terminal backends
+computed `SceneFrame::body_emphasis` outside the `if frame.overlays.safety`
+guard, so `b` removed the markers and the occupied ring but left body-emphasis
+colours on, while the Bevy viewer and `Overlay::Safety`'s recorded contract
+("Safety markers, body emphasis, and region occupancy") gate all three. Slice G
+gates the terminal emphasis map on `overlays.safety` in both backends. Nothing
+changes while the overlay is on, and no golden exercises safety-off, so no
+golden was regenerated.
+
+Falsification: reverting the emphasis gate fails
+`the_safety_overlay_can_be_disabled`, and giving `BodyEmphasis::Collision`
+another colour fails the viewer plan test. The Bevy ECS wiring that consumes
+`safety_overlay_shapes` — the `Gizmos` calls and the system registration — stays
+source-verified-only: it holds no mapping a test could falsify without a live
+Bevy context.
+
+### Evidence
+
+- `cargo test --workspace --all-features`: all 40 test binaries pass, including
+  the canonical trace and its hash, the Phase 1 baseline, the scene, cell, and
+  Kitty goldens, all without regeneration.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+  `braintree check nodes` pass on the final tree.
+- Dependency direction is unchanged: no crate gained a dependency, `tangle-model`
+  and `tangle-sim` still carry no Bevy type, and `f64`/`glam::DVec2` are
+  unchanged.
 
 # Limitations
 
