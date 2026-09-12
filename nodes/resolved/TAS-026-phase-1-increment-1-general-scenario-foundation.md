@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T15:36:25Z
-summary: Phase 1 Increment 1 makes the scenario a general composition of boundaries, regions, paths, movements, portals, crossings, conflict regions, rules, and fixed-time signal phases that validate, compile, and render without scenario-specific branches.
-next: Compile the new primitives to dense IDs and derived geometry in `CompiledScenario`, then render them through the shared `tangle-present` scene seam.
+updated: 2026-09-12T15:57:48Z
+summary: Phase 1 Increment 1 makes the scenario a general composition of boundaries, regions, paths, movements, portals, crossings, conflict regions, rules, and fixed-time signal phases that validate, compile to dense ids with derived geometry, and render without scenario-specific branches.
 ---
 
 # Outcome
@@ -64,35 +63,39 @@ stays open until this increment lands.
 
 # Result
 
-First slice landed: the versioned source contract. Remaining slices are dense-id
-compilation/derived geometry and viewer rendering; the node stays active.
+Increment 1 is complete. Three slices landed across `tangle-model`,
+`tangle-present`, and the two viewers.
 
-- `crates/tangle-model/src/source.rs` adds `PolygonSource`,
+- Source contract: `crates/tangle-model/src/source.rs` defines `PolygonSource`,
   `MovementSource`, `CrossingSource`, `ConflictRegionSource`, `RuleSource`,
-  `RuleKind`, `SignalSource`, `SignalHeadSource`, `SignalPhaseSource`,
-  `SignalStateSource`, and `SignalColor`, with the new collections defaulted so
-  existing scenarios keep parsing.
-- `crates/tangle-model/src/validate.rs` adds 22 stable diagnostic codes and
-  checks polygon vertices/area, movement portal/path references and
-  self-loops, crossing and conflict-region references and arity, rule/signal
-  agreement, signal head/phase completeness, conflicting greens, duplicate ids
-  across all object kinds, and overlapping portals. A conflicting-green phase
-  is rejected against authored conflict regions only, so the check uses no
-  intersection type.
-- `schemas/scenario-source.schema.json` is regenerated and its drift test
-  passes.
-- Three benchmark scenarios live in `scenarios/benchmarks/`:
-  `straight_approach_v1`, `perpendicular_conflict_v1`, and
-  `four_leg_signal_v1`. The four-leg layout is two roads, two movements, two
-  crossings, one conflict region, and a four-phase fixed-time controller.
+  `RuleKind`, and the fixed-time signal types. `validate.rs` adds 22 stable
+  diagnostic codes and rejects bad references, degenerate geometry, duplicate
+  ids across all object kinds, overlapping portals, and conflicting greens
+  against authored conflict regions only, so no check names an intersection
+  type.
+- Compilation: `crates/tangle-model/src/compiled.rs` compiles every primitive
+  to a dense id with derived geometry — `BoundaryId`, `RegionId`, `MovementId`,
+  `CrossingId`, `ConflictRegionId`, `RuleId`, and `SignalId`; polygon area and
+  centroid; movement entry/exit endpoints and headings; and signal cycle length
+  with per-phase, per-head colors. `IdMap` names every compiled collection.
+- Rendering: `crates/tangle-present/src/scene.rs` projects boundaries, regions,
+  movements, crossings, conflict regions, rules, and signal heads into
+  `SceneGeometry`, and the character-cell, Kitty/pixel, and Bevy backends each
+  draw every primitive through that shared seam. Rule markers and signal gates
+  are offset so both stay visible at a shared movement entry.
 
 Evidence:
 
-- `cargo test --workspace --all-features` passes; the model suite is 28 tests
-  including `accepts_a_general_signalized_layout` and
-  `flags_conflicting_greens`.
-- `apps/tangle-cli/tests/scenarios.rs` loads every checked-in `.json5` scenario
-  and asserts all three benchmarks compile with no scenario-kind branch.
+- `cargo test --workspace --all-features` passes: `tangle-model` 33 unit + 3
+  fuzz/robustness + 1 walking integration; `tangle-present` 23 unit + 2 scene
+  golden; `tangle-tui` 66 unit + golden/parity integration suites; `tangle-cli`
+  scenario tests assert every benchmark exposes all compiled primitives with
+  entries in the id map.
+- `crates/tangle-model/tests/fuzz_scenarios.rs` drives arbitrary text and
+  arbitrary source structures within declared limits through parse, validate,
+  and compile and asserts no panic and a compile-or-diagnostics outcome.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `cargo fmt --all --check`, and `./scripts/check-dependency-direction.sh`
   pass; no new dependency edge was added.
+- `schemas/scenario-source.schema.json` still matches the generated schema; the
+  shared scene golden was regenerated for the extended `SceneGeometry`.
