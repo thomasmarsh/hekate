@@ -88,11 +88,26 @@
       ],
     },
   ],
-  population: {
-    vehicle_count: 8,
-    vehicle_speed_mps: 12.0,
-    vehicle_spacing_m: 20.0,
-    vehicle_length_m: 4.5,
-    vehicle_width_m: 1.8,
+  demand: [
+    {
+      id: 'west_inflow',
+      portal: 'west_entry',
+      rate_vph: 600.0,
+      routes: [ { movement: 'ew_through', weight: 1.0 } ],
+    },
+    {
+      id: 'south_inflow',
+      portal: 'south_entry',
+      rate_vph: 500.0,
+      routes: [ { movement: 'ns_through', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 9.0, max: 15.0 },
+    length_m: { min: 4.0, max: 5.2 },
+    width_m: { min: 1.7, max: 2.0 },
+    time_gap_s: { min: 1.0, max: 2.0 },
+    max_accel_mps2: { min: 1.2, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
   },
 }

@@ -3,7 +3,8 @@
 // Unsynchronized crossing traffic: an east-west movement and a north-south
 // movement whose envelopes meet in one authored conflict region. Priority is
 // data (`free` versus `yield`), not a four-way-stop branch in the simulator.
-// See PHASE_1_PLAN.md Increment 1.
+// Portal demand replaces the Increment 0 static population. See
+// PHASE_1_PLAN.md Increments 1 and 2.
 {
   schema_version: 1,
   id: 'perpendicular_conflict_v1',
@@ -49,11 +50,18 @@
     { id: 'free_ew', movement: 'ew_through', kind: 'free' },
     { id: 'yield_ns', movement: 'ns_through', kind: 'yield' },
   ],
-  population: {
-    vehicle_count: 6,
-    vehicle_speed_mps: 12.0,
-    vehicle_spacing_m: 20.0,
-    vehicle_length_m: 4.5,
-    vehicle_width_m: 1.8,
-  },
+  demand: [
+    {
+      id: 'west_inflow',
+      portal: 'west_entry',
+      rate_vph: 600.0,
+      routes: [ { movement: 'ew_through', weight: 1.0 } ],
+    },
+    {
+      id: 'south_inflow',
+      portal: 'south_entry',
+      rate_vph: 500.0,
+      routes: [ { movement: 'ns_through', weight: 1.0 } ],
+    },
+  ],
 }

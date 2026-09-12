@@ -1,0 +1,108 @@
+//! Named, portable random streams derived from the run root seed.
+//!
+//! `PHASE_1_PLAN.md` requires a portable ChaCha generator with independent
+//! named streams (`demand`, `profile`, `compliance`, `perception`) derived from
+//! the root seed and stable agent/run identifiers. Concerns must never share
+//! one mutable generator, so adding a draw to one stream cannot reshuffle
+//! another.
+//!
+//! This module owns only the derivation for the two streams Increment 2 slice A
+//! draws from: one `demand` substream per demand source, and one `profile`
+//! substream per agent. The `compliance` and `perception` streams belong to
+//! later slices and are not derived here.
+
+use rand_chacha::ChaCha20Rng;
+use rand_chacha::rand_core::{Rng, SeedableRng};
+
+/// Stream name for portal demand generation and route assignment.
+pub const STREAM_DEMAND: &str = "demand";
+
+/// Stream name for per-agent physical and behavior profile sampling.
+pub const STREAM_PROFILE: &str = "profile";
+
+/// FNV-1a 64-bit offset basis.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+/// FNV-1a 64-bit prime.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+/// SplitMix64 golden-gamma increment.
+const SPLITMIX_GAMMA: u64 = 0x9e37_79b9_7f4a_7c15;
+
+/// Derive a named ChaCha stream from the root seed and a stable identifier.
+///
+/// The identifier is a demand-source index or an agent id, so each stream is
+/// independent and stable: the same `(root_seed, name, id)` always yields the
+/// same sequence on every run and platform. This is a reproducibility
+/// derivation, not a cryptographic one; the generated values need only be
+/// deterministic and well mixed.
+pub(crate) fn derive_stream(root_seed: u64, name: &str, id: u32) -> ChaCha20Rng {
+    ChaCha20Rng::seed_from_u64(derive_seed(root_seed, name, id))
+}
+
+/// The 64-bit seed a named stream is seeded from.
+fn derive_seed(root_seed: u64, name: &str, id: u32) -> u64 {
+    let name_hash = fnv1a(name);
+    // Mix the name hash with the root seed and the stable identifier present
+    // that the resulting seed depends on all three inputs.
+    let mixed = name_hash ^ root_seed ^ u64::from(id).wrapping_mul(SPLITMIX_GAMMA);
+    splitmix64(mixed)
+}
+
+/// FNV-1a hash of a stream name.
+fn fnv1a(name: &str) -> u64 {
+    let mut hash = FNV_OFFSET;
+    for byte in name.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+/// SplitMix64 finalizer, used to decorrelate the mixed seed bits.
+fn splitmix64(state: u64) -> u64 {
+    let mut z = state.wrapping_add(SPLITMIX_GAMMA);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// Draw a uniform `f64` in `[0, 1)` from a stream.
+///
+/// Uses the top 53 bits so every representable value has the same spacing.
+pub(crate) fn uniform01(rng: &mut ChaCha20Rng) -> f64 {
+    const SCALE: f64 = 1.0 / (1u64 << 53) as f64;
+    (rng.next_u64() >> 11) as f64 * SCALE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_inputs_reproduce_a_stream() {
+        let mut first = derive_stream(42, STREAM_DEMAND, 0);
+        let mut second = derive_stream(42, STREAM_DEMAND, 0);
+        for _ in 0..16 {
+            assert_eq!(first.next_u64(), second.next_u64());
+        }
+    }
+
+    #[test]
+    fn named_streams_and_identifiers_are_independent() {
+        fn draw(root: u64, name: &str, id: u32) -> u64 {
+            let mut rng = derive_stream(root, name, id);
+            rng.next_u64()
+        }
+        assert_ne!(draw(42, STREAM_DEMAND, 0), draw(42, STREAM_PROFILE, 0));
+        assert_ne!(draw(42, STREAM_DEMAND, 0), draw(42, STREAM_DEMAND, 1));
+        assert_ne!(draw(42, STREAM_DEMAND, 0), draw(43, STREAM_DEMAND, 0));
+    }
+
+    #[test]
+    fn uniform_values_stay_in_the_unit_interval() {
+        let mut rng = derive_stream(7, STREAM_PROFILE, 3);
+        for _ in 0..1000 {
+            let value = uniform01(&mut rng);
+            assert!((0.0..1.0).contains(&value));
+        }
+    }
+}

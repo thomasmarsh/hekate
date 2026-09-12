@@ -6,7 +6,9 @@
 //! shift; state-affecting logic therefore never iterates a hash map.
 
 use glam::DVec2;
-use tangle_model::PathId;
+use tangle_model::{MovementId, PathId};
+
+use crate::profile::VehicleProfile;
 
 /// Stable identifier of one agent for the lifetime of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -46,6 +48,14 @@ pub(crate) struct AgentInit {
     pub body_length_m: f64,
     /// Body width in metres.
     pub body_width_m: f64,
+    /// Longitudinal travel direction: `1.0` toward the path end, `-1.0`
+    /// toward the path start.
+    pub direction: f64,
+    /// Assigned route, present for demand-generated vehicles.
+    pub movement: Option<MovementId>,
+    /// Sampled physical and behavior profile, present for demand-generated
+    /// vehicles.
+    pub profile: Option<VehicleProfile>,
 }
 
 /// Contiguous, stable-order agent state.
@@ -59,6 +69,9 @@ pub(crate) struct AgentStore {
     pub(crate) heading_rad: Vec<f64>,
     pub(crate) body_length_m: Vec<f64>,
     pub(crate) body_width_m: Vec<f64>,
+    pub(crate) direction: Vec<f64>,
+    pub(crate) movement: Vec<Option<MovementId>>,
+    pub(crate) profile: Vec<Option<VehicleProfile>>,
 }
 
 impl AgentStore {
@@ -73,6 +86,9 @@ impl AgentStore {
         self.heading_rad.push(init.heading_rad);
         self.body_length_m.push(init.body_length_m);
         self.body_width_m.push(init.body_width_m);
+        self.direction.push(init.direction);
+        self.movement.push(init.movement);
+        self.profile.push(init.profile);
         id
     }
 
@@ -100,6 +116,9 @@ mod tests {
             heading_rad: 0.0,
             body_length_m: 4.5,
             body_width_m: 1.8,
+            direction: 1.0,
+            movement: None,
+            profile: None,
         }
     }
 

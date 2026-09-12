@@ -45,7 +45,14 @@ pub struct ScenarioSource {
     /// Fixed-time signal controllers with phased signal heads.
     #[serde(default)]
     pub signals: Vec<SignalSource>,
-    /// Walking-skeleton population tuning.
+    /// Portal demand generators; when non-empty they replace the static
+    /// walking-skeleton population.
+    #[serde(default)]
+    pub demand: Vec<DemandSource>,
+    /// Passenger-car physical and behavior profile distributions.
+    #[serde(default)]
+    pub profiles: ProfileSource,
+    /// Walking-skeleton population tuning, used only when `demand` is empty.
     #[serde(default)]
     pub population: PopulationSource,
 }
@@ -250,6 +257,88 @@ pub struct SignalSource {
     pub phases: Vec<SignalPhaseSource>,
 }
 
+/// One portal demand generator: arrivals at an entry portal and the routes
+/// those vehicles take.
+///
+/// A demand source names an entry portal (the `from` portal of one or more
+/// movements) and a mean arrival rate. Each generated vehicle is assigned one
+/// of the listed movements by relative weight, so route assignment is scenario
+/// data rather than a simulator branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DemandSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Entry portal where generated vehicles enter the world.
+    pub portal: String,
+    /// Mean arrival rate in vehicles per hour.
+    pub rate_vph: f64,
+    /// Movements a generated vehicle may follow, with relative weights.
+    pub routes: Vec<RouteShareSource>,
+}
+
+/// One movement's relative share of a demand source's arrivals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RouteShareSource {
+    /// Movement a generated vehicle follows.
+    pub movement: String,
+    /// Relative weight; a larger weight is chosen proportionally more often.
+    pub weight: f64,
+}
+
+/// An inclusive uniform distribution for one profile parameter.
+///
+/// A range with `min == max` is a constant. The owning field name carries the
+/// physical unit, for example `speed_mps` or `time_gap_s`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileRangeSource {
+    /// Lower bound of the distribution.
+    pub min: f64,
+    /// Upper bound of the distribution.
+    pub max: f64,
+}
+
+/// Passenger-car physical and behavior profile distributions.
+///
+/// Every generated vehicle samples one value from each range from the `profile`
+/// random stream, so its body and longitudinal behavior are stable for the run.
+/// Pedestrian profiles are Increment 3 work.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileSource {
+    /// Desired free-flow speed in metres per second.
+    pub speed_mps: ProfileRangeSource,
+    /// Body length in metres.
+    pub length_m: ProfileRangeSource,
+    /// Body width in metres.
+    pub width_m: ProfileRangeSource,
+    /// Desired following time gap in seconds.
+    pub time_gap_s: ProfileRangeSource,
+    /// Maximum acceleration in metres per second squared.
+    pub max_accel_mps2: ProfileRangeSource,
+    /// Comfortable deceleration in metres per second squared.
+    pub comfortable_brake_mps2: ProfileRangeSource,
+}
+
+impl Default for ProfileSource {
+    fn default() -> Self {
+        // Provisional engineering defaults, not calibrated scientific claims.
+        Self {
+            speed_mps: ProfileRangeSource {
+                min: 9.0,
+                max: 15.0,
+            },
+            length_m: ProfileRangeSource { min: 4.0, max: 5.2 },
+            width_m: ProfileRangeSource { min: 1.7, max: 2.0 },
+            time_gap_s: ProfileRangeSource { min: 1.0, max: 2.0 },
+            max_accel_mps2: ProfileRangeSource { min: 1.2, max: 2.5 },
+            comfortable_brake_mps2: ProfileRangeSource { min: 2.0, max: 3.5 },
+        }
+    }
+}
+
 /// Walking-skeleton population tuning.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -349,5 +438,35 @@ mod tests {
             source.population.vehicle_count,
             PopulationSource::default().vehicle_count
         );
+        assert!(source.demand.is_empty());
+        assert_eq!(source.profiles, ProfileSource::default());
+    }
+
+    #[test]
+    fn parses_demand_routes_and_profiles() {
+        let input = r#"{
+            schema_version: 1, id: 'x', coordinate_system: { x: 'a', y: 'b' },
+            paths: [ { id: 'guide', points: [ { x: 0, y: 0 }, { x: 50, y: 0 } ] } ],
+            portals: [ { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+                       { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 } ],
+            movements: [ { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0 } ],
+            demand: [ { id: 'inflow', portal: 'entry', rate_vph: 720.0,
+                routes: [ { movement: 'through', weight: 1.0 } ] } ],
+            profiles: {
+                speed_mps: { min: 10.0, max: 14.0 },
+                length_m: { min: 4.0, max: 5.0 },
+                width_m: { min: 1.8, max: 2.0 },
+                time_gap_s: { min: 1.2, max: 1.8 },
+                max_accel_mps2: { min: 1.5, max: 2.5 },
+                comfortable_brake_mps2: { min: 2.0, max: 3.0 },
+            },
+        }"#;
+        let source = parse_scenario_source(input).expect("parses");
+        assert_eq!(source.demand.len(), 1);
+        assert_eq!(source.demand[0].portal, "entry");
+        assert_eq!(source.demand[0].rate_vph, 720.0);
+        assert_eq!(source.demand[0].routes[0].movement, "through");
+        assert_eq!(source.profiles.speed_mps.min, 10.0);
+        assert_eq!(source.profiles.time_gap_s.max, 1.8);
     }
 }

@@ -2,11 +2,13 @@
 //!
 //! Phase 1 Increment 1 gate: the benchmark layouts must be expressible through
 //! general primitives with no scenario kind. Structural compilation of each
-//! benchmark is the observable contract here; behavior is later increments.
+//! benchmark is the observable contract here; Increment 2 adds the demand that
+//! makes a benchmark runnable.
 
 use std::path::{Path, PathBuf};
 
 use tangle_cli::load_scenario;
+use tangle_sim::{AgentId, Event, RunConfig, Simulation};
 
 fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -79,6 +81,15 @@ fn benchmark_layouts_compile_from_general_primitives() {
         );
         assert_eq!(scenario.rules().len(), scenario.id_map().rules().len());
         assert_eq!(scenario.signals().len(), scenario.id_map().signals().len());
+        assert_eq!(scenario.demand().len(), scenario.id_map().demand().len());
+        assert!(
+            !scenario.demand().is_empty(),
+            "benchmark '{name}' has no portal demand"
+        );
+        for demand in scenario.demand() {
+            assert!(!demand.routes().is_empty());
+            assert!(demand.rate_vph() > 0.0);
+        }
         assert!(
             scenario
                 .boundaries()
@@ -114,4 +125,46 @@ fn four_leg_benchmark_exposes_its_signal_and_endpoints() {
     assert_eq!(signal.heads().len(), 2);
     assert_eq!(signal.phases().len(), 4);
     assert!((signal.cycle_s() - 58.0).abs() < 1e-9);
+}
+
+#[test]
+fn benchmark_demand_generates_routed_vehicles() {
+    for name in [
+        "straight_approach_v1",
+        "perpendicular_conflict_v1",
+        "four_leg_signal_v1",
+    ] {
+        let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
+        let scenario = load_scenario(&path)
+            .unwrap_or_else(|error| panic!("benchmark '{name}' failed to load: {error}"));
+        let mut sim = Simulation::new(scenario, RunConfig::new(0)).expect("benchmark runs");
+
+        let mut spawned = 0u32;
+        for _ in 0..2000 {
+            let arrivals: Vec<AgentId> = sim
+                .step()
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Spawned { agent, .. } => Some(*agent),
+                    Event::Despawned { .. } => None,
+                })
+                .collect();
+            for agent in arrivals {
+                spawned += 1;
+                assert!(
+                    sim.agent_route(agent).is_some(),
+                    "benchmark '{name}' admitted a vehicle without a route"
+                );
+                assert!(
+                    sim.agent_profile(agent).is_some(),
+                    "benchmark '{name}' admitted a vehicle without a profile"
+                );
+            }
+        }
+        assert!(
+            spawned > 0,
+            "benchmark '{name}' produced no demand vehicles"
+        );
+    }
 }

@@ -10,10 +10,11 @@
 //! its fixed seed without adding a dependency.
 
 use tangle_model::{
-    CompiledScenario, ConflictRegionSource, CrossingSource, MovementSource, PathEnd, PathSource,
-    PointSource, PolygonSource, PopulationSource, PortalSource, RuleKind, RuleSource,
-    ScenarioSource, SignalColor, SignalHeadSource, SignalPhaseSource, SignalSource,
-    SignalStateSource, parse_scenario_source, validate,
+    CompiledScenario, ConflictRegionSource, CrossingSource, DemandSource, MovementSource, PathEnd,
+    PathSource, PointSource, PolygonSource, PopulationSource, PortalSource, ProfileRangeSource,
+    ProfileSource, RouteShareSource, RuleKind, RuleSource, ScenarioSource, SignalColor,
+    SignalHeadSource, SignalPhaseSource, SignalSource, SignalStateSource, parse_scenario_source,
+    validate,
 };
 
 /// Declared generation limits: the boundary above which the gate makes no
@@ -72,6 +73,22 @@ impl Rng {
             id: self.id(),
             points: (0..self.below(MAX_POINTS)).map(|_| self.point()).collect(),
         }
+    }
+
+    /// A finite positive profile range, occasionally inverted or non-positive
+    /// so the validator branch is exercised.
+    fn range(&mut self) -> ProfileRangeSource {
+        let min = match self.below(4) {
+            0 => 0.0,
+            1 => -1.0,
+            _ => self.positive(),
+        };
+        let max = if self.below(4) == 0 {
+            min - 1.0
+        } else {
+            min + self.positive()
+        };
+        ProfileRangeSource { min, max }
     }
 }
 
@@ -159,6 +176,23 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
             },
         })
         .collect();
+    let demand: Vec<DemandSource> = (0..rng.below(MAX_COLLECTION))
+        .map(|_| DemandSource {
+            id: rng.id(),
+            portal: rng.id(),
+            rate_vph: if rng.below(4) == 0 {
+                0.0
+            } else {
+                rng.positive() * 100.0
+            },
+            routes: (0..rng.below(3))
+                .map(|_| RouteShareSource {
+                    movement: rng.id(),
+                    weight: rng.positive(),
+                })
+                .collect(),
+        })
+        .collect();
     let signals: Vec<SignalSource> = (0..rng.below(MAX_COLLECTION))
         .map(|_| SignalSource {
             id: rng.id(),
@@ -203,6 +237,15 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
         conflict_regions,
         rules,
         signals,
+        demand,
+        profiles: ProfileSource {
+            speed_mps: rng.range(),
+            length_m: rng.range(),
+            width_m: rng.range(),
+            time_gap_s: rng.range(),
+            max_accel_mps2: rng.range(),
+            comfortable_brake_mps2: rng.range(),
+        },
         population: PopulationSource {
             vehicle_count: rng.below(8),
             vehicle_speed_mps: rng.positive(),
@@ -244,6 +287,7 @@ fn random_sources_compile_or_diagnose_without_panicking() {
             );
             assert_eq!(id_map.rules().len(), scenario.rules().len());
             assert_eq!(id_map.signals().len(), scenario.signals().len());
+            assert_eq!(id_map.demand().len(), scenario.demand().len());
             compiled += 1;
         } else {
             assert!(CompiledScenario::compile(source).is_err());
@@ -383,6 +427,16 @@ fn consistent_source(rng: &mut Rng) -> ScenarioSource {
                 signal: Some("main".to_owned()),
             },
         ],
+        demand: vec![DemandSource {
+            id: "inflow".to_owned(),
+            portal: "west".to_owned(),
+            rate_vph: 600.0,
+            routes: vec![RouteShareSource {
+                movement: "ew_through".to_owned(),
+                weight: 1.0,
+            }],
+        }],
+        profiles: ProfileSource::default(),
         signals: vec![SignalSource {
             id: "main".to_owned(),
             heads: vec![

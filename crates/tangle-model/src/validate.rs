@@ -12,7 +12,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::source::{
-    PathEnd, PointSource, RuleKind, SUPPORTED_SCHEMA_VERSION, ScenarioSource, SignalColor,
+    PathEnd, PointSource, ProfileRangeSource, RuleKind, SUPPORTED_SCHEMA_VERSION, ScenarioSource,
+    SignalColor,
 };
 
 /// Stable, machine-readable diagnostic codes.
@@ -87,6 +88,18 @@ pub enum DiagnosticCode {
     SignalPhaseMissingHead,
     /// A signal phase shows two conflicting movements a green at once.
     SignalConflictingGreen,
+    /// A demand source references a portal that is not declared.
+    DemandUnknownPortal,
+    /// A demand source lists no routes.
+    DemandEmptyRoutes,
+    /// A demand route references a movement that is not declared.
+    DemandUnknownMovement,
+    /// A demand route's movement does not start at the demand portal.
+    DemandRoutePortalMismatch,
+    /// A demand source lists one movement more than once.
+    DemandDuplicateRoute,
+    /// A profile range is non-finite, non-positive, or inverted.
+    ProfileRangeInvalid,
 }
 
 impl DiagnosticCode {
@@ -126,6 +139,12 @@ impl DiagnosticCode {
             Self::SignalPhaseDuplicateHead => "E_SIGNAL_PHASE_DUPLICATE_HEAD",
             Self::SignalPhaseMissingHead => "E_SIGNAL_PHASE_MISSING_HEAD",
             Self::SignalConflictingGreen => "E_SIGNAL_CONFLICTING_GREEN",
+            Self::DemandUnknownPortal => "E_DEMAND_UNKNOWN_PORTAL",
+            Self::DemandEmptyRoutes => "E_DEMAND_EMPTY_ROUTES",
+            Self::DemandUnknownMovement => "E_DEMAND_UNKNOWN_MOVEMENT",
+            Self::DemandRoutePortalMismatch => "E_DEMAND_ROUTE_PORTAL_MISMATCH",
+            Self::DemandDuplicateRoute => "E_DEMAND_DUPLICATE_ROUTE",
+            Self::ProfileRangeInvalid => "E_PROFILE_RANGE",
         }
     }
 }
@@ -192,6 +211,8 @@ pub fn validate(source: &ScenarioSource) -> Vec<Diagnostic> {
     validate_conflict_regions(source, &mut diagnostics);
     validate_rules(source, &mut diagnostics);
     validate_signals(source, &mut diagnostics);
+    validate_demand(source, &mut diagnostics);
+    validate_profiles(source, &mut diagnostics);
     validate_population(source, &mut diagnostics);
 
     diagnostics
@@ -222,7 +243,8 @@ fn validate_ids(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
                 .map(|conflict| conflict.id.as_str()),
         )
         .chain(source.rules.iter().map(|rule| rule.id.as_str()))
-        .chain(source.signals.iter().map(|signal| signal.id.as_str()));
+        .chain(source.signals.iter().map(|signal| signal.id.as_str()))
+        .chain(source.demand.iter().map(|demand| demand.id.as_str()));
     let mut seen: HashSet<&str> = HashSet::new();
     for id in authored {
         if id.is_empty() {
@@ -391,6 +413,127 @@ fn portal_position(
     match portal.end {
         PathEnd::Start => path.points.first().copied(),
         PathEnd::End => path.points.last().copied(),
+    }
+}
+
+fn validate_demand(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for demand in &source.demand {
+        let object = Some(demand.id.clone());
+        if !demand.rate_vph.is_finite() || demand.rate_vph <= 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::NonPositiveValue,
+                object.clone(),
+                format!(
+                    "demand '{}' rate_vph must be finite and positive, got {}",
+                    demand.id, demand.rate_vph
+                ),
+            ));
+        }
+
+        let portal = source.portals.iter().find(|p| p.id == demand.portal);
+        if portal.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DemandUnknownPortal,
+                object.clone(),
+                format!(
+                    "demand '{}' generates at undeclared portal '{}'",
+                    demand.id, demand.portal
+                ),
+            ));
+        }
+
+        if demand.routes.is_empty() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DemandEmptyRoutes,
+                object.clone(),
+                format!("demand '{}' lists no routes", demand.id),
+            ));
+        }
+
+        let mut seen: HashSet<&str> = HashSet::new();
+        for route in &demand.routes {
+            if !route.weight.is_finite() || route.weight <= 0.0 {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::NonPositiveValue,
+                    object.clone(),
+                    format!(
+                        "demand '{}' route to '{}' weight must be finite and positive, got {}",
+                        demand.id, route.movement, route.weight
+                    ),
+                ));
+            }
+            if !seen.insert(route.movement.as_str()) {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::DemandDuplicateRoute,
+                    object.clone(),
+                    format!(
+                        "demand '{}' lists movement '{}' more than once",
+                        demand.id, route.movement
+                    ),
+                ));
+            }
+            match source
+                .movements
+                .iter()
+                .find(|movement| movement.id == route.movement)
+            {
+                None => diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::DemandUnknownMovement,
+                    object.clone(),
+                    format!(
+                        "demand '{}' routes to undeclared movement '{}'",
+                        demand.id, route.movement
+                    ),
+                )),
+                Some(movement) if movement.from != demand.portal => {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::DemandRoutePortalMismatch,
+                        object.clone(),
+                        format!(
+                            "demand '{}' generates at portal '{}' but movement '{}' starts at '{}'",
+                            demand.id, demand.portal, route.movement, movement.from
+                        ),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+}
+
+fn validate_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    let ranges = [
+        ("speed_mps", source.profiles.speed_mps),
+        ("length_m", source.profiles.length_m),
+        ("width_m", source.profiles.width_m),
+        ("time_gap_s", source.profiles.time_gap_s),
+        ("max_accel_mps2", source.profiles.max_accel_mps2),
+        (
+            "comfortable_brake_mps2",
+            source.profiles.comfortable_brake_mps2,
+        ),
+    ];
+    for (field, range) in ranges {
+        validate_profile_range(source, field, range, diagnostics);
+    }
+}
+
+fn validate_profile_range(
+    source: &ScenarioSource,
+    field: &str,
+    range: ProfileRangeSource,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let finite = range.min.is_finite() && range.max.is_finite();
+    if !finite || range.min <= 0.0 || range.min > range.max {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::ProfileRangeInvalid,
+            Some(source.id.clone()),
+            format!(
+                "profiles.{field} must be finite, positive, and non-inverted, got [{}, {}]",
+                range.min, range.max
+            ),
+        ));
     }
 }
 
@@ -1083,6 +1226,79 @@ mod tests {
              { id: 'pb', path: 'b', end: 'start', width_m: 4.0 } ]",
         );
         assert!(codes(&source).contains(&"E_PORTAL_OVERLAP"));
+    }
+
+    const FLOW: &str = "paths: [ { id: 'guide', points: [ { x: 0, y: 0 }, { x: 100, y: 0 } ] } ], \
+         portals: [ { id: 'entry', path: 'guide', end: 'start', width_m: 3.0 }, \
+         { id: 'exit', path: 'guide', end: 'end', width_m: 3.0 } ], \
+         movements: [ { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0 } ]";
+
+    #[test]
+    fn accepts_a_portal_demand_source() {
+        let source = base(&format!(
+            "{FLOW}, demand: [ {{ id: 'inflow', portal: 'entry', rate_vph: 600.0, \
+             routes: [ {{ movement: 'through', weight: 1.0 }} ] }} ]"
+        ));
+        assert_eq!(validate(&source), Vec::new());
+    }
+
+    #[test]
+    fn flags_demand_reference_errors() {
+        let unknown_portal = base(&format!(
+            "{FLOW}, demand: [ {{ id: 'inflow', portal: 'nope', rate_vph: 600.0, \
+             routes: [ {{ movement: 'through', weight: 1.0 }} ] }} ]"
+        ));
+        assert!(codes(&unknown_portal).contains(&"E_DEMAND_UNKNOWN_PORTAL"));
+
+        let unknown_movement = base(&format!(
+            "{FLOW}, demand: [ {{ id: 'inflow', portal: 'entry', rate_vph: 600.0, \
+             routes: [ {{ movement: 'ghost', weight: 1.0 }} ] }} ]"
+        ));
+        assert!(codes(&unknown_movement).contains(&"E_DEMAND_UNKNOWN_MOVEMENT"));
+
+        let mismatched = base(&format!(
+            "{FLOW}, demand: [ {{ id: 'inflow', portal: 'exit', rate_vph: 600.0, \
+             routes: [ {{ movement: 'through', weight: 1.0 }} ] }} ]"
+        ));
+        assert!(codes(&mismatched).contains(&"E_DEMAND_ROUTE_PORTAL_MISMATCH"));
+    }
+
+    #[test]
+    fn flags_empty_duplicate_and_non_positive_demand() {
+        let empty = base(&format!(
+            "{FLOW}, demand: [ {{ id: 'inflow', portal: 'entry', rate_vph: 600.0, routes: [] }} ]"
+        ));
+        assert!(codes(&empty).contains(&"E_DEMAND_EMPTY_ROUTES"));
+
+        let duplicate = base(&format!(
+            "{FLOW}, demand: [ {{ id: 'inflow', portal: 'entry', rate_vph: 600.0, \
+             routes: [ {{ movement: 'through', weight: 1.0 }}, \
+             {{ movement: 'through', weight: 2.0 }} ] }} ]"
+        ));
+        assert!(codes(&duplicate).contains(&"E_DEMAND_DUPLICATE_ROUTE"));
+
+        let non_positive = base(&format!(
+            "{FLOW}, demand: [ {{ id: 'inflow', portal: 'entry', rate_vph: 0.0, \
+             routes: [ {{ movement: 'through', weight: 1.0 }} ] }} ]"
+        ));
+        assert!(codes(&non_positive).contains(&"E_NON_POSITIVE"));
+    }
+
+    #[test]
+    fn flags_invalid_profile_ranges() {
+        let inverted = base(&format!(
+            "{FLOW}, profiles: {{ speed_mps: {{ min: 15.0, max: 9.0 }}, length_m: {{ min: 4.0, max: 5.0 }}, \
+             width_m: {{ min: 1.8, max: 2.0 }}, time_gap_s: {{ min: 1.0, max: 2.0 }}, \
+             max_accel_mps2: {{ min: 1.2, max: 2.5 }}, comfortable_brake_mps2: {{ min: 2.0, max: 3.5 }} }}"
+        ));
+        assert!(codes(&inverted).contains(&"E_PROFILE_RANGE"));
+
+        let non_positive = base(&format!(
+            "{FLOW}, profiles: {{ speed_mps: {{ min: 0.0, max: 9.0 }}, length_m: {{ min: 4.0, max: 5.0 }}, \
+             width_m: {{ min: 1.8, max: 2.0 }}, time_gap_s: {{ min: 1.0, max: 2.0 }}, \
+             max_accel_mps2: {{ min: 1.2, max: 2.5 }}, comfortable_brake_mps2: {{ min: 2.0, max: 3.5 }} }}"
+        ));
+        assert!(codes(&non_positive).contains(&"E_PROFILE_RANGE"));
     }
 
     #[test]

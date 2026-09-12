@@ -4,16 +4,31 @@
 //! configured tick per [`Simulation::step`] call and never reads wall-clock
 //! time, so frame rate, pause, and speed controls cannot change results.
 //! Increment 0 moves constant-speed agents along a guide path and emits typed
-//! spawn/despawn events; it deliberately omits interaction.
+//! spawn/despawn events. Increment 2 slice A adds scenario-driven portal demand
+//! with route assignment, per-agent profile sampling, and safe spawn admission;
+//! interaction, longitudinal control, and signals remain later work.
 
-use tangle_model::CompiledScenario;
+use tangle_model::{
+    CompiledMovement, CompiledScenario, DemandId, MovementId, PathEnd, PathId, PortalId,
+};
 
 use crate::agent::{AgentId, AgentInit, AgentStore};
 use crate::config::RunConfig;
+use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_route};
 use crate::event::{DespawnReason, Event};
+use crate::profile::{VehicleProfile, sample_profile};
+use crate::rng::{STREAM_DEMAND, STREAM_PROFILE, derive_stream, uniform01};
 use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 use crate::time::SimTime;
 use crate::units::Seconds;
+
+/// Extra clearance in metres demanded beyond two bodies' half-lengths when a
+/// portal admits a vehicle.
+///
+/// Admission is conservative: a vehicle enters only when its entry body clears
+/// every live body on the same path. This is a portal rule, not a collision
+/// check; exact box queries spanning crossing paths are Increment 4 work.
+const MIN_SPAWN_CLEARANCE_M: f64 = 1.0;
 
 /// Failure to build a [`Simulation`] from a compiled scenario and run config.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -76,6 +91,7 @@ pub struct RunSummary {
     elapsed: Seconds,
     spawned: u64,
     despawned: u64,
+    dropped: u64,
     remaining: usize,
 }
 
@@ -110,6 +126,11 @@ impl RunSummary {
         self.despawned
     }
 
+    /// Demand arrivals shed because a pending queue was full.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
     /// Agents still alive at the end.
     pub fn remaining(&self) -> usize {
         self.remaining
@@ -123,19 +144,24 @@ pub struct Simulation {
     config: RunConfig,
     tick: u64,
     agents: AgentStore,
+    demand: Vec<DemandRuntime>,
     events: Vec<Event>,
     population_announced: bool,
     spawned_total: u64,
     despawned_total: u64,
+    dropped_total: u64,
 }
 
 impl Simulation {
     /// Build a simulation from a compiled scenario and run configuration.
     ///
-    /// The initial population is placed immediately along the first guide path
-    /// at the configured spacing, so a snapshot before the first step already
-    /// shows the starting state. The first [`Self::step`] announces those
-    /// agents with [`Event::Spawned`] before advancing the clock.
+    /// When the scenario declares demand sources, vehicles arrive over time at
+    /// their portals and the static walking-skeleton population is not used.
+    /// Otherwise the initial population is placed immediately along the first
+    /// guide path at the configured spacing, so a snapshot before the first
+    /// step already shows the starting state. The first [`Self::step`]
+    /// announces an initial population with [`Event::Spawned`] before
+    /// advancing the clock.
     pub fn new(scenario: CompiledScenario, config: RunConfig) -> Result<Self, InitError> {
         let step = config.step();
         if !step.is_finite_positive() {
@@ -144,9 +170,24 @@ impl Simulation {
             });
         }
 
+        // One `demand` substream per source: arrivals at different portals are
+        // independent and stable under the root seed.
+        let demand: Vec<DemandRuntime> = scenario
+            .demand()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                DemandRuntime::new(
+                    index,
+                    derive_stream(config.seed(), STREAM_DEMAND, index as u32),
+                )
+            })
+            .collect();
+
         let population = *scenario.population();
         let mut agents = AgentStore::default();
-        if population.vehicle_count > 0 {
+        let mut spawned_total = 0;
+        if demand.is_empty() && population.vehicle_count > 0 {
             let path = scenario.paths().first().ok_or(InitError::NoGuidePath {
                 vehicles: population.vehicle_count,
             })?;
@@ -172,8 +213,12 @@ impl Simulation {
                     heading_rad: path.heading_at(distance_m),
                     body_length_m: population.vehicle_length_m,
                     body_width_m: population.vehicle_width_m,
+                    direction: 1.0,
+                    movement: None,
+                    profile: None,
                 });
             }
+            spawned_total = u64::from(population.vehicle_count);
         }
 
         Ok(Self {
@@ -181,10 +226,12 @@ impl Simulation {
             config,
             tick: 0,
             agents,
+            demand,
             events: Vec::new(),
             population_announced: false,
-            spawned_total: u64::from(population.vehicle_count),
+            spawned_total,
             despawned_total: 0,
+            dropped_total: 0,
         })
     }
 
@@ -243,6 +290,7 @@ impl Simulation {
             elapsed: Seconds::from_secs(self.time().seconds()),
             spawned: self.spawned_total,
             despawned: self.despawned_total,
+            dropped: self.dropped_total,
             remaining: self.agents.alive_count(),
         }
     }
@@ -260,6 +308,30 @@ impl Simulation {
     /// Number of live agents.
     pub fn agent_count(&self) -> usize {
         self.agents.alive_count()
+    }
+
+    /// Vehicles waiting for safe admission at one demand source.
+    pub fn pending_arrivals(&self, demand: DemandId) -> usize {
+        self.demand
+            .get(demand.index())
+            .map_or(0, DemandRuntime::pending_len)
+    }
+
+    /// Arrivals shed because a demand source's pending queue was full.
+    pub fn dropped_arrivals(&self, demand: DemandId) -> u64 {
+        self.demand
+            .get(demand.index())
+            .map_or(0, |runtime| runtime.dropped)
+    }
+
+    /// Route assigned to an agent, present for demand-generated vehicles.
+    pub fn agent_route(&self, agent: AgentId) -> Option<MovementId> {
+        self.agents.movement.get(agent.index()).copied().flatten()
+    }
+
+    /// Sampled profile of an agent, present for demand-generated vehicles.
+    pub fn agent_profile(&self, agent: AgentId) -> Option<VehicleProfile> {
+        self.agents.profile.get(agent.index()).copied().flatten()
     }
 
     /// The root seed recorded for the run.
@@ -293,15 +365,26 @@ impl Simulation {
                 continue;
             };
 
-            let travelled = self.agents.distance_m[index] + self.agents.speed_mps[index] * dt;
+            let direction = self.agents.direction[index];
+            let travelled =
+                self.agents.distance_m[index] + self.agents.speed_mps[index] * direction * dt;
             let length = path.length();
-            let distance_m = travelled.min(length);
+            let distance_m = if direction < 0.0 {
+                travelled.max(0.0)
+            } else {
+                travelled.min(length)
+            };
 
             self.agents.distance_m[index] = distance_m;
             self.agents.position[index] = path.position_at(distance_m);
             self.agents.heading_rad[index] = path.heading_at(distance_m);
 
-            if travelled >= length {
+            let exited = if direction < 0.0 {
+                travelled <= 0.0
+            } else {
+                travelled >= length
+            };
+            if exited {
                 self.agents.alive[index] = false;
                 self.despawned_total += 1;
                 self.events.push(Event::Despawned {
@@ -311,6 +394,123 @@ impl Simulation {
                 });
             }
         }
+
+        self.advance_demand(dt);
+    }
+
+    /// Generate demand arrivals, then admit them subject to portal clearance.
+    ///
+    /// Random draws are confined to the named streams: the expected number of
+    /// arrivals and the route of each arrival come from the source's `demand`
+    /// substream, while the profile is sampled from the `profile` stream when
+    /// an arrival is admitted. Every state-affecting choice is therefore a
+    /// deterministic function of the root seed.
+    fn advance_demand(&mut self, dt: f64) {
+        for runtime in 0..self.demand.len() {
+            let source_index = self.demand[runtime].source;
+            let rate_vph = self.scenario.demand()[source_index].rate_vph();
+            let expected = rate_vph / 3600.0 * dt;
+            let mut arrivals = 0u64;
+            if expected.is_finite() && expected > 0.0 {
+                arrivals = expected.floor() as u64;
+                let fraction = expected - expected.floor();
+                if uniform01(&mut self.demand[runtime].rng) < fraction {
+                    arrivals += 1;
+                }
+            }
+            for _ in 0..arrivals {
+                let movement = sample_route(
+                    &self.scenario.demand()[source_index],
+                    &mut self.demand[runtime].rng,
+                );
+                if self.demand[runtime].pending.len() < MAX_PENDING_SPAWNS {
+                    self.demand[runtime].pending.push_back(movement);
+                } else {
+                    self.demand[runtime].dropped += 1;
+                    self.dropped_total += 1;
+                }
+            }
+        }
+
+        // Admit in FIFO order per source, stopping at the first blocked arrival
+        // so a queue stays ordered and does not jump later arrivals ahead.
+        for runtime in 0..self.demand.len() {
+            while let Some(&movement) = self.demand[runtime].pending.front() {
+                if self.try_admit(movement) {
+                    self.demand[runtime].pending.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Admit one demand vehicle on `movement` when the portal entry is clear.
+    fn try_admit(&mut self, movement_id: MovementId) -> bool {
+        let Some((path_id, entry_distance, direction)) =
+            self.scenario.movement(movement_id).map(|movement| {
+                let (entry_distance, direction) = movement_entry(&self.scenario, movement);
+                (movement.path(), entry_distance, direction)
+            })
+        else {
+            return false;
+        };
+
+        // The profile is derived from the stable agent id, so a blocked arrival
+        // re-derives the same profile on the next attempt.
+        let agent_id = AgentId::from_index(self.agents.len());
+        let profile = sample_profile(
+            self.scenario.profiles(),
+            &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
+        );
+        if !self.entry_clear(path_id, entry_distance, profile.length_m) {
+            return false;
+        }
+
+        let Some(path) = self.scenario.path(path_id) else {
+            return false;
+        };
+        let position = path.position_at(entry_distance);
+        let heading_rad = path.heading_at(entry_distance);
+
+        self.agents.push(AgentInit {
+            path: path_id,
+            distance_m: entry_distance,
+            speed_mps: profile.desired_speed_mps,
+            position,
+            heading_rad,
+            body_length_m: profile.length_m,
+            body_width_m: profile.width_m,
+            direction,
+            movement: Some(movement_id),
+            profile: Some(profile),
+        });
+        self.spawned_total += 1;
+        self.events.push(Event::Spawned {
+            agent: agent_id,
+            path: path_id,
+            distance_m: entry_distance,
+        });
+        true
+    }
+
+    /// Whether the entry at `entry_distance` on `path` clears every live body.
+    ///
+    /// The rule is an along-path separation on the same path, which is
+    /// conservative for a portal and independent of travel direction. Exact box
+    /// queries that also cover crossing paths are Increment 4 work.
+    fn entry_clear(&self, path: PathId, entry_distance: f64, candidate_length: f64) -> bool {
+        for index in 0..self.agents.len() {
+            if !self.agents.alive[index] || self.agents.path[index] != path {
+                continue;
+            }
+            let clearance =
+                (self.agents.body_length_m[index] + candidate_length) * 0.5 + MIN_SPAWN_CLEARANCE_M;
+            if (self.agents.distance_m[index] - entry_distance).abs() < clearance {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -329,6 +529,28 @@ fn spawn_capacity(path_length_m: f64, spacing_m: f64, body_length_m: f64) -> u32
     } else {
         slots as u32 + 1
     }
+}
+
+/// Entry arc length and travel direction for a movement.
+///
+/// A movement enters at its `from` portal. On the path start it enters at
+/// distance zero travelling forward; on the path end it enters at the full
+/// length travelling backward.
+fn movement_entry(scenario: &CompiledScenario, movement: &CompiledMovement) -> (f64, f64) {
+    let path_length = scenario
+        .path(movement.path())
+        .map_or(0.0, |path| path.length());
+    match portal_end(scenario, movement.from()) {
+        PathEnd::End => (path_length, -1.0),
+        PathEnd::Start => (0.0, 1.0),
+    }
+}
+
+/// The authored end of a compiled portal, falling back to the start.
+fn portal_end(scenario: &CompiledScenario, portal: PortalId) -> PathEnd {
+    scenario
+        .portal(portal)
+        .map_or(PathEnd::Start, |portal| portal.end())
 }
 
 #[cfg(test)]

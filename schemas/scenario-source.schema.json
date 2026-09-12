@@ -32,6 +32,14 @@
         "$ref": "#/$defs/CrossingSource"
       }
     },
+    "demand": {
+      "description": "Portal demand generators; when non-empty they replace the static\nwalking-skeleton population.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DemandSource"
+      }
+    },
     "id": {
       "description": "Stable scenario identifier recorded in run provenance.",
       "type": "string"
@@ -52,7 +60,7 @@
       }
     },
     "population": {
-      "description": "Walking-skeleton population tuning.",
+      "description": "Walking-skeleton population tuning, used only when `demand` is empty.",
       "$ref": "#/$defs/PopulationSource",
       "default": {
         "vehicle_count": 6,
@@ -67,6 +75,36 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/PortalSource"
+      }
+    },
+    "profiles": {
+      "description": "Passenger-car physical and behavior profile distributions.",
+      "$ref": "#/$defs/ProfileSource",
+      "default": {
+        "comfortable_brake_mps2": {
+          "max": 3.5,
+          "min": 2.0
+        },
+        "length_m": {
+          "max": 5.2,
+          "min": 4.0
+        },
+        "max_accel_mps2": {
+          "max": 2.5,
+          "min": 1.2
+        },
+        "speed_mps": {
+          "max": 15.0,
+          "min": 9.0
+        },
+        "time_gap_s": {
+          "max": 2.0,
+          "min": 1.0
+        },
+        "width_m": {
+          "max": 2.0,
+          "min": 1.7
+        }
       }
     },
     "regions": {
@@ -183,6 +221,39 @@
         "id",
         "region",
         "movements"
+      ]
+    },
+    "DemandSource": {
+      "description": "One portal demand generator: arrivals at an entry portal and the routes\nthose vehicles take.\n\nA demand source names an entry portal (the `from` portal of one or more\nmovements) and a mean arrival rate. Each generated vehicle is assigned one\nof the listed movements by relative weight, so route assignment is scenario\ndata rather than a simulator branch.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "portal": {
+          "description": "Entry portal where generated vehicles enter the world.",
+          "type": "string"
+        },
+        "rate_vph": {
+          "description": "Mean arrival rate in vehicles per hour.",
+          "type": "number",
+          "format": "double"
+        },
+        "routes": {
+          "description": "Movements a generated vehicle may follow, with relative weights.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteShareSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "portal",
+        "rate_vph",
+        "routes"
       ]
     },
     "MovementSource": {
@@ -369,6 +440,86 @@
         "path",
         "end",
         "width_m"
+      ]
+    },
+    "ProfileRangeSource": {
+      "description": "An inclusive uniform distribution for one profile parameter.\n\nA range with `min == max` is a constant. The owning field name carries the\nphysical unit, for example `speed_mps` or `time_gap_s`.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "description": "Upper bound of the distribution.",
+          "type": "number",
+          "format": "double"
+        },
+        "min": {
+          "description": "Lower bound of the distribution.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max"
+      ]
+    },
+    "ProfileSource": {
+      "description": "Passenger-car physical and behavior profile distributions.\n\nEvery generated vehicle samples one value from each range from the `profile`\nrandom stream, so its body and longitudinal behavior are stable for the run.\nPedestrian profiles are Increment 3 work.",
+      "type": "object",
+      "properties": {
+        "comfortable_brake_mps2": {
+          "description": "Comfortable deceleration in metres per second squared.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "length_m": {
+          "description": "Body length in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "max_accel_mps2": {
+          "description": "Maximum acceleration in metres per second squared.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "speed_mps": {
+          "description": "Desired free-flow speed in metres per second.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "time_gap_s": {
+          "description": "Desired following time gap in seconds.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "width_m": {
+          "description": "Body width in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed_mps",
+        "length_m",
+        "width_m",
+        "time_gap_s",
+        "max_accel_mps2",
+        "comfortable_brake_mps2"
+      ]
+    },
+    "RouteShareSource": {
+      "description": "One movement's relative share of a demand source's arrivals.",
+      "type": "object",
+      "properties": {
+        "movement": {
+          "description": "Movement a generated vehicle follows.",
+          "type": "string"
+        },
+        "weight": {
+          "description": "Relative weight; a larger weight is chosen proportionally more often.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "movement",
+        "weight"
       ]
     },
     "RuleKind": {

@@ -204,6 +204,27 @@ impl SignalId {
     }
 }
 
+/// Dense index of a compiled demand source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DemandId(u32);
+
+impl DemandId {
+    /// Construct a dense demand identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this demand source.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Stable string identifiers in dense-index order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdMap {
@@ -216,6 +237,7 @@ pub struct IdMap {
     conflict_regions: Vec<String>,
     rules: Vec<String>,
     signals: Vec<String>,
+    demand: Vec<String>,
 }
 
 impl IdMap {
@@ -264,6 +286,11 @@ impl IdMap {
         &self.signals
     }
 
+    /// Demand-source identifiers indexed by [`DemandId`].
+    pub fn demand(&self) -> &[String] {
+        &self.demand
+    }
+
     /// Look up the authored name of a compiled path.
     pub fn path_name(&self, id: PathId) -> Option<&str> {
         lookup(&self.paths, id.index())
@@ -307,6 +334,11 @@ impl IdMap {
     /// Look up the authored name of a compiled signal.
     pub fn signal_name(&self, id: SignalId) -> Option<&str> {
         lookup(&self.signals, id.index())
+    }
+
+    /// Look up the authored name of a compiled demand source.
+    pub fn demand_name(&self, id: DemandId) -> Option<&str> {
+        lookup(&self.demand, id.index())
     }
 }
 
@@ -804,6 +836,147 @@ impl CompiledSignal {
     }
 }
 
+/// One movement's relative share of a demand source's arrivals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledRouteShare {
+    movement: MovementId,
+    weight: f64,
+}
+
+impl CompiledRouteShare {
+    /// The movement a generated vehicle follows.
+    pub fn movement(&self) -> MovementId {
+        self.movement
+    }
+
+    /// Relative weight; larger values are chosen proportionally more often.
+    pub fn weight(&self) -> f64 {
+        self.weight
+    }
+}
+
+/// A compiled portal demand generator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledDemand {
+    id: DemandId,
+    name: String,
+    portal: PortalId,
+    rate_vph: f64,
+    routes: Vec<CompiledRouteShare>,
+}
+
+impl CompiledDemand {
+    /// Dense identifier of this demand source.
+    pub fn id(&self) -> DemandId {
+        self.id
+    }
+
+    /// Authored name of this demand source.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Entry portal where generated vehicles enter.
+    pub fn portal(&self) -> PortalId {
+        self.portal
+    }
+
+    /// Mean arrival rate in vehicles per hour.
+    pub fn rate_vph(&self) -> f64 {
+        self.rate_vph
+    }
+
+    /// Weighted routes a generated vehicle may follow.
+    pub fn routes(&self) -> &[CompiledRouteShare] {
+        &self.routes
+    }
+}
+
+/// An inclusive uniform profile range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProfileRange {
+    min: f64,
+    max: f64,
+}
+
+impl ProfileRange {
+    fn from_source(range: crate::source::ProfileRangeSource) -> Self {
+        Self {
+            min: range.min,
+            max: range.max,
+        }
+    }
+
+    /// Lower bound of the distribution.
+    pub fn min(self) -> f64 {
+        self.min
+    }
+
+    /// Upper bound of the distribution.
+    pub fn max(self) -> f64 {
+        self.max
+    }
+
+    /// Interpolate the range at `u` in `[0, 1]`, clamped to the bounds.
+    pub fn sample(self, u: f64) -> f64 {
+        self.min + (self.max - self.min) * u.clamp(0.0, 1.0)
+    }
+}
+
+/// Compiled passenger-car physical and behavior profile distributions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompiledProfile {
+    speed_mps: ProfileRange,
+    length_m: ProfileRange,
+    width_m: ProfileRange,
+    time_gap_s: ProfileRange,
+    max_accel_mps2: ProfileRange,
+    comfortable_brake_mps2: ProfileRange,
+}
+
+impl CompiledProfile {
+    fn from_source(source: crate::source::ProfileSource) -> Self {
+        Self {
+            speed_mps: ProfileRange::from_source(source.speed_mps),
+            length_m: ProfileRange::from_source(source.length_m),
+            width_m: ProfileRange::from_source(source.width_m),
+            time_gap_s: ProfileRange::from_source(source.time_gap_s),
+            max_accel_mps2: ProfileRange::from_source(source.max_accel_mps2),
+            comfortable_brake_mps2: ProfileRange::from_source(source.comfortable_brake_mps2),
+        }
+    }
+
+    /// Desired free-flow speed distribution in metres per second.
+    pub fn speed_mps(&self) -> ProfileRange {
+        self.speed_mps
+    }
+
+    /// Body length distribution in metres.
+    pub fn length_m(&self) -> ProfileRange {
+        self.length_m
+    }
+
+    /// Body width distribution in metres.
+    pub fn width_m(&self) -> ProfileRange {
+        self.width_m
+    }
+
+    /// Desired following time-gap distribution in seconds.
+    pub fn time_gap_s(&self) -> ProfileRange {
+        self.time_gap_s
+    }
+
+    /// Maximum acceleration distribution in metres per second squared.
+    pub fn max_accel_mps2(&self) -> ProfileRange {
+        self.max_accel_mps2
+    }
+
+    /// Comfortable deceleration distribution in metres per second squared.
+    pub fn comfortable_brake_mps2(&self) -> ProfileRange {
+        self.comfortable_brake_mps2
+    }
+}
+
 /// A validated, immutable scenario ready for the kernel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledScenario {
@@ -818,6 +991,8 @@ pub struct CompiledScenario {
     conflict_regions: Vec<CompiledConflictRegion>,
     rules: Vec<CompiledRule>,
     signals: Vec<CompiledSignal>,
+    demand: Vec<CompiledDemand>,
+    profiles: CompiledProfile,
     population: PopulationSource,
     id_map: IdMap,
 }
@@ -956,6 +1131,26 @@ impl CompiledScenario {
             })
             .collect();
 
+        let demand: Vec<CompiledDemand> = source
+            .demand
+            .iter()
+            .enumerate()
+            .map(|(index, demand)| CompiledDemand {
+                id: DemandId::from_index(index),
+                name: demand.id.clone(),
+                portal: PortalId::from_index(portal_index[demand.portal.as_str()]),
+                rate_vph: demand.rate_vph,
+                routes: demand
+                    .routes
+                    .iter()
+                    .map(|route| CompiledRouteShare {
+                        movement: MovementId::from_index(movement_index[route.movement.as_str()]),
+                        weight: route.weight,
+                    })
+                    .collect(),
+            })
+            .collect();
+
         let id_map = IdMap {
             paths: names(source.paths.iter().map(|path| &path.id)),
             portals: names(source.portals.iter().map(|portal| &portal.id)),
@@ -966,6 +1161,7 @@ impl CompiledScenario {
             conflict_regions: names(source.conflict_regions.iter().map(|conflict| &conflict.id)),
             rules: names(source.rules.iter().map(|rule| &rule.id)),
             signals: names(source.signals.iter().map(|signal| &signal.id)),
+            demand: names(source.demand.iter().map(|demand| &demand.id)),
         };
 
         Ok(Self {
@@ -980,6 +1176,8 @@ impl CompiledScenario {
             conflict_regions,
             rules,
             signals,
+            demand,
+            profiles: CompiledProfile::from_source(source.profiles),
             population: source.population,
             id_map,
         })
@@ -1040,6 +1238,16 @@ impl CompiledScenario {
         &self.signals
     }
 
+    /// Compiled portal demand generators in dense-index order.
+    pub fn demand(&self) -> &[CompiledDemand] {
+        &self.demand
+    }
+
+    /// Passenger-car profile distributions carried through compilation.
+    pub fn profiles(&self) -> &CompiledProfile {
+        &self.profiles
+    }
+
     /// Population tuning carried through compilation.
     pub fn population(&self) -> &PopulationSource {
         &self.population
@@ -1093,6 +1301,11 @@ impl CompiledScenario {
     /// Look up a compiled signal by dense identifier.
     pub fn signal(&self, id: SignalId) -> Option<&CompiledSignal> {
         self.signals.get(id.index())
+    }
+
+    /// Look up a compiled demand source by dense identifier.
+    pub fn demand_by_id(&self, id: DemandId) -> Option<&CompiledDemand> {
+        self.demand.get(id.index())
     }
 }
 
@@ -1412,6 +1625,58 @@ mod tests {
         assert_eq!(signal.phases()[0].color(1), Some(SignalColor::Red));
         assert_eq!(signal.heads()[0].movement(), MovementId::from_index(0));
         assert_eq!(signal.heads()[1].name(), "ns");
+    }
+
+    #[test]
+    fn compiles_demand_routes_and_profiles() {
+        let source = parse_scenario_source(
+            r#"{
+                schema_version: 1, id: 'flow', coordinate_system: { x: 'east_m', y: 'north_m' },
+                paths: [ { id: 'guide', points: [ { x: 0, y: 0 }, { x: 100, y: 0 } ] } ],
+                portals: [ { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+                           { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 } ],
+                movements: [ { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0 } ],
+                demand: [ { id: 'inflow', portal: 'entry', rate_vph: 720.0,
+                    routes: [ { movement: 'through', weight: 3.0 } ] } ],
+                profiles: {
+                    speed_mps: { min: 10.0, max: 14.0 },
+                    length_m: { min: 4.0, max: 5.0 },
+                    width_m: { min: 1.8, max: 2.0 },
+                    time_gap_s: { min: 1.2, max: 1.8 },
+                    max_accel_mps2: { min: 1.5, max: 2.5 },
+                    comfortable_brake_mps2: { min: 2.0, max: 3.0 },
+                },
+            }"#,
+        )
+        .expect("parses");
+        let scenario = CompiledScenario::compile(source).expect("compiles");
+
+        assert_eq!(scenario.demand().len(), 1);
+        let demand = scenario
+            .demand_by_id(DemandId::from_index(0))
+            .expect("demand");
+        assert_eq!(demand.name(), "inflow");
+        assert_eq!(demand.portal(), PortalId::from_index(0));
+        assert!((demand.rate_vph() - 720.0).abs() < 1e-9);
+        assert_eq!(demand.routes().len(), 1);
+        assert_eq!(demand.routes()[0].movement(), MovementId::from_index(0));
+        assert!((demand.routes()[0].weight() - 3.0).abs() < 1e-9);
+        assert_eq!(
+            scenario.id_map().demand_name(DemandId::from_index(0)),
+            Some("inflow")
+        );
+
+        let profiles = scenario.profiles();
+        assert!((profiles.speed_mps().min() - 10.0).abs() < 1e-9);
+        assert!((profiles.speed_mps().sample(0.5) - 12.0).abs() < 1e-9);
+        assert!((profiles.time_gap_s().max() - 1.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn profile_sampling_clamps_out_of_range_parameters() {
+        let range = ProfileRange { min: 4.0, max: 6.0 };
+        assert!((range.sample(-1.0) - 4.0).abs() < 1e-9);
+        assert!((range.sample(2.0) - 6.0).abs() < 1e-9);
     }
 
     #[test]
