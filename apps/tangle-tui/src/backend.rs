@@ -320,7 +320,7 @@ mod tests {
         assert!(footer.contains("path guide"));
         assert!(footer.contains("distance"));
         assert!(footer.contains("body 4.50 x 1.80 m"));
-        assert!(footer.contains("decision none yet"));
+        assert!(footer.contains("decision none (movement is not signal-controlled)"));
     }
 
     #[test]

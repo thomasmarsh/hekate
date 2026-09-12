@@ -12,7 +12,7 @@ use tangle_model::{
     BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, MovementId, PathId, PortalId,
     RegionId, RuleId, RuleKind, SignalId,
 };
-use tangle_sim::AgentSample;
+use tangle_sim::{AgentSample, ComplianceDecision};
 
 use crate::clock::Speed;
 
@@ -612,6 +612,10 @@ pub struct SceneBody {
     pub path: Option<PathId>,
     /// Arc-length position along the path in metres, when known.
     pub path_distance_m: Option<f64>,
+    /// Most recent signal-compliance decision, when the body is
+    /// signal-controlled. Carries only the small recorded reason, not the
+    /// controller's internal state.
+    pub decision: Option<ComplianceDecision>,
 }
 
 impl SceneBody {
@@ -633,6 +637,7 @@ impl SceneBody {
             speed_mps: sample.motion.map(|motion| motion.speed_mps),
             path: sample.motion.map(|motion| motion.path),
             path_distance_m: sample.motion.map(|motion| motion.path_distance_m),
+            decision: sample.motion.and_then(|motion| motion.decision),
         }
     }
 }
@@ -661,6 +666,28 @@ fn lerp_angle(from: f64, to: f64, alpha: f64) -> f64 {
         delta += std::f64::consts::TAU;
     }
     from + delta * alpha
+}
+
+/// One-line inspector text for an agent's most recent signal-compliance
+/// decision; `None` means the movement is not signal-controlled.
+///
+/// The presentation layer owns this wording so every backend shows the same
+/// decision reason for the same record.
+pub fn decision_summary(decision: Option<ComplianceDecision>) -> String {
+    let Some(decision) = decision else {
+        return "none (movement is not signal-controlled)".to_owned();
+    };
+    let action = match decision.action {
+        tangle_sim::SignalAction::Stop => "stop",
+        tangle_sim::SignalAction::Proceed => "proceed",
+    };
+    format!(
+        "{action} ({reason})   head {color}   required {required:.2} m/s²   gap {gap:.2} m",
+        reason = decision.reason.label(),
+        color = decision.color.label(),
+        required = decision.required_decel_mps2,
+        gap = decision.stop_line_gap_m,
+    )
 }
 
 /// A debug overlay a backend may draw.
@@ -838,6 +865,28 @@ mod tests {
         assert_eq!(body.position, DVec2::new(5.0, 0.0));
         // Wrapping across pi must not rotate the long way around.
         assert!(body.heading_rad.abs() > 3.0);
+    }
+
+    #[test]
+    fn decision_summary_names_the_action_reason_and_head() {
+        use tangle_model::SignalColor;
+        use tangle_sim::{ComplianceReason, SignalAction};
+
+        assert_eq!(
+            decision_summary(None),
+            "none (movement is not signal-controlled)"
+        );
+        let summary = decision_summary(Some(tangle_sim::ComplianceDecision {
+            action: SignalAction::Proceed,
+            reason: ComplianceReason::NonCompliantRun,
+            color: SignalColor::Red,
+            stop_line_gap_m: 12.5,
+            required_decel_mps2: 1.25,
+        }));
+        assert!(summary.contains("proceed (noncompliant run)"), "{summary}");
+        assert!(summary.contains("head red"), "{summary}");
+        assert!(summary.contains("required 1.25 m/s²"), "{summary}");
+        assert!(summary.contains("gap 12.50 m"), "{summary}");
     }
 
     fn signalized() -> CompiledScenario {

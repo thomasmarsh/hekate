@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use tangle_model::CompiledScenario;
-use tangle_present::{SceneBody, SceneFrame};
+use tangle_present::{SceneBody, SceneFrame, decision_summary};
 
 use crate::backend::RunInfo;
 
@@ -134,7 +134,7 @@ esc clear   q quit"
             ));
         }
 
-        out.push_str("   decision none yet (Increment 0 has no decisions)");
+        out.push_str(&format!("   decision {}", decision_summary(body.decision)));
         out
     }
 }
@@ -220,6 +220,37 @@ mod tests {
         assert!(footer.contains("speed 12.00 m/s"));
         assert!(footer.contains("path guide"));
         assert!(footer.contains("body 4.50 x 1.80 m"));
+        assert!(footer.contains("decision none (movement is not signal-controlled)"));
         assert!(hud.selected());
+    }
+
+    #[test]
+    fn the_inspector_reports_the_latest_decision_reason() {
+        use tangle_model::{PathId, SignalColor};
+        use tangle_present::BodyKind;
+        use tangle_sim::{ComplianceReason, SignalAction};
+
+        let hud = Hud::new(scenario());
+        let body = SceneBody {
+            id: 0,
+            position: DVec2::new(30.0, 0.0),
+            heading_rad: 0.0,
+            length_m: 4.0,
+            width_m: 2.0,
+            kind: BodyKind::Vehicle,
+            speed_mps: Some(0.0),
+            path: Some(PathId::from_index(0)),
+            path_distance_m: Some(30.0),
+            decision: Some(tangle_sim::ComplianceDecision {
+                action: SignalAction::Stop,
+                reason: ComplianceReason::CompliantStop,
+                color: SignalColor::Red,
+                stop_line_gap_m: 2.0,
+                required_decel_mps2: 0.0,
+            }),
+        };
+        let text = hud.describe(&body);
+        assert!(text.contains("decision stop (compliant stop)"), "{text}");
+        assert!(text.contains("head red"), "{text}");
     }
 }

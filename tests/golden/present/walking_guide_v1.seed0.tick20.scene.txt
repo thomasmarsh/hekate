@@ -103,6 +103,7 @@ SceneFrame {
             path_distance_m: Some(
                 11.999999999999996,
             ),
+            decision: None,
         },
         SceneBody {
             id: 1,
@@ -125,6 +126,7 @@ SceneFrame {
             path_distance_m: Some(
                 32.00000000000003,
             ),
+            decision: None,
         },
         SceneBody {
             id: 2,
@@ -147,6 +149,7 @@ SceneFrame {
             path_distance_m: Some(
                 52.00000000000003,
             ),
+            decision: None,
         },
         SceneBody {
             id: 3,
@@ -169,6 +172,7 @@ SceneFrame {
             path_distance_m: Some(
                 71.99999999999993,
             ),
+            decision: None,
         },
         SceneBody {
             id: 4,
@@ -191,6 +195,7 @@ SceneFrame {
             path_distance_m: Some(
                 91.99999999999989,
             ),
+            decision: None,
         },
         SceneBody {
             id: 5,
@@ -213,6 +218,7 @@ SceneFrame {
             path_distance_m: Some(
                 111.99999999999989,
             ),
+            decision: None,
         },
     ],
     overlays: Overlays {

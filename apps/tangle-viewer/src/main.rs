@@ -19,7 +19,7 @@ use glam::DVec2;
 use tangle_model::CompiledScenario;
 use tangle_present::{
     Applied, Overlay, PresentationController, RendererBackend, RestartMode, SceneBody,
-    SceneGeometry, Speed, ViewCommand, Viewport, load_scenario,
+    SceneGeometry, Speed, ViewCommand, Viewport, decision_summary, load_scenario,
 };
 use tangle_sim::{Event, RunConfig, Simulation, Snapshot, SnapshotDetail};
 use tangle_viewer::CurrentFrame;
@@ -665,6 +665,6 @@ fn describe_agent(scenario: &CompiledScenario, body: &SceneBody) -> String {
         out.push_str("intent    hold constant speed along the guide path\n");
     }
 
-    out.push_str("decision  none yet (Increment 0 has no decisions)");
+    out.push_str(&format!("decision  {}", decision_summary(body.decision)));
     out
 }
