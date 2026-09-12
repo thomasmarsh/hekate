@@ -11,10 +11,11 @@
 
 use tangle_model::{
     CompiledScenario, ConflictRegionSource, CrossingSource, DemandSource, MovementSource, PathEnd,
-    PathSource, PointSource, PolygonSource, PopulationSource, PortalSource, ProfileRangeSource,
-    ProfileSource, RouteShareSource, RuleKind, RuleSource, ScenarioSource, SignalColor,
-    SignalHeadSource, SignalPhaseSource, SignalSource, SignalStateSource, parse_scenario_source,
-    validate,
+    PathSource, PedestrianDemandSource, PedestrianProfileSource, PedestrianRouteShareSource,
+    PedestrianRouteSource, PointSource, PolygonSource, PopulationSource, PortalSource,
+    ProfileRangeSource, ProfileSource, RouteShareSource, RuleKind, RuleSource, ScenarioSource,
+    SignalColor, SignalHeadSource, SignalPhaseSource, SignalSource, SignalStateSource,
+    WaitingAreaSource, parse_scenario_source, validate,
 };
 
 /// Declared generation limits: the boundary above which the gate makes no
@@ -200,6 +201,39 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
                 .collect(),
         })
         .collect();
+    let waiting_areas: Vec<WaitingAreaSource> = (0..rng.below(MAX_COLLECTION))
+        .map(|_| WaitingAreaSource {
+            id: rng.id(),
+            region: rng.id(),
+        })
+        .collect();
+    let pedestrian_routes: Vec<PedestrianRouteSource> = (0..rng.below(MAX_COLLECTION))
+        .map(|_| PedestrianRouteSource {
+            id: rng.id(),
+            from: rng.id(),
+            to: rng.id(),
+            path: rng.id(),
+            crossings: (0..rng.below(3)).map(|_| rng.id()).collect(),
+            waiting_areas: (0..rng.below(3)).map(|_| rng.id()).collect(),
+        })
+        .collect();
+    let pedestrian_demand: Vec<PedestrianDemandSource> = (0..rng.below(MAX_COLLECTION))
+        .map(|_| PedestrianDemandSource {
+            id: rng.id(),
+            portal: rng.id(),
+            rate_pph: if rng.below(4) == 0 {
+                0.0
+            } else {
+                rng.positive() * 100.0
+            },
+            routes: (0..rng.below(3))
+                .map(|_| PedestrianRouteShareSource {
+                    route: rng.id(),
+                    weight: rng.positive(),
+                })
+                .collect(),
+        })
+        .collect();
     let signals: Vec<SignalSource> = (0..rng.below(MAX_COLLECTION))
         .map(|_| SignalSource {
             id: rng.id(),
@@ -241,10 +275,13 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
         regions,
         movements,
         crossings,
+        waiting_areas,
+        pedestrian_routes,
         conflict_regions,
         rules,
         signals,
         demand,
+        pedestrian_demand,
         profiles: ProfileSource {
             speed_mps: rng.range(),
             length_m: rng.range(),
@@ -253,6 +290,10 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
             max_accel_mps2: rng.range(),
             comfortable_brake_mps2: rng.range(),
             compliance: rng.range(),
+        },
+        pedestrian_profiles: PedestrianProfileSource {
+            radius_m: rng.range(),
+            speed_mps: rng.range(),
         },
         population: PopulationSource {
             vehicle_count: rng.below(8),
@@ -296,6 +337,15 @@ fn random_sources_compile_or_diagnose_without_panicking() {
             assert_eq!(id_map.rules().len(), scenario.rules().len());
             assert_eq!(id_map.signals().len(), scenario.signals().len());
             assert_eq!(id_map.demand().len(), scenario.demand().len());
+            assert_eq!(id_map.waiting_areas().len(), scenario.waiting_areas().len());
+            assert_eq!(
+                id_map.pedestrian_routes().len(),
+                scenario.pedestrian_routes().len()
+            );
+            assert_eq!(
+                id_map.pedestrian_demand().len(),
+                scenario.pedestrian_demand().len()
+            );
             compiled += 1;
         } else {
             assert!(CompiledScenario::compile(source).is_err());
@@ -326,6 +376,10 @@ fn consistent_sources_always_compile() {
         assert_eq!(signal.heads().len(), 2);
         assert!(signal.cycle_s() > 0.0);
         assert!(scenario.boundaries()[0].polygon().area() > 0.0);
+        assert_eq!(scenario.waiting_areas().len(), 1);
+        assert_eq!(scenario.pedestrian_routes().len(), 1);
+        assert_eq!(scenario.pedestrian_routes()[0].crossings().len(), 1);
+        assert_eq!(scenario.pedestrian_demand().len(), 1);
     }
 }
 
@@ -418,6 +472,18 @@ fn consistent_source(rng: &mut Rng) -> ScenarioSource {
             region: "area".to_owned(),
             movements: vec!["ew_through".to_owned(), "ns_through".to_owned()],
         }],
+        waiting_areas: vec![WaitingAreaSource {
+            id: "wait".to_owned(),
+            region: "area".to_owned(),
+        }],
+        pedestrian_routes: vec![PedestrianRouteSource {
+            id: "north_cross".to_owned(),
+            from: "south".to_owned(),
+            to: "north".to_owned(),
+            path: "ns".to_owned(),
+            crossings: vec!["cross".to_owned()],
+            waiting_areas: vec!["wait".to_owned()],
+        }],
         conflict_regions: vec![ConflictRegionSource {
             id: "center".to_owned(),
             points: square("shape", half).points,
@@ -446,7 +512,17 @@ fn consistent_source(rng: &mut Rng) -> ScenarioSource {
                 weight: 1.0,
             }],
         }],
+        pedestrian_demand: vec![PedestrianDemandSource {
+            id: "footfall".to_owned(),
+            portal: "south".to_owned(),
+            rate_pph: 600.0,
+            routes: vec![PedestrianRouteShareSource {
+                route: "north_cross".to_owned(),
+                weight: 1.0,
+            }],
+        }],
         profiles: ProfileSource::default(),
+        pedestrian_profiles: PedestrianProfileSource::default(),
         signals: vec![SignalSource {
             id: "main".to_owned(),
             heads: vec![

@@ -104,6 +104,30 @@ pub enum DiagnosticCode {
     ProfileRangeInvalid,
     /// A compliance propensity range is non-finite or outside `[0, 1]`.
     ProfileComplianceInvalid,
+    /// A waiting area references a region that is not declared.
+    WaitingAreaUnknownRegion,
+    /// A pedestrian route references a portal that is not declared.
+    PedestrianRouteUnknownPortal,
+    /// A pedestrian route references a path that is not declared.
+    PedestrianRouteUnknownPath,
+    /// A pedestrian route's portals do not both attach to its guide path.
+    PedestrianRoutePortalPathMismatch,
+    /// A pedestrian route starts and ends at the same portal.
+    PedestrianRouteSelfLoop,
+    /// A pedestrian route references a crossing that is not declared.
+    PedestrianRouteUnknownCrossing,
+    /// A pedestrian route references a waiting area that is not declared.
+    PedestrianRouteUnknownWaitingArea,
+    /// A pedestrian demand source references a portal that is not declared.
+    PedestrianDemandUnknownPortal,
+    /// A pedestrian demand source lists no routes.
+    PedestrianDemandEmptyRoutes,
+    /// A pedestrian demand route references a route that is not declared.
+    PedestrianDemandUnknownRoute,
+    /// A pedestrian demand route starts at a different portal than the source.
+    PedestrianDemandRoutePortalMismatch,
+    /// A pedestrian demand source lists one route more than once.
+    PedestrianDemandDuplicateRoute,
 }
 
 impl DiagnosticCode {
@@ -151,6 +175,20 @@ impl DiagnosticCode {
             Self::DemandDuplicateRoute => "E_DEMAND_DUPLICATE_ROUTE",
             Self::ProfileRangeInvalid => "E_PROFILE_RANGE",
             Self::ProfileComplianceInvalid => "E_PROFILE_COMPLIANCE",
+            Self::WaitingAreaUnknownRegion => "E_WAITING_AREA_UNKNOWN_REGION",
+            Self::PedestrianRouteUnknownPortal => "E_PEDESTRIAN_ROUTE_UNKNOWN_PORTAL",
+            Self::PedestrianRouteUnknownPath => "E_PEDESTRIAN_ROUTE_UNKNOWN_PATH",
+            Self::PedestrianRoutePortalPathMismatch => "E_PEDESTRIAN_ROUTE_PORTAL_PATH_MISMATCH",
+            Self::PedestrianRouteSelfLoop => "E_PEDESTRIAN_ROUTE_SELF_LOOP",
+            Self::PedestrianRouteUnknownCrossing => "E_PEDESTRIAN_ROUTE_UNKNOWN_CROSSING",
+            Self::PedestrianRouteUnknownWaitingArea => "E_PEDESTRIAN_ROUTE_UNKNOWN_WAITING_AREA",
+            Self::PedestrianDemandUnknownPortal => "E_PEDESTRIAN_DEMAND_UNKNOWN_PORTAL",
+            Self::PedestrianDemandEmptyRoutes => "E_PEDESTRIAN_DEMAND_EMPTY_ROUTES",
+            Self::PedestrianDemandUnknownRoute => "E_PEDESTRIAN_DEMAND_UNKNOWN_ROUTE",
+            Self::PedestrianDemandRoutePortalMismatch => {
+                "E_PEDESTRIAN_DEMAND_ROUTE_PORTAL_MISMATCH"
+            }
+            Self::PedestrianDemandDuplicateRoute => "E_PEDESTRIAN_DEMAND_DUPLICATE_ROUTE",
         }
     }
 }
@@ -217,8 +255,12 @@ pub fn validate(source: &ScenarioSource) -> Vec<Diagnostic> {
     validate_conflict_regions(source, &mut diagnostics);
     validate_rules(source, &mut diagnostics);
     validate_signals(source, &mut diagnostics);
+    validate_waiting_areas(source, &mut diagnostics);
+    validate_pedestrian_routes(source, &mut diagnostics);
     validate_demand(source, &mut diagnostics);
+    validate_pedestrian_demand(source, &mut diagnostics);
     validate_profiles(source, &mut diagnostics);
+    validate_pedestrian_profiles(source, &mut diagnostics);
     validate_population(source, &mut diagnostics);
 
     diagnostics
@@ -250,7 +292,25 @@ fn validate_ids(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
         )
         .chain(source.rules.iter().map(|rule| rule.id.as_str()))
         .chain(source.signals.iter().map(|signal| signal.id.as_str()))
-        .chain(source.demand.iter().map(|demand| demand.id.as_str()));
+        .chain(
+            source
+                .waiting_areas
+                .iter()
+                .map(|waiting_area| waiting_area.id.as_str()),
+        )
+        .chain(
+            source
+                .pedestrian_routes
+                .iter()
+                .map(|route| route.id.as_str()),
+        )
+        .chain(source.demand.iter().map(|demand| demand.id.as_str()))
+        .chain(
+            source
+                .pedestrian_demand
+                .iter()
+                .map(|demand| demand.id.as_str()),
+        );
     let mut seen: HashSet<&str> = HashSet::new();
     for id in authored {
         if id.is_empty() {
@@ -514,6 +574,96 @@ fn validate_demand(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
+fn validate_pedestrian_demand(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for demand in &source.pedestrian_demand {
+        let object = Some(demand.id.clone());
+        if !demand.rate_pph.is_finite() || demand.rate_pph <= 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::NonPositiveValue,
+                object.clone(),
+                format!(
+                    "pedestrian demand '{}' rate_pph must be finite and positive, got {}",
+                    demand.id, demand.rate_pph
+                ),
+            ));
+        }
+
+        if !source
+            .portals
+            .iter()
+            .any(|portal| portal.id == demand.portal)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianDemandUnknownPortal,
+                object.clone(),
+                format!(
+                    "pedestrian demand '{}' generates at undeclared portal '{}'",
+                    demand.id, demand.portal
+                ),
+            ));
+        }
+
+        if demand.routes.is_empty() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianDemandEmptyRoutes,
+                object.clone(),
+                format!("pedestrian demand '{}' lists no routes", demand.id),
+            ));
+        }
+
+        let mut seen: HashSet<&str> = HashSet::new();
+        for share in &demand.routes {
+            if !share.weight.is_finite() || share.weight <= 0.0 {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::NonPositiveValue,
+                    object.clone(),
+                    format!(
+                        "pedestrian demand '{}' route to '{}' weight must be finite and \
+                         positive, got {}",
+                        demand.id, share.route, share.weight
+                    ),
+                ));
+            }
+            if !seen.insert(share.route.as_str()) {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PedestrianDemandDuplicateRoute,
+                    object.clone(),
+                    format!(
+                        "pedestrian demand '{}' lists route '{}' more than once",
+                        demand.id, share.route
+                    ),
+                ));
+            }
+            match source
+                .pedestrian_routes
+                .iter()
+                .find(|route| route.id == share.route)
+            {
+                None => diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PedestrianDemandUnknownRoute,
+                    object.clone(),
+                    format!(
+                        "pedestrian demand '{}' routes to undeclared route '{}'",
+                        demand.id, share.route
+                    ),
+                )),
+                Some(route) if route.from != demand.portal => {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::PedestrianDemandRoutePortalMismatch,
+                        object.clone(),
+                        format!(
+                            "pedestrian demand '{}' generates at portal '{}' but route '{}' \
+                             starts at '{}'",
+                            demand.id, demand.portal, share.route, route.from
+                        ),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+}
+
 fn validate_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
     let ranges = [
         ("speed_mps", source.profiles.speed_mps),
@@ -530,6 +680,22 @@ fn validate_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>)
         validate_profile_range(source, field, range, diagnostics);
     }
     validate_compliance_range(source, source.profiles.compliance, diagnostics);
+}
+
+fn validate_pedestrian_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    let ranges = [
+        (
+            "pedestrian_profiles.radius_m",
+            source.pedestrian_profiles.radius_m,
+        ),
+        (
+            "pedestrian_profiles.speed_mps",
+            source.pedestrian_profiles.speed_mps,
+        ),
+    ];
+    for (field, range) in ranges {
+        validate_profile_range(source, field, range, diagnostics);
+    }
 }
 
 /// A compliance propensity is a fraction, so unlike the physical ranges it is
@@ -769,6 +935,120 @@ fn validate_crossings(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
                     format!(
                         "crossing '{}' crosses undeclared movement '{}'",
                         crossing.id, movement
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_waiting_areas(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for area in &source.waiting_areas {
+        if !source.regions.iter().any(|region| region.id == area.region) {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::WaitingAreaUnknownRegion,
+                Some(area.id.clone()),
+                format!(
+                    "waiting area '{}' occupies undeclared region '{}'",
+                    area.id, area.region
+                ),
+            ));
+        }
+    }
+}
+
+fn validate_pedestrian_routes(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
+    for route in &source.pedestrian_routes {
+        let object = Some(route.id.clone());
+        let from = source.portals.iter().find(|portal| portal.id == route.from);
+        let to = source.portals.iter().find(|portal| portal.id == route.to);
+        let path = source.paths.iter().find(|path| path.id == route.path);
+
+        if from.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianRouteUnknownPortal,
+                object.clone(),
+                format!(
+                    "pedestrian route '{}' starts at undeclared portal '{}'",
+                    route.id, route.from
+                ),
+            ));
+        }
+        if to.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianRouteUnknownPortal,
+                object.clone(),
+                format!(
+                    "pedestrian route '{}' ends at undeclared portal '{}'",
+                    route.id, route.to
+                ),
+            ));
+        }
+        if route.from == route.to {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianRouteSelfLoop,
+                object.clone(),
+                format!(
+                    "pedestrian route '{}' starts and ends at portal '{}'",
+                    route.id, route.from
+                ),
+            ));
+        }
+        if path.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianRouteUnknownPath,
+                object.clone(),
+                format!(
+                    "pedestrian route '{}' follows undeclared path '{}'",
+                    route.id, route.path
+                ),
+            ));
+        } else {
+            for (role, portal) in [("from", from), ("to", to)] {
+                if let Some(portal) = portal
+                    && portal.path != route.path
+                {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::PedestrianRoutePortalPathMismatch,
+                        object.clone(),
+                        format!(
+                            "pedestrian route '{}' {role} portal '{}' attaches to path '{}', \
+                             not '{}'",
+                            route.id, portal.id, portal.path, route.path
+                        ),
+                    ));
+                }
+            }
+        }
+
+        for crossing in &route.crossings {
+            if !source
+                .crossings
+                .iter()
+                .any(|candidate| candidate.id == *crossing)
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PedestrianRouteUnknownCrossing,
+                    object.clone(),
+                    format!(
+                        "pedestrian route '{}' traverses undeclared crossing '{}'",
+                        route.id, crossing
+                    ),
+                ));
+            }
+        }
+        for waiting_area in &route.waiting_areas {
+            if !source
+                .waiting_areas
+                .iter()
+                .any(|candidate| candidate.id == *waiting_area)
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PedestrianRouteUnknownWaitingArea,
+                    object.clone(),
+                    format!(
+                        "pedestrian route '{}' stages at undeclared waiting area '{}'",
+                        route.id, waiting_area
                     ),
                 ));
             }
@@ -1399,6 +1679,132 @@ mod tests {
              compliance: {{ min: 0.0, max: 1.0 }} }}"
         ));
         assert_eq!(validate(&valid), Vec::new());
+    }
+
+    /// A pedestrian route across a road movement: a walking path crossing the
+    /// road, a waiting area and crossing, and one pedestrian demand source.
+    const PEDESTRIAN: &str = "
+        paths: [
+            { id: 'road', points: [ { x: -40, y: 0 }, { x: 40, y: 0 } ] },
+            { id: 'walk', points: [ { x: 0, y: -15 }, { x: 0, y: 15 } ] },
+        ],
+        portals: [
+            { id: 'west', path: 'road', end: 'start', width_m: 7.0 },
+            { id: 'east', path: 'road', end: 'end', width_m: 7.0 },
+            { id: 'south', path: 'walk', end: 'start', width_m: 2.0 },
+            { id: 'north', path: 'walk', end: 'end', width_m: 2.0 },
+        ],
+        regions: [
+            { id: 'crossing_zone', points: [
+                { x: -3, y: -3 }, { x: 3, y: -3 }, { x: 3, y: 3 }, { x: -3, y: 3 }
+            ] },
+            { id: 'south_kerb', points: [
+                { x: -3, y: -8 }, { x: 3, y: -8 }, { x: 3, y: -5 }, { x: -3, y: -5 }
+            ] },
+        ],
+        movements: [ { id: 'ew_through', from: 'west', to: 'east', path: 'road', priority: 0 } ],
+        crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ] } ],
+        waiting_areas: [ { id: 'south_wait', region: 'south_kerb' } ],
+        pedestrian_routes: [ { id: 'north_crossing', from: 'south', to: 'north', path: 'walk',
+            crossings: [ 'cross' ], waiting_areas: [ 'south_wait' ] } ],
+        pedestrian_demand: [ { id: 'footfall', portal: 'south', rate_pph: 240.0,
+            routes: [ { route: 'north_crossing', weight: 1.0 } ] } ],
+        pedestrian_profiles: { radius_m: { min: 0.2, max: 0.3 },
+            speed_mps: { min: 1.0, max: 1.6 } },
+    ";
+
+    #[test]
+    fn accepts_a_pedestrian_route_and_demand() {
+        assert_eq!(validate(&base(PEDESTRIAN)), Vec::new());
+    }
+
+    #[test]
+    fn flags_pedestrian_route_reference_errors() {
+        let unknown_portal = PEDESTRIAN.replace("from: 'south'", "from: 'ghost'");
+        assert!(codes(&base(&unknown_portal)).contains(&"E_PEDESTRIAN_ROUTE_UNKNOWN_PORTAL"));
+
+        let unknown_path = PEDESTRIAN.replace("path: 'walk'", "path: 'ghost'");
+        assert!(codes(&base(&unknown_path)).contains(&"E_PEDESTRIAN_ROUTE_UNKNOWN_PATH"));
+
+        let mismatch = PEDESTRIAN.replace("from: 'south'", "from: 'west'");
+        assert!(codes(&base(&mismatch)).contains(&"E_PEDESTRIAN_ROUTE_PORTAL_PATH_MISMATCH"));
+
+        let self_loop =
+            PEDESTRIAN.replace("from: 'south', to: 'north'", "from: 'south', to: 'south'");
+        assert!(codes(&base(&self_loop)).contains(&"E_PEDESTRIAN_ROUTE_SELF_LOOP"));
+
+        let unknown_crossing =
+            PEDESTRIAN.replace("crossings: [ 'cross' ]", "crossings: [ 'ghost' ]");
+        assert!(codes(&base(&unknown_crossing)).contains(&"E_PEDESTRIAN_ROUTE_UNKNOWN_CROSSING"));
+
+        let unknown_area = PEDESTRIAN.replace(
+            "waiting_areas: [ 'south_wait' ]",
+            "waiting_areas: [ 'ghost' ]",
+        );
+        assert!(codes(&base(&unknown_area)).contains(&"E_PEDESTRIAN_ROUTE_UNKNOWN_WAITING_AREA"));
+    }
+
+    #[test]
+    fn flags_waiting_area_reference_errors() {
+        let unknown_region = PEDESTRIAN.replace(
+            "waiting_areas: [ { id: 'south_wait', region: 'south_kerb' } ]",
+            "waiting_areas: [ { id: 'south_wait', region: 'ghost' } ]",
+        );
+        assert!(codes(&base(&unknown_region)).contains(&"E_WAITING_AREA_UNKNOWN_REGION"));
+    }
+
+    #[test]
+    fn flags_pedestrian_demand_reference_errors() {
+        let unknown_portal =
+            PEDESTRIAN.replace("portal: 'south', rate_pph", "portal: 'ghost', rate_pph");
+        assert!(codes(&base(&unknown_portal)).contains(&"E_PEDESTRIAN_DEMAND_UNKNOWN_PORTAL"));
+
+        let empty_routes = PEDESTRIAN.replace(
+            "routes: [ { route: 'north_crossing', weight: 1.0 } ]",
+            "routes: []",
+        );
+        assert!(codes(&base(&empty_routes)).contains(&"E_PEDESTRIAN_DEMAND_EMPTY_ROUTES"));
+
+        let unknown_route = PEDESTRIAN.replace("route: 'north_crossing'", "route: 'ghost'");
+        assert!(codes(&base(&unknown_route)).contains(&"E_PEDESTRIAN_DEMAND_UNKNOWN_ROUTE"));
+
+        let mismatch = PEDESTRIAN.replace("portal: 'south', rate_pph", "portal: 'north', rate_pph");
+        assert!(codes(&base(&mismatch)).contains(&"E_PEDESTRIAN_DEMAND_ROUTE_PORTAL_MISMATCH"));
+
+        let duplicate = PEDESTRIAN.replace(
+            "routes: [ { route: 'north_crossing', weight: 1.0 } ]",
+            "routes: [ { route: 'north_crossing', weight: 1.0 }, \
+             { route: 'north_crossing', weight: 2.0 } ]",
+        );
+        assert!(codes(&base(&duplicate)).contains(&"E_PEDESTRIAN_DEMAND_DUPLICATE_ROUTE"));
+
+        let zero_rate = PEDESTRIAN.replace("rate_pph: 240.0", "rate_pph: 0.0");
+        assert!(codes(&base(&zero_rate)).contains(&"E_NON_POSITIVE"));
+    }
+
+    #[test]
+    fn flags_invalid_pedestrian_profile_ranges() {
+        let inverted = PEDESTRIAN.replace(
+            "speed_mps: { min: 1.0, max: 1.6 }",
+            "speed_mps: { min: 1.6, max: 1.0 }",
+        );
+        let found = codes(&base(&inverted));
+        assert!(found.contains(&"E_PROFILE_RANGE"));
+
+        let non_positive = PEDESTRIAN.replace(
+            "radius_m: { min: 0.2, max: 0.3 }",
+            "radius_m: { min: 0.0, max: 0.3 }",
+        );
+        assert!(codes(&base(&non_positive)).contains(&"E_PROFILE_RANGE"));
+    }
+
+    #[test]
+    fn reports_duplicate_ids_across_pedestrian_object_kinds() {
+        let duplicate = PEDESTRIAN.replace(
+            "waiting_areas: [ { id: 'south_wait', region: 'south_kerb' } ]",
+            "waiting_areas: [ { id: 'north_crossing', region: 'south_kerb' } ]",
+        );
+        assert!(codes(&base(&duplicate)).contains(&"E_ID_DUPLICATE"));
     }
 
     #[test]

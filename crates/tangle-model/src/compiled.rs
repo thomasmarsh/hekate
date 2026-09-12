@@ -225,6 +225,69 @@ impl DemandId {
     }
 }
 
+/// Dense index of a compiled waiting area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WaitingAreaId(u32);
+
+impl WaitingAreaId {
+    /// Construct a dense waiting-area identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this waiting area.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled pedestrian route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PedestrianRouteId(u32);
+
+impl PedestrianRouteId {
+    /// Construct a dense pedestrian-route identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this route.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled pedestrian demand source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PedestrianDemandId(u32);
+
+impl PedestrianDemandId {
+    /// Construct a dense pedestrian-demand identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this demand source.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Stable string identifiers in dense-index order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdMap {
@@ -234,10 +297,13 @@ pub struct IdMap {
     regions: Vec<String>,
     movements: Vec<String>,
     crossings: Vec<String>,
+    waiting_areas: Vec<String>,
+    pedestrian_routes: Vec<String>,
     conflict_regions: Vec<String>,
     rules: Vec<String>,
     signals: Vec<String>,
     demand: Vec<String>,
+    pedestrian_demand: Vec<String>,
 }
 
 impl IdMap {
@@ -271,6 +337,16 @@ impl IdMap {
         &self.crossings
     }
 
+    /// Waiting-area identifiers indexed by [`WaitingAreaId`].
+    pub fn waiting_areas(&self) -> &[String] {
+        &self.waiting_areas
+    }
+
+    /// Pedestrian-route identifiers indexed by [`PedestrianRouteId`].
+    pub fn pedestrian_routes(&self) -> &[String] {
+        &self.pedestrian_routes
+    }
+
     /// Conflict-region identifiers indexed by [`ConflictRegionId`].
     pub fn conflict_regions(&self) -> &[String] {
         &self.conflict_regions
@@ -289,6 +365,11 @@ impl IdMap {
     /// Demand-source identifiers indexed by [`DemandId`].
     pub fn demand(&self) -> &[String] {
         &self.demand
+    }
+
+    /// Pedestrian-demand identifiers indexed by [`PedestrianDemandId`].
+    pub fn pedestrian_demand(&self) -> &[String] {
+        &self.pedestrian_demand
     }
 
     /// Look up the authored name of a compiled path.
@@ -321,6 +402,16 @@ impl IdMap {
         lookup(&self.crossings, id.index())
     }
 
+    /// Look up the authored name of a compiled waiting area.
+    pub fn waiting_area_name(&self, id: WaitingAreaId) -> Option<&str> {
+        lookup(&self.waiting_areas, id.index())
+    }
+
+    /// Look up the authored name of a compiled pedestrian route.
+    pub fn pedestrian_route_name(&self, id: PedestrianRouteId) -> Option<&str> {
+        lookup(&self.pedestrian_routes, id.index())
+    }
+
     /// Look up the authored name of a compiled conflict region.
     pub fn conflict_region_name(&self, id: ConflictRegionId) -> Option<&str> {
         lookup(&self.conflict_regions, id.index())
@@ -339,6 +430,11 @@ impl IdMap {
     /// Look up the authored name of a compiled demand source.
     pub fn demand_name(&self, id: DemandId) -> Option<&str> {
         lookup(&self.demand, id.index())
+    }
+
+    /// Look up the authored name of a compiled pedestrian demand source.
+    pub fn pedestrian_demand_name(&self, id: PedestrianDemandId) -> Option<&str> {
+        lookup(&self.pedestrian_demand, id.index())
     }
 }
 
@@ -686,6 +782,108 @@ impl CompiledCrossing {
     }
 }
 
+/// A compiled waiting area where pedestrians stage between crossings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledWaitingArea {
+    id: WaitingAreaId,
+    name: String,
+    region: RegionId,
+}
+
+impl CompiledWaitingArea {
+    /// Dense identifier of this waiting area.
+    pub fn id(&self) -> WaitingAreaId {
+        self.id
+    }
+
+    /// Authored name of this waiting area.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Region the waiting area occupies.
+    pub fn region(&self) -> RegionId {
+        self.region
+    }
+}
+
+/// A compiled pedestrian route from one portal to another along a guide path.
+///
+/// `crossings` and `waiting_areas` are the zones the route passes through in
+/// travel order. Each names a compiled object rather than copied geometry, so
+/// the route stays a routing primitive over the authored layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledPedestrianRoute {
+    id: PedestrianRouteId,
+    name: String,
+    from: PortalId,
+    to: PortalId,
+    path: PathId,
+    crossings: Vec<CrossingId>,
+    waiting_areas: Vec<WaitingAreaId>,
+    entry: DVec2,
+    entry_heading: f64,
+    exit: DVec2,
+    exit_heading: f64,
+}
+
+impl CompiledPedestrianRoute {
+    /// Dense identifier of this route.
+    pub fn id(&self) -> PedestrianRouteId {
+        self.id
+    }
+
+    /// Authored name of this route.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Portal where the route begins.
+    pub fn from(&self) -> PortalId {
+        self.from
+    }
+
+    /// Portal where the route ends.
+    pub fn to(&self) -> PortalId {
+        self.to
+    }
+
+    /// Guide path the route follows.
+    pub fn path(&self) -> PathId {
+        self.path
+    }
+
+    /// Crossings the route traverses, in travel order.
+    pub fn crossings(&self) -> &[CrossingId] {
+        &self.crossings
+    }
+
+    /// Waiting areas the route stages at, in travel order.
+    pub fn waiting_areas(&self) -> &[WaitingAreaId] {
+        &self.waiting_areas
+    }
+
+    /// World position of the entry endpoint in metres.
+    pub fn entry(&self) -> DVec2 {
+        self.entry
+    }
+
+    /// Inward heading at the entry endpoint in radians.
+    pub fn entry_heading(&self) -> f64 {
+        self.entry_heading
+    }
+
+    /// World position of the exit endpoint in metres.
+    pub fn exit(&self) -> DVec2 {
+        self.exit
+    }
+
+    /// Heading at the exit endpoint in radians.
+    pub fn exit_heading(&self) -> f64 {
+        self.exit_heading
+    }
+}
+
 /// A compiled conflict region shared by exactly two movements.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledConflictRegion {
@@ -899,6 +1097,63 @@ impl CompiledDemand {
     }
 }
 
+/// One pedestrian route's relative share of a pedestrian demand source's
+/// arrivals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledPedestrianRouteShare {
+    route: PedestrianRouteId,
+    weight: f64,
+}
+
+impl CompiledPedestrianRouteShare {
+    /// The route a generated pedestrian follows.
+    pub fn route(&self) -> PedestrianRouteId {
+        self.route
+    }
+
+    /// Relative weight; larger values are chosen proportionally more often.
+    pub fn weight(&self) -> f64 {
+        self.weight
+    }
+}
+
+/// A compiled pedestrian demand generator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledPedestrianDemand {
+    id: PedestrianDemandId,
+    name: String,
+    portal: PortalId,
+    rate_pph: f64,
+    routes: Vec<CompiledPedestrianRouteShare>,
+}
+
+impl CompiledPedestrianDemand {
+    /// Dense identifier of this demand source.
+    pub fn id(&self) -> PedestrianDemandId {
+        self.id
+    }
+
+    /// Authored name of this demand source.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Entry portal where generated pedestrians enter.
+    pub fn portal(&self) -> PortalId {
+        self.portal
+    }
+
+    /// Mean arrival rate in pedestrians per hour.
+    pub fn rate_pph(&self) -> f64 {
+        self.rate_pph
+    }
+
+    /// Weighted routes a generated pedestrian may follow.
+    pub fn routes(&self) -> &[CompiledPedestrianRouteShare] {
+        &self.routes
+    }
+}
+
 /// An inclusive uniform profile range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProfileRange {
@@ -991,6 +1246,32 @@ impl CompiledProfile {
     }
 }
 
+/// Compiled pedestrian physical and behavior profile distributions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompiledPedestrianProfile {
+    radius_m: ProfileRange,
+    speed_mps: ProfileRange,
+}
+
+impl CompiledPedestrianProfile {
+    fn from_source(source: crate::source::PedestrianProfileSource) -> Self {
+        Self {
+            radius_m: ProfileRange::from_source(source.radius_m),
+            speed_mps: ProfileRange::from_source(source.speed_mps),
+        }
+    }
+
+    /// Body radius distribution in metres.
+    pub fn radius_m(&self) -> ProfileRange {
+        self.radius_m
+    }
+
+    /// Desired walking speed distribution in metres per second.
+    pub fn speed_mps(&self) -> ProfileRange {
+        self.speed_mps
+    }
+}
+
 /// A validated, immutable scenario ready for the kernel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledScenario {
@@ -1002,11 +1283,15 @@ pub struct CompiledScenario {
     regions: Vec<CompiledRegion>,
     movements: Vec<CompiledMovement>,
     crossings: Vec<CompiledCrossing>,
+    waiting_areas: Vec<CompiledWaitingArea>,
+    pedestrian_routes: Vec<CompiledPedestrianRoute>,
     conflict_regions: Vec<CompiledConflictRegion>,
     rules: Vec<CompiledRule>,
     signals: Vec<CompiledSignal>,
     demand: Vec<CompiledDemand>,
+    pedestrian_demand: Vec<CompiledPedestrianDemand>,
     profiles: CompiledProfile,
+    pedestrian_profiles: CompiledPedestrianProfile,
     population: PopulationSource,
     id_map: IdMap,
 }
@@ -1029,6 +1314,16 @@ impl CompiledScenario {
         let region_index = index_by_id(source.regions.iter().map(|region| region.id.as_str()));
         let movement_index =
             index_by_id(source.movements.iter().map(|movement| movement.id.as_str()));
+        let crossing_index =
+            index_by_id(source.crossings.iter().map(|crossing| crossing.id.as_str()));
+        let waiting_area_index =
+            index_by_id(source.waiting_areas.iter().map(|area| area.id.as_str()));
+        let pedestrian_route_index = index_by_id(
+            source
+                .pedestrian_routes
+                .iter()
+                .map(|route| route.id.as_str()),
+        );
         let signal_index = index_by_id(source.signals.iter().map(|signal| signal.id.as_str()));
 
         let mut paths = Vec::with_capacity(source.paths.len());
@@ -1106,6 +1401,50 @@ impl CompiledScenario {
             })
             .collect();
 
+        let waiting_areas: Vec<CompiledWaitingArea> = source
+            .waiting_areas
+            .iter()
+            .enumerate()
+            .map(|(index, area)| CompiledWaitingArea {
+                id: WaitingAreaId::from_index(index),
+                name: area.id.clone(),
+                region: RegionId::from_index(region_index[area.region.as_str()]),
+            })
+            .collect();
+
+        let pedestrian_routes: Vec<CompiledPedestrianRoute> = source
+            .pedestrian_routes
+            .iter()
+            .enumerate()
+            .map(|(index, route)| {
+                let from = PortalId::from_index(portal_index[route.from.as_str()]);
+                let to = PortalId::from_index(portal_index[route.to.as_str()]);
+                let entry_portal = &portals[from.index()];
+                let exit_portal = &portals[to.index()];
+                CompiledPedestrianRoute {
+                    id: PedestrianRouteId::from_index(index),
+                    name: route.id.clone(),
+                    from,
+                    to,
+                    path: PathId::from_index(path_index[route.path.as_str()]),
+                    crossings: route
+                        .crossings
+                        .iter()
+                        .map(|crossing| CrossingId::from_index(crossing_index[crossing.as_str()]))
+                        .collect(),
+                    waiting_areas: route
+                        .waiting_areas
+                        .iter()
+                        .map(|area| WaitingAreaId::from_index(waiting_area_index[area.as_str()]))
+                        .collect(),
+                    entry: entry_portal.position(),
+                    entry_heading: entry_portal.heading(),
+                    exit: exit_portal.position(),
+                    exit_heading: exit_portal.heading(),
+                }
+            })
+            .collect();
+
         let conflict_regions: Vec<CompiledConflictRegion> = source
             .conflict_regions
             .iter()
@@ -1166,6 +1505,28 @@ impl CompiledScenario {
             })
             .collect();
 
+        let pedestrian_demand: Vec<CompiledPedestrianDemand> = source
+            .pedestrian_demand
+            .iter()
+            .enumerate()
+            .map(|(index, demand)| CompiledPedestrianDemand {
+                id: PedestrianDemandId::from_index(index),
+                name: demand.id.clone(),
+                portal: PortalId::from_index(portal_index[demand.portal.as_str()]),
+                rate_pph: demand.rate_pph,
+                routes: demand
+                    .routes
+                    .iter()
+                    .map(|share| CompiledPedestrianRouteShare {
+                        route: PedestrianRouteId::from_index(
+                            pedestrian_route_index[share.route.as_str()],
+                        ),
+                        weight: share.weight,
+                    })
+                    .collect(),
+            })
+            .collect();
+
         let id_map = IdMap {
             paths: names(source.paths.iter().map(|path| &path.id)),
             portals: names(source.portals.iter().map(|portal| &portal.id)),
@@ -1173,10 +1534,13 @@ impl CompiledScenario {
             regions: names(source.regions.iter().map(|region| &region.id)),
             movements: names(source.movements.iter().map(|movement| &movement.id)),
             crossings: names(source.crossings.iter().map(|crossing| &crossing.id)),
+            waiting_areas: names(source.waiting_areas.iter().map(|area| &area.id)),
+            pedestrian_routes: names(source.pedestrian_routes.iter().map(|route| &route.id)),
             conflict_regions: names(source.conflict_regions.iter().map(|conflict| &conflict.id)),
             rules: names(source.rules.iter().map(|rule| &rule.id)),
             signals: names(source.signals.iter().map(|signal| &signal.id)),
             demand: names(source.demand.iter().map(|demand| &demand.id)),
+            pedestrian_demand: names(source.pedestrian_demand.iter().map(|demand| &demand.id)),
         };
 
         Ok(Self {
@@ -1188,11 +1552,15 @@ impl CompiledScenario {
             regions,
             movements,
             crossings,
+            waiting_areas,
+            pedestrian_routes,
             conflict_regions,
             rules,
             signals,
             demand,
+            pedestrian_demand,
             profiles: CompiledProfile::from_source(source.profiles),
+            pedestrian_profiles: CompiledPedestrianProfile::from_source(source.pedestrian_profiles),
             population: source.population,
             id_map,
         })
@@ -1238,6 +1606,16 @@ impl CompiledScenario {
         &self.crossings
     }
 
+    /// Compiled waiting areas in dense-index order.
+    pub fn waiting_areas(&self) -> &[CompiledWaitingArea] {
+        &self.waiting_areas
+    }
+
+    /// Compiled pedestrian routes in dense-index order.
+    pub fn pedestrian_routes(&self) -> &[CompiledPedestrianRoute] {
+        &self.pedestrian_routes
+    }
+
     /// Compiled conflict regions in dense-index order.
     pub fn conflict_regions(&self) -> &[CompiledConflictRegion] {
         &self.conflict_regions
@@ -1258,9 +1636,19 @@ impl CompiledScenario {
         &self.demand
     }
 
+    /// Compiled pedestrian demand generators in dense-index order.
+    pub fn pedestrian_demand(&self) -> &[CompiledPedestrianDemand] {
+        &self.pedestrian_demand
+    }
+
     /// Passenger-car profile distributions carried through compilation.
     pub fn profiles(&self) -> &CompiledProfile {
         &self.profiles
+    }
+
+    /// Pedestrian profile distributions carried through compilation.
+    pub fn pedestrian_profiles(&self) -> &CompiledPedestrianProfile {
+        &self.pedestrian_profiles
     }
 
     /// Population tuning carried through compilation.
@@ -1303,6 +1691,16 @@ impl CompiledScenario {
         self.crossings.get(id.index())
     }
 
+    /// Look up a compiled waiting area by dense identifier.
+    pub fn waiting_area(&self, id: WaitingAreaId) -> Option<&CompiledWaitingArea> {
+        self.waiting_areas.get(id.index())
+    }
+
+    /// Look up a compiled pedestrian route by dense identifier.
+    pub fn pedestrian_route(&self, id: PedestrianRouteId) -> Option<&CompiledPedestrianRoute> {
+        self.pedestrian_routes.get(id.index())
+    }
+
     /// Look up a compiled conflict region by dense identifier.
     pub fn conflict_region(&self, id: ConflictRegionId) -> Option<&CompiledConflictRegion> {
         self.conflict_regions.get(id.index())
@@ -1321,6 +1719,14 @@ impl CompiledScenario {
     /// Look up a compiled demand source by dense identifier.
     pub fn demand_by_id(&self, id: DemandId) -> Option<&CompiledDemand> {
         self.demand.get(id.index())
+    }
+
+    /// Look up a compiled pedestrian demand source by dense identifier.
+    pub fn pedestrian_demand_by_id(
+        &self,
+        id: PedestrianDemandId,
+    ) -> Option<&CompiledPedestrianDemand> {
+        self.pedestrian_demand.get(id.index())
     }
 }
 
@@ -1724,6 +2130,106 @@ mod tests {
         assert_eq!(
             id_map.crossing_name(CrossingId::from_index(0)),
             Some("north_crossing")
+        );
+    }
+
+    /// A pedestrian route across a road movement, with a waiting area and a
+    /// pedestrian demand source.
+    const PEDESTRIAN: &str = "
+    {
+      schema_version: 1,
+      id: 'pedestrian_crossing',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [
+        { id: 'road', points: [ { x: -40, y: 0 }, { x: 40, y: 0 } ] },
+        { id: 'walk', points: [ { x: 0, y: -15 }, { x: 0, y: 15 } ] },
+      ],
+      portals: [
+        { id: 'west', path: 'road', end: 'start', width_m: 7.0 },
+        { id: 'east', path: 'road', end: 'end', width_m: 7.0 },
+        { id: 'south', path: 'walk', end: 'start', width_m: 2.0 },
+        { id: 'north', path: 'walk', end: 'end', width_m: 2.0 },
+      ],
+      regions: [
+        { id: 'crossing_zone', points: [
+          { x: -3, y: -3 }, { x: 3, y: -3 }, { x: 3, y: 3 }, { x: -3, y: 3 }
+        ] },
+        { id: 'south_kerb', points: [
+          { x: -3, y: -8 }, { x: 3, y: -8 }, { x: 3, y: -5 }, { x: -3, y: -5 }
+        ] },
+      ],
+      movements: [ { id: 'ew_through', from: 'west', to: 'east', path: 'road', priority: 0 } ],
+      crossings: [ { id: 'cross', region: 'crossing_zone', movements: [ 'ew_through' ] } ],
+      waiting_areas: [ { id: 'south_wait', region: 'south_kerb' } ],
+      pedestrian_routes: [ { id: 'north_crossing', from: 'south', to: 'north', path: 'walk',
+        crossings: [ 'cross' ], waiting_areas: [ 'south_wait' ] } ],
+      pedestrian_demand: [ { id: 'footfall', portal: 'south', rate_pph: 240.0,
+        routes: [ { route: 'north_crossing', weight: 3.0 } ] } ],
+      pedestrian_profiles: { radius_m: { min: 0.2, max: 0.3 },
+        speed_mps: { min: 1.0, max: 1.6 } },
+    }
+    ";
+
+    #[test]
+    fn compiles_pedestrian_routes_waiting_areas_and_demand() {
+        let source = parse_scenario_source(PEDESTRIAN).expect("parses");
+        let scenario = CompiledScenario::compile(source).expect("compiles");
+
+        assert_eq!(scenario.waiting_areas().len(), 1);
+        let area = scenario
+            .waiting_area(WaitingAreaId::from_index(0))
+            .expect("waiting area exists");
+        assert_eq!(area.name(), "south_wait");
+        assert_eq!(area.region(), RegionId::from_index(1));
+
+        assert_eq!(scenario.pedestrian_routes().len(), 1);
+        let route = scenario
+            .pedestrian_route(PedestrianRouteId::from_index(0))
+            .expect("route exists");
+        assert_eq!(route.name(), "north_crossing");
+        assert_eq!(route.from(), PortalId::from_index(2));
+        assert_eq!(route.to(), PortalId::from_index(3));
+        assert_eq!(route.path(), PathId::from_index(1));
+        assert_eq!(route.crossings(), [CrossingId::from_index(0)]);
+        assert_eq!(route.waiting_areas(), [WaitingAreaId::from_index(0)]);
+        assert!((route.entry() - DVec2::new(0.0, -15.0)).length() < 1e-9);
+        assert!((route.exit() - DVec2::new(0.0, 15.0)).length() < 1e-9);
+
+        assert_eq!(scenario.pedestrian_demand().len(), 1);
+        let demand = scenario
+            .pedestrian_demand_by_id(PedestrianDemandId::from_index(0))
+            .expect("pedestrian demand exists");
+        assert_eq!(demand.name(), "footfall");
+        assert_eq!(demand.portal(), PortalId::from_index(2));
+        assert!((demand.rate_pph() - 240.0).abs() < 1e-9);
+        assert_eq!(demand.routes()[0].route(), PedestrianRouteId::from_index(0));
+        assert!((demand.routes()[0].weight() - 3.0).abs() < 1e-9);
+
+        let profiles = scenario.pedestrian_profiles();
+        assert!((profiles.radius_m().min() - 0.2).abs() < 1e-9);
+        assert!((profiles.speed_mps().sample(0.5) - 1.3).abs() < 1e-9);
+
+        let id_map = scenario.id_map();
+        assert_eq!(
+            id_map.waiting_area_name(WaitingAreaId::from_index(0)),
+            Some("south_wait")
+        );
+        assert_eq!(
+            id_map.pedestrian_route_name(PedestrianRouteId::from_index(0)),
+            Some("north_crossing")
+        );
+        assert_eq!(
+            id_map.pedestrian_demand_name(PedestrianDemandId::from_index(0)),
+            Some("footfall")
+        );
+        assert_eq!(id_map.waiting_areas().len(), scenario.waiting_areas().len());
+        assert_eq!(
+            id_map.pedestrian_routes().len(),
+            scenario.pedestrian_routes().len()
+        );
+        assert_eq!(
+            id_map.pedestrian_demand().len(),
+            scenario.pedestrian_demand().len()
         );
     }
 }

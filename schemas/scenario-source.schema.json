@@ -59,8 +59,38 @@
         "$ref": "#/$defs/PathSource"
       }
     },
+    "pedestrian_demand": {
+      "description": "Pedestrian demand generators; when non-empty they generate pedestrian\nagents and share the world with vehicle demand.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PedestrianDemandSource"
+      }
+    },
+    "pedestrian_profiles": {
+      "description": "Pedestrian physical and behavior profile distributions.",
+      "$ref": "#/$defs/PedestrianProfileSource",
+      "default": {
+        "radius_m": {
+          "max": 0.3,
+          "min": 0.2
+        },
+        "speed_mps": {
+          "max": 1.6,
+          "min": 1.0
+        }
+      }
+    },
+    "pedestrian_routes": {
+      "description": "Pedestrian routes from one portal to another along a guide path.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PedestrianRouteSource"
+      }
+    },
     "population": {
-      "description": "Walking-skeleton population tuning, used only when `demand` is empty.",
+      "description": "Walking-skeleton population tuning, used only when no demand source of\neither mode is declared.",
       "$ref": "#/$defs/PopulationSource",
       "default": {
         "vehicle_count": 6,
@@ -139,6 +169,14 @@
       "default": [],
       "items": {
         "$ref": "#/$defs/SignalSource"
+      }
+    },
+    "waiting_areas": {
+      "description": "Named waiting areas where pedestrians stage before crossing.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WaitingAreaSource"
       }
     }
   },
@@ -339,6 +377,123 @@
         "points"
       ]
     },
+    "PedestrianDemandSource": {
+      "description": "One pedestrian demand generator: pedestrian arrivals at an entry portal and\nthe routes those pedestrians take.\n\nThis mirrors [`DemandSource`] for the pedestrian mode and shares its shape,\nso a layout can generate both modes from the same authored primitives.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "portal": {
+          "description": "Entry portal where generated pedestrians enter the world.",
+          "type": "string"
+        },
+        "rate_pph": {
+          "description": "Mean arrival rate in pedestrians per hour.",
+          "type": "number",
+          "format": "double"
+        },
+        "routes": {
+          "description": "Pedestrian routes a generated pedestrian may follow, with relative\nweights.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PedestrianRouteShareSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "portal",
+        "rate_pph",
+        "routes"
+      ]
+    },
+    "PedestrianProfileSource": {
+      "description": "Pedestrian physical and behavior profile distributions.\n\nEvery generated pedestrian samples one value from each range from the\n`profile` random stream using its stable agent id, so its body and gait are\nstable for the run. A pedestrian body is a circle, so the physical range is\na radius rather than a length and width.",
+      "type": "object",
+      "properties": {
+        "radius_m": {
+          "description": "Body radius in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "speed_mps": {
+          "description": "Desired walking speed in metres per second.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "radius_m",
+        "speed_mps"
+      ]
+    },
+    "PedestrianRouteShareSource": {
+      "description": "One pedestrian route's relative share of a pedestrian demand source's\narrivals.",
+      "type": "object",
+      "properties": {
+        "route": {
+          "description": "Pedestrian route a generated pedestrian follows.",
+          "type": "string"
+        },
+        "weight": {
+          "description": "Relative weight; a larger weight is chosen proportionally more often.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "route",
+        "weight"
+      ]
+    },
+    "PedestrianRouteSource": {
+      "description": "A pedestrian route from one portal to another along a guide path.\n\nA route is the pedestrian routing primitive, mirroring [`MovementSource`]\nfor the vehicle mode. It reuses the same path geometry and portals, and\nadditionally names the crossings and waiting areas it passes through in\ntravel order, so signal compliance and staging can be attached per route\nwithout naming a scenario kind.",
+      "type": "object",
+      "properties": {
+        "crossings": {
+          "description": "Crossings the route traverses, in travel order.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "from": {
+          "description": "Portal where the route begins.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Guide path the route follows.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Portal where the route ends.",
+          "type": "string"
+        },
+        "waiting_areas": {
+          "description": "Waiting areas the route stages at, in travel order.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "from",
+        "to",
+        "path"
+      ]
+    },
     "PointSource": {
       "description": "A world-space vertex in metres.",
       "type": "object",
@@ -474,7 +629,7 @@
       ]
     },
     "ProfileSource": {
-      "description": "Passenger-car physical and behavior profile distributions.\n\nEvery generated vehicle samples one value from each physical/longitudinal\nrange from the `profile` random stream, so its body and longitudinal\nbehavior are stable for the run. The `compliance` propensity is sampled\nfrom the separate `compliance` stream. Pedestrian profiles are Increment 3\nwork.",
+      "description": "Passenger-car physical and behavior profile distributions.\n\nEvery generated vehicle samples one value from each physical/longitudinal\nrange from the `profile` random stream, so its body and longitudinal\nbehavior are stable for the run. The `compliance` propensity is sampled\nfrom the separate `compliance` stream. Pedestrian bodies and gait are the\nseparate [`PedestrianProfileSource`] distributions.",
       "type": "object",
       "properties": {
         "comfortable_brake_mps2": {
@@ -706,6 +861,25 @@
       "required": [
         "head",
         "color"
+      ]
+    },
+    "WaitingAreaSource": {
+      "description": "A named waiting area where pedestrians stage between crossings.\n\nThe area is the region itself; the named reference gives a pedestrian route\na stable object to wait at and a later increment a place to attach staging\nbehavior. It traverses no movement and carries no control of its own.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "region": {
+          "description": "Traversable region the waiting area occupies.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "region"
       ]
     }
   }

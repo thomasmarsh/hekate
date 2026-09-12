@@ -36,6 +36,12 @@ pub struct ScenarioSource {
     /// Pedestrian crossings over one or more movements.
     #[serde(default)]
     pub crossings: Vec<CrossingSource>,
+    /// Named waiting areas where pedestrians stage before crossing.
+    #[serde(default)]
+    pub waiting_areas: Vec<WaitingAreaSource>,
+    /// Pedestrian routes from one portal to another along a guide path.
+    #[serde(default)]
+    pub pedestrian_routes: Vec<PedestrianRouteSource>,
     /// Authored conflict regions shared by pairs of movements.
     #[serde(default)]
     pub conflict_regions: Vec<ConflictRegionSource>,
@@ -49,10 +55,18 @@ pub struct ScenarioSource {
     /// walking-skeleton population.
     #[serde(default)]
     pub demand: Vec<DemandSource>,
+    /// Pedestrian demand generators; when non-empty they generate pedestrian
+    /// agents and share the world with vehicle demand.
+    #[serde(default)]
+    pub pedestrian_demand: Vec<PedestrianDemandSource>,
     /// Passenger-car physical and behavior profile distributions.
     #[serde(default)]
     pub profiles: ProfileSource,
-    /// Walking-skeleton population tuning, used only when `demand` is empty.
+    /// Pedestrian physical and behavior profile distributions.
+    #[serde(default)]
+    pub pedestrian_profiles: PedestrianProfileSource,
+    /// Walking-skeleton population tuning, used only when no demand source of
+    /// either mode is declared.
     #[serde(default)]
     pub population: PopulationSource,
 }
@@ -162,6 +176,46 @@ pub struct CrossingSource {
     pub region: String,
     /// Movements the crossing crosses.
     pub movements: Vec<String>,
+}
+
+/// A named waiting area where pedestrians stage between crossings.
+///
+/// The area is the region itself; the named reference gives a pedestrian route
+/// a stable object to wait at and a later increment a place to attach staging
+/// behavior. It traverses no movement and carries no control of its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WaitingAreaSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Traversable region the waiting area occupies.
+    pub region: String,
+}
+
+/// A pedestrian route from one portal to another along a guide path.
+///
+/// A route is the pedestrian routing primitive, mirroring [`MovementSource`]
+/// for the vehicle mode. It reuses the same path geometry and portals, and
+/// additionally names the crossings and waiting areas it passes through in
+/// travel order, so signal compliance and staging can be attached per route
+/// without naming a scenario kind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PedestrianRouteSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Portal where the route begins.
+    pub from: String,
+    /// Portal where the route ends.
+    pub to: String,
+    /// Guide path the route follows.
+    pub path: String,
+    /// Crossings the route traverses, in travel order.
+    #[serde(default)]
+    pub crossings: Vec<String>,
+    /// Waiting areas the route stages at, in travel order.
+    #[serde(default)]
+    pub waiting_areas: Vec<String>,
 }
 
 /// An authored conflict region shared by two movements.
@@ -304,6 +358,36 @@ pub struct RouteShareSource {
     pub weight: f64,
 }
 
+/// One pedestrian route's relative share of a pedestrian demand source's
+/// arrivals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PedestrianRouteShareSource {
+    /// Pedestrian route a generated pedestrian follows.
+    pub route: String,
+    /// Relative weight; a larger weight is chosen proportionally more often.
+    pub weight: f64,
+}
+
+/// One pedestrian demand generator: pedestrian arrivals at an entry portal and
+/// the routes those pedestrians take.
+///
+/// This mirrors [`DemandSource`] for the pedestrian mode and shares its shape,
+/// so a layout can generate both modes from the same authored primitives.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PedestrianDemandSource {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Entry portal where generated pedestrians enter the world.
+    pub portal: String,
+    /// Mean arrival rate in pedestrians per hour.
+    pub rate_pph: f64,
+    /// Pedestrian routes a generated pedestrian may follow, with relative
+    /// weights.
+    pub routes: Vec<PedestrianRouteShareSource>,
+}
+
 /// An inclusive uniform distribution for one profile parameter.
 ///
 /// A range with `min == max` is a constant. The owning field name carries the
@@ -322,8 +406,8 @@ pub struct ProfileRangeSource {
 /// Every generated vehicle samples one value from each physical/longitudinal
 /// range from the `profile` random stream, so its body and longitudinal
 /// behavior are stable for the run. The `compliance` propensity is sampled
-/// from the separate `compliance` stream. Pedestrian profiles are Increment 3
-/// work.
+/// from the separate `compliance` stream. Pedestrian bodies and gait are the
+/// separate [`PedestrianProfileSource`] distributions.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSource {
@@ -370,6 +454,34 @@ impl Default for ProfileSource {
             max_accel_mps2: ProfileRangeSource { min: 1.2, max: 2.5 },
             comfortable_brake_mps2: ProfileRangeSource { min: 2.0, max: 3.5 },
             compliance: default_compliance(),
+        }
+    }
+}
+
+/// Pedestrian physical and behavior profile distributions.
+///
+/// Every generated pedestrian samples one value from each range from the
+/// `profile` random stream using its stable agent id, so its body and gait are
+/// stable for the run. A pedestrian body is a circle, so the physical range is
+/// a radius rather than a length and width.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PedestrianProfileSource {
+    /// Body radius in metres.
+    pub radius_m: ProfileRangeSource,
+    /// Desired walking speed in metres per second.
+    pub speed_mps: ProfileRangeSource,
+}
+
+impl Default for PedestrianProfileSource {
+    fn default() -> Self {
+        // Provisional engineering defaults, not calibrated scientific claims.
+        Self {
+            radius_m: ProfileRangeSource {
+                min: 0.20,
+                max: 0.30,
+            },
+            speed_mps: ProfileRangeSource { min: 1.0, max: 1.6 },
         }
     }
 }
@@ -475,6 +587,13 @@ mod tests {
         );
         assert!(source.demand.is_empty());
         assert_eq!(source.profiles, ProfileSource::default());
+        assert!(source.pedestrian_demand.is_empty());
+        assert!(source.pedestrian_routes.is_empty());
+        assert!(source.waiting_areas.is_empty());
+        assert_eq!(
+            source.pedestrian_profiles,
+            PedestrianProfileSource::default()
+        );
     }
 
     #[test]
@@ -530,5 +649,42 @@ mod tests {
         let source = parse_scenario_source(input).expect("parses");
         assert_eq!(source.profiles.compliance.min, 0.2);
         assert_eq!(source.profiles.compliance.max, 0.9);
+    }
+
+    #[test]
+    fn parses_pedestrian_waiting_areas_routes_demand_and_profiles() {
+        let input = r#"{
+            schema_version: 1, id: 'x', coordinate_system: { x: 'a', y: 'b' },
+            paths: [ { id: 'walk', points: [ { x: 0, y: 0 }, { x: 20, y: 0 } ] } ],
+            portals: [ { id: 'south', path: 'walk', end: 'start', width_m: 2.0 },
+                       { id: 'north', path: 'walk', end: 'end', width_m: 2.0 } ],
+            regions: [ { id: 'corner', points: [
+                { x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 3 }, { x: 0, y: 3 }
+            ] } ],
+            crossings: [ { id: 'cross', region: 'corner', movements: [ 'through' ] } ],
+            waiting_areas: [ { id: 'south_wait', region: 'corner' } ],
+            pedestrian_routes: [ { id: 'crossing_route', from: 'south', to: 'north',
+                path: 'walk', crossings: [ 'cross' ], waiting_areas: [ 'south_wait' ] } ],
+            pedestrian_demand: [ { id: 'footfall', portal: 'south', rate_pph: 240.0,
+                routes: [ { route: 'crossing_route', weight: 1.0 } ] } ],
+            pedestrian_profiles: {
+                radius_m: { min: 0.2, max: 0.3 },
+                speed_mps: { min: 1.1, max: 1.5 },
+            },
+        }"#;
+        let source = parse_scenario_source(input).expect("parses");
+        assert_eq!(source.waiting_areas.len(), 1);
+        assert_eq!(source.waiting_areas[0].region, "corner");
+        assert_eq!(source.pedestrian_routes.len(), 1);
+        assert_eq!(source.pedestrian_routes[0].from, "south");
+        assert_eq!(source.pedestrian_routes[0].crossings, ["cross"]);
+        assert_eq!(source.pedestrian_routes[0].waiting_areas, ["south_wait"]);
+        assert_eq!(source.pedestrian_demand.len(), 1);
+        assert_eq!(source.pedestrian_demand[0].rate_pph, 240.0);
+        assert_eq!(
+            source.pedestrian_demand[0].routes[0].route,
+            "crossing_route"
+        );
+        assert_eq!(source.pedestrian_profiles.speed_mps.max, 1.5);
     }
 }
