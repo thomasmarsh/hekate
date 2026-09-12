@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T01:30:53Z
+updated: 2026-09-12T02:12:00Z
 summary: Create the pinned Rust workspace, lint and test gates, and release-build CI.
-next: Add a Cargo workspace with rust-toolchain.toml pinning Rust 1.98.1 and the four initial crates/apps.
+next: Verify `cargo test --workspace` and `cargo build --workspace --release` in CI.
 ---
 
 # Outcome
@@ -19,5 +19,13 @@ enforced.
 - `rust-toolchain.toml` pins Rust 1.98.1 and Bevy is pinned to 0.19.1.
 - CI runs rustfmt, clippy, unit tests, and a release build.
 - CI fails if `tangle-model` or `tangle-sim` depend on Bevy or on an app crate.
+
+# Progress
+
+Workspace, toolchain pin, the four crates, the CI workflow, and the dependency
+direction guard are in place. `cargo fmt --all --check` and
+`cargo clippy --workspace --all-targets --all-features` pass locally against
+Rust 1.98.1 and Bevy 0.19.1. Tests and the release build are not yet verified
+locally: the development disk filled while compiling Bevy, so confirm both in CI.
 
 Parent [[TAS-001-phase-1-increment-0]].

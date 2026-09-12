@@ -1,0 +1,17 @@
+[package]
+name = "tangle-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Deterministic fixed-step simulation kernel for Tangle."
+
+[dependencies]
+tangle-model.workspace = true
+glam.workspace = true
+rand_chacha.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

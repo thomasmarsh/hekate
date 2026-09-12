@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Internal crates.
+tangle-model = { path = "crates/tangle-model" }
+tangle-sim = { path = "crates/tangle-sim" }
+
+# External dependencies. Pin precisely at milestone boundaries and review
+# upgrades deliberately; see PHASE_1_PLAN.md.
+bevy = "=0.19.1"
+clap = { version = "4.6.6", features = ["derive"] }
+glam = "0.33.7"
+parry2d-f64 = "0.30.2"
+rand_chacha = "0.10.0"
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json5 = "0.2.1"
+thiserror = "2.0.20"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Keep local and CI build artifacts small; the workspace includes the large
+# Bevy dependency tree and debug info is not needed for the gates.
+[profile.dev]
+debug = 0
+
+[profile.release]
+debug = false
