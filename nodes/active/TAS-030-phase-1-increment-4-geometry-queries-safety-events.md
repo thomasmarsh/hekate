@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T21:33:37Z
+updated: 2026-09-12T21:46:49Z
 summary: Phase 1 Increment 4 adds a deterministic uniform-grid broad phase, exact and swept geometry queries, typed safety events with a versioned union, online TTC/minimum-separation and PET occupancy, and viewer event overlays and inspector links.
-next: Add swept candidate bounds and time-of-impact shape casts for tunneling protection, with swept fixtures that do not overlap at either tick endpoint.
+next: Add typed collision, near-miss, violation, entry/exit, queue, and control-transition events with deterministic ordering and a documented emission-once lifecycle, make EVENT_VERSION describe the full event union (F4), and carry the agent mode through Event::Spawned (F5).
 ---
 
 # Outcome
@@ -145,6 +145,125 @@ minimum-separation tracking and PET occupancy, and viewer overlays and
 inspector links. The kernel also still owns the Increment 3 residual that a
 committed vehicle does not reserve a crossing region and that pedestrian
 avoidance is a bounded closing-component cap rather than a swept query.
+
+## Slice B — swept candidate bounds and time-of-impact casts
+
+Slice B adds the continuous query the static layer cannot answer: a body that
+crosses another between two ticks without overlapping at either tick endpoint.
+Like slice A it does not rewire the tick. The kernel's crossing-occupancy query
+is unchanged, so the walking trace golden, the scene golden, and the Phase 1
+baseline are unchanged; wiring a swept query into the tick would widen that
+candidate set, so it belongs to slice C, which owns the collision and near-miss
+events that give the cast a consumer.
+
+### Swept bounds
+
+`SweptBody` is one body over one tick: its shape at the tick start plus a linear
+displacement in metres. The kernel integrates position only, so a body keeps its
+heading and extents for the tick and a cast solves translation only.
+`SweptBody::swept_bounds` is the tight box around the swept volume: each axis of
+the enclosing box varies linearly over the tick, so the extremes are the tick
+endpoints and the box of the two endpoint boxes is exact, containing both
+exactly. `SweptBody::swept_reach_m` is the circumradius plus the displacement
+magnitude, the furthest the body can be from its start centre, which is the
+bound the broad phase widens a query by.
+
+`SweptBroadPhase` in `index.rs` composes slice A's `BroadPhase`: the grid
+indexes each body's start centre and stores its tick-swept bound per body. A
+query widens by the largest swept reach and every candidate is then filtered by
+its own swept bound, so `candidates_overlapping` returns exactly the bodies
+whose swept bound overlaps the query. Candidates are ascending and unique by
+`AgentId`, pairs are ascending `(first, second)` with `first < second`, and a
+rebuild is a pure function of the indexed bodies, so the pair set is a superset
+of every pair that can touch during the tick, including the crossing pairs a
+start-bound index misses.
+
+### Time-of-impact casts
+
+`time_of_impact(first, second)` returns `Some(TimeOfImpact { time, normal,
+clearance_m })` or `None`. The signed clearance between two convex bodies
+translating linearly is convex in the tick fraction: the separation is the
+distance from `t` times the relative displacement to the Minkowski difference of
+the two start shapes, a convex set, and the distance to a convex set is convex.
+The clearance rate is therefore non-decreasing and the band-entry set is a
+single interval, so the cast bisects the tick at most twice: once for the first
+fraction where the clearance rate turns non-negative, which is the first contact
+when one exists, and once for the first band entry. Both predicates are monotone
+and bisection is exact up to floating point; because the cast reads the whole
+interval instead of sampling it, an arbitrarily narrow crossing window between
+the endpoints is still found.
+
+Documented semantics: a hit is a first entry into the contact band
+(`CONTACT_EPSILON_M`, so exact touching counts and a graze within a nanometre
+reads as a touch); start overlap reports `time = 0.0` with a negative clearance
+and the minimum-translation normal; a pair whose closest approach stays above
+the band reports `None`, which covers parallel and coincident motion because a
+constant clearance never closes. The normal is the unit direction from the first
+body toward the second, from `body_contact_normal`, which also documents its
+per-pair tie-breaks; the cast reuses the static queries rather than restating
+them, so a swept and a static query agree exactly on what touching means.
+`TOI_TIME_TOLERANCE` (`1e-12` of a tick) is the declared resolution of a reported
+time, and no hit is reported when the located closest approach exceeds the band
+by more than the relative displacement times that tolerance.
+
+### Public surface
+
+`tangle_sim::{SweptBody, SweptBroadPhase, TimeOfImpact, time_of_impact,
+TOI_TIME_TOLERANCE, body_contact_normal}`. `BodyShape::translated` stays
+crate-internal. The tick integration, `SpatialIndex`, and
+`crates/tangle-sim/Cargo.toml` are untouched, so no dependency was added.
+
+### Schema impact
+
+None. No scenario-source or record schema changed, so schema version 1 is
+unchanged and no schema regeneration or drift-test update was needed.
+
+### Evidence
+
+- Unit tests in `swept.rs`, `index.rs`, and `query.rs`: the swept bound contains
+  both endpoint boxes exactly and equals the body box for a still body; the
+  swept phase pairs a crossing body the static phase misses; a candidate whose
+  centre is outside the query; candidate and pair ordering plus rebuild
+  input-order independence; start-overlap and touching-at-start semantics;
+  parallel and coincident motion; grazes inside and above the band; cast
+  symmetry; and the contact normal's separating properties (stepping along it
+  changes the clearance at unit rate, stepping by the penetration depth leaves
+  the pair exactly touching, and corner-to-corner proximity is not a face axis).
+- `crates/tangle-sim/tests/swept_queries.rs`: hand-computed fixtures for a fast
+  box crossing a thin box (no endpoint overlap, first contact at 0.29 of the
+  tick, and the static phase pairs nothing while the swept phase pairs the
+  crossing), a fast circle crossing a circle (first contact at 1/3), crossing
+  diagonal paths (an analytic time with a diagonal normal), and 20 narrow-window
+  crossings (wall thickness 0.02–0.4 m at 5–100 m per tick) that a static
+  endpoint test misses. Randomized property tests over 8 fixed seeds compare the
+  swept candidate pairs with the all-pairs swept-bound reference, the
+  cast-filtered candidates with the all-pairs contact reference, and every cast
+  with a uniform-sampling reference (4096 samples plus a bracketed refinement,
+  with a Lipschitz certificate for absences), and check the documented
+  invariants: `time` in `[0, 1]`, unit normal, clearance inside the band, no
+  earlier sample inside the band, and argument symmetry. Declared tolerances:
+  `1e-9` of a tick for times, `1e-6` for normals, and `CONTACT_EPSILON_M` for the
+  band.
+- All five gates pass on the final tree: `cargo test --workspace --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+  `braintree check nodes`. The walking trace golden, the scene golden, and the
+  Phase 1 baseline pass without regeneration.
+
+### Deferred
+
+- Tick wiring: the swept candidate query and the cast are not yet on the tick
+  path. Slice C owns the collision and near-miss events that consume them, and
+  the crossing-occupancy query stays on slice A's static candidates until that
+  consumer exists, because widening it now would change vehicle yielding without
+  a recorded before/after.
+- The cast bisects to a fixed resolution rather than carrying a
+  continuous-advancement fast path; profile slice C before adding one.
+- `PHASE_1_PLAN.md`'s numeric choices name `parry2d-f64` query primitives for
+  exact distance/intersection and shape casting. Slice A built the exact queries
+  on `glam::DVec2` and slice B extends that layer, so the crate still has no
+  parry dependency; the deviation stands for the coordinator to accept or
+  reverse.
 
 # Limitations
 
