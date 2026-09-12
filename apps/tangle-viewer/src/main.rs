@@ -18,15 +18,17 @@ use bevy::window::WindowResolution;
 use glam::DVec2;
 use tangle_model::CompiledScenario;
 use tangle_present::{
-    Applied, Overlay, PresentationController, RendererBackend, RestartMode, SceneBody,
-    SceneGeometry, Speed, ViewCommand, Viewport, decision_summary, intent_summary, load_scenario,
-    profile_summary,
+    Applied, BodyEmphasis, EventParticipants, Overlay, PresentationController, RendererBackend,
+    RestartMode, SafetyMarker, SceneBody, SceneFrame, SceneGeometry, Speed, ViewCommand, Viewport,
+    decision_summary, event_summary, intent_summary, load_scenario, profile_summary,
 };
-use tangle_sim::{Event, RunConfig, Simulation, Snapshot, SnapshotDetail};
+use tangle_sim::{AgentMode, Event, RunConfig, Simulation, Snapshot, SnapshotDetail};
 use tangle_viewer::CurrentFrame;
 
 /// Scenario used when no path is passed on the command line.
 const DEFAULT_SCENARIO: &str = "scenarios/walking/walking_guide_v1.json5";
+/// Event links the inspector lists before it summarizes the rest.
+const MAX_INSPECTOR_LINKS: usize = 5;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -96,6 +98,7 @@ fn main() {
                 sync_agents,
                 draw_geometry,
                 draw_agent_overlays,
+                draw_safety_overlays,
                 update_status_text,
                 update_inspector_text,
             )
@@ -142,12 +145,15 @@ impl ViewerState {
     }
 }
 
-/// Shared mesh and material handles. Every car reuses these; there is no
-/// per-agent mesh or material allocation.
+/// Shared mesh and material handles. Every vehicle reuses one mesh and
+/// material and every pedestrian another; there is no per-agent mesh or
+/// material allocation.
 #[derive(Resource)]
 struct AgentAssets {
-    mesh: Handle<Mesh>,
-    material: Handle<ColorMaterial>,
+    vehicle_mesh: Handle<Mesh>,
+    pedestrian_mesh: Handle<Mesh>,
+    vehicle_material: Handle<ColorMaterial>,
+    pedestrian_material: Handle<ColorMaterial>,
 }
 
 /// Maps an agent's stable id to its rendered entity so entities are reused
@@ -195,8 +201,12 @@ fn setup(
     ));
 
     commands.insert_resource(AgentAssets {
-        mesh: meshes.add(Rectangle::new(1.0, 1.0)),
-        material: materials.add(Color::srgb(0.85, 0.87, 0.92)),
+        // A vehicle body is a box scaled to its length and width; a pedestrian
+        // body is the circle its reported diameter inscribes.
+        vehicle_mesh: meshes.add(Rectangle::new(1.0, 1.0)),
+        pedestrian_mesh: meshes.add(Circle::new(0.5)),
+        vehicle_material: materials.add(Color::srgb(0.85, 0.87, 0.92)),
+        pedestrian_material: materials.add(Color::srgb(0.65, 0.90, 0.75)),
     });
 
     commands.spawn((
@@ -232,7 +242,7 @@ fn draw_help_text(mut commands: Commands) {
         Text::new(
             "space pause/resume    . single tick    1/2/3 speed 1x/4x/max\n\
              WASD pan    mouse wheel zoom    R restart    N next seed\n\
-             G geometry    V vectors    click a car to inspect    esc clear",
+             G geometry    V vectors    B safety    click a body to inspect    esc clear",
         ),
         TextFont::from_font_size(12.0),
         TextColor(Color::srgb(0.62, 0.68, 0.78)),
@@ -283,6 +293,9 @@ fn controls(
     }
     if keys.just_pressed(KeyCode::KeyV) {
         commands.push(ViewCommand::ToggleOverlay(Overlay::Vectors));
+    }
+    if keys.just_pressed(KeyCode::KeyB) {
+        commands.push(ViewCommand::ToggleOverlay(Overlay::Safety));
     }
     if keys.just_pressed(KeyCode::Escape) {
         commands.push(ViewCommand::ClearSelection);
@@ -348,7 +361,13 @@ fn advance_simulation(time: Res<Time>, mut state: ResMut<ViewerState>) {
         let mut spawned = 0_u64;
         let mut despawned = 0_u64;
         {
-            let output = state.sim.step();
+            // Split the borrow so the step's records reach the controller while
+            // the step output is still alive.
+            let ViewerState {
+                sim, controller, ..
+            } = &mut *state;
+            let output = sim.step();
+            controller.observe_events(output.time().tick(), output.events());
             for event in output.events() {
                 match event {
                     Event::Spawned { .. } => spawned += 1,
@@ -426,7 +445,11 @@ fn click_select(
     frame.set_selection(selection);
 }
 
-/// Create, move, and retire car entities from the current frame.
+/// Create, move, and retire body entities from the current frame.
+///
+/// An entity keeps the mesh and material of the mode it spawned with: an
+/// agent's mode is fixed for the life of its slot, so a body never has to
+/// change either.
 fn sync_agents(
     mut commands: Commands,
     frame: Res<CurrentFrame>,
@@ -452,11 +475,20 @@ fn sync_agents(
                 *current = transform;
             }
         } else {
+            let (mesh, material) = match body.mode {
+                AgentMode::Vehicle => {
+                    (assets.vehicle_mesh.clone(), assets.vehicle_material.clone())
+                }
+                AgentMode::Pedestrian => (
+                    assets.pedestrian_mesh.clone(),
+                    assets.pedestrian_material.clone(),
+                ),
+            };
             let entity = commands
                 .spawn((
                     AgentVisual,
-                    Mesh2d(assets.mesh.clone()),
-                    MeshMaterial2d(assets.material.clone()),
+                    Mesh2d(mesh),
+                    MeshMaterial2d(material),
                     transform,
                 ))
                 .id();
@@ -592,6 +624,105 @@ fn draw_agent_overlays(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
     }
 }
 
+/// Draw the frame's safety overlays: occupied regions, emphasized bodies, the
+/// participants of the selected body's records, and event markers.
+///
+/// Everything drawn here comes from the frame's projected safety data, so the
+/// picture is a pure function of the frame the presentation layer handed over.
+fn draw_safety_overlays(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
+    let Some(frame) = frame.get() else {
+        return;
+    };
+    if !frame.overlays.safety {
+        return;
+    }
+
+    let to_vec = |point: DVec2| Vec2::new(point.x as f32, point.y as f32);
+
+    // A region somebody is in is redrawn over the authored ring.
+    let occupied_color = Color::srgb(0.98, 0.62, 0.18);
+    for region in frame.occupied_regions() {
+        let Some(points) = frame.region_points(region.region()) else {
+            continue;
+        };
+        for index in 0..points.len() {
+            gizmos.line_2d(
+                to_vec(points[index]),
+                to_vec(points[(index + 1) % points.len()]),
+                occupied_color,
+            );
+        }
+    }
+
+    // An emphasized body gets a ring in the color of its strongest style.
+    for (agent, emphasis) in frame.body_emphasis() {
+        let Some(body) = frame.body(agent) else {
+            continue;
+        };
+        let radius = (body.length_m.max(body.width_m) * 0.5 + 0.6) as f32;
+        gizmos.circle_2d(to_vec(body.position), radius, emphasis_color(emphasis));
+    }
+
+    // The inspector's link: the other participants of the selected body's
+    // records are ringed so a reader sees who it interacted with.
+    let link_color = Color::srgb(1.0, 1.0, 1.0);
+    if let Some(selected) = frame.selected_body() {
+        for record in frame.events_involving(selected.id) {
+            for other in EventParticipants::of(record.event()).others(selected.id) {
+                if let Some(body) = frame.body(other) {
+                    let radius = (body.length_m.max(body.width_m) * 0.5 + 1.2) as f32;
+                    gizmos.circle_2d(to_vec(body.position), radius, link_color);
+                }
+            }
+        }
+    }
+
+    // Markers last, so a conflict sits above the bodies that caused it.
+    for marker in frame.safety_markers() {
+        gizmos.circle_2d(
+            to_vec(marker.position()),
+            marker_radius(marker),
+            marker_color(marker),
+        );
+    }
+}
+
+/// Color of one body emphasis.
+fn emphasis_color(emphasis: BodyEmphasis) -> Color {
+    match emphasis {
+        BodyEmphasis::Collision => Color::srgb(0.95, 0.25, 0.25),
+        BodyEmphasis::NearMiss => Color::srgb(0.98, 0.73, 0.15),
+        BodyEmphasis::Violation => Color::srgb(0.85, 0.35, 0.95),
+        BodyEmphasis::Queue => Color::srgb(0.35, 0.75, 0.95),
+        BodyEmphasis::ControlTransition => Color::srgb(0.55, 0.85, 0.55),
+    }
+}
+
+/// Color of one event marker.
+fn marker_color(marker: SafetyMarker) -> Color {
+    use tangle_sim::EventKind;
+    match marker.kind() {
+        EventKind::Collision => Color::srgb(0.95, 0.25, 0.25),
+        EventKind::NearMiss => Color::srgb(0.98, 0.73, 0.15),
+        EventKind::Violation => Color::srgb(0.85, 0.35, 0.95),
+        EventKind::Entry | EventKind::Exit => Color::srgb(0.98, 0.62, 0.18),
+        EventKind::Queue => Color::srgb(0.35, 0.75, 0.95),
+        EventKind::Yielded | EventKind::ControlTransition => Color::srgb(0.55, 0.85, 0.55),
+        EventKind::Spawned | EventKind::Despawned => Color::WHITE,
+    }
+}
+
+/// World radius of one event marker: a bigger ring for a heavier record.
+fn marker_radius(marker: SafetyMarker) -> f32 {
+    use tangle_sim::EventKind;
+    match marker.kind() {
+        EventKind::Collision => 1.6,
+        EventKind::NearMiss => 1.2,
+        EventKind::Violation => 1.4,
+        _ => 0.8,
+    }
+}
+
 /// Refresh the status strip.
 fn update_status_text(
     state: Res<ViewerState>,
@@ -641,18 +772,19 @@ fn update_inspector_text(
     text.0 = match frame.status.selection {
         Some(id) => frame.body(id).map_or_else(
             || format!("Agent #{id} is no longer alive."),
-            |body| describe_agent(&scenario.0, body),
+            |body| describe_agent(&scenario.0, body, frame),
         ),
-        None => "Click a car to inspect it.".to_owned(),
+        None => "Click a body to inspect it.".to_owned(),
     };
 }
 
-fn describe_agent(scenario: &CompiledScenario, body: &SceneBody) -> String {
+fn describe_agent(scenario: &CompiledScenario, body: &SceneBody, frame: &SceneFrame) -> String {
     let mut out = format!(
-        "Agent #{id}\n\
+        "Agent #{id} ({mode})\n\
          position  ({x:.2}, {y:.2}) m\n\
          heading   {heading:.1}°\n",
         id = body.id,
+        mode = body.mode.label(),
         x = body.position.x,
         y = body.position.y,
         heading = body.heading_rad.to_degrees(),
@@ -684,5 +816,21 @@ fn describe_agent(scenario: &CompiledScenario, body: &SceneBody) -> String {
     }
 
     out.push_str(&format!("decision  {}", decision_summary(body.decision)));
+
+    // The event links: what the body was recently part of, and who else was in
+    // it. A reader follows an id to the other body's inspector.
+    let links = frame.events_involving(body.id);
+    if !links.is_empty() {
+        out.push_str("\nlinks");
+        for record in links.iter().take(MAX_INSPECTOR_LINKS) {
+            out.push_str(&format!("\n  {}", event_summary(*record)));
+        }
+        if links.len() > MAX_INSPECTOR_LINKS {
+            out.push_str(&format!(
+                "\n  ... {} older",
+                links.len() - MAX_INSPECTOR_LINKS
+            ));
+        }
+    }
     out
 }
