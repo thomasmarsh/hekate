@@ -34,7 +34,7 @@ use glam::DVec2;
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::{Rng, SeedableRng};
 
-use tangle_sim::{Aabb, AgentId, BodyShape, BroadPhase, bodies_intersect, body_clearance_m};
+use tangle_sim::{AgentId, BodyShape, BroadPhase, bodies_intersect, body_clearance_m};
 
 /// Absolute tolerance in metres for a query-versus-reference comparison.
 const QUERY_TOLERANCE_M: f64 = 1e-9;
@@ -250,18 +250,6 @@ fn reference_intersects(first: &BodyShape, second: &BodyShape) -> bool {
     }
 }
 
-/// A bound on how far two enclosing boxes are apart, in metres; zero when they
-/// overlap.
-fn bounds_gap_m(first: &Aabb, second: &Aabb) -> f64 {
-    let gap_x = (first.min.x - second.max.x)
-        .max(second.min.x - first.max.x)
-        .max(0.0);
-    let gap_y = (first.min.y - second.max.y)
-        .max(second.min.y - first.max.y)
-        .max(0.0);
-    gap_x.max(gap_y)
-}
-
 /// All unordered pairs `i < j` whose enclosing boxes overlap, as a set of id
 /// pairs.
 fn reference_overlapping_bounds(bodies: &[(AgentId, BodyShape)]) -> BTreeSet<(u32, u32)> {
@@ -417,8 +405,12 @@ fn broad_phase_query_returns_every_reachable_body() {
 
 #[test]
 fn candidate_pairs_never_exceed_the_enclosing_box_test() {
-    // Every returned pair must have overlapping enclosing boxes, and any pair
-    // the exact test rejects must sit within the tolerance of contact.
+    // The broad phase is an enclosing-box filter, so its pair set is
+    // sandwiched: every returned pair has overlapping boxes, and every pair
+    // the exact geometry intersects is returned. It is deliberately not a
+    // near-contact filter: two overlapping boxes can hold bodies a third of a
+    // metre apart, and the exact test rejects exactly those candidates, so no
+    // assertion here bounds a rejected candidate's clearance.
     for seed in SEEDS {
         let bodies = random_world(seed);
         let mut phase = BroadPhase::default();
@@ -426,12 +418,32 @@ fn candidate_pairs_never_exceed_the_enclosing_box_test() {
         let mut pairs = Vec::new();
         phase.candidate_pairs(&mut pairs);
 
+        let mut returned = BTreeSet::new();
         for &(first, second) in &pairs {
+            returned.insert((first.get(), second.get()));
             let first_bounds = bodies[first.index()].1.bounds();
             let second_bounds = bodies[second.index()].1.bounds();
-            assert!(first_bounds.overlaps(&second_bounds));
-            if !bodies_intersect(&bodies[first.index()].1, &bodies[second.index()].1) {
-                assert!(bounds_gap_m(&first_bounds, &second_bounds) <= QUERY_TOLERANCE_M);
+            assert!(
+                first_bounds.overlaps(&second_bounds),
+                "candidate ({}, {}) must have overlapping enclosing boxes: seed {seed}",
+                first.get(),
+                second.get()
+            );
+        }
+
+        // Completeness against the independent brute-force predicate: a pair
+        // whose exact bodies intersect can never be missing from the
+        // candidates, whatever the box test decides about its neighbours.
+        for i in 0..bodies.len() {
+            for j in (i + 1)..bodies.len() {
+                if reference_intersects(&bodies[i].1, &bodies[j].1) {
+                    assert!(
+                        returned.contains(&(bodies[i].0.get(), bodies[j].0.get())),
+                        "intersecting pair ({}, {}) must be a candidate: seed {seed}",
+                        bodies[i].0.get(),
+                        bodies[j].0.get()
+                    );
+                }
             }
         }
     }

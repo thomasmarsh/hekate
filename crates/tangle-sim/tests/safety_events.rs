@@ -378,7 +378,8 @@ fn pair_records_match_an_independent_swept_query() {
     let steps = observe(MIXED, 0, 4000);
     let mut contact: BTreeMap<(u32, u32), Vec<(bool, u64)>> = BTreeMap::new();
     let mut near_miss: BTreeMap<(u32, u32), Vec<(bool, u64)>> = BTreeMap::new();
-    let mut contact_ticks: BTreeSet<(u32, u32, u64, bool)> = BTreeSet::new();
+    let mut contact_begins: BTreeSet<(u32, u32, u64)> = BTreeSet::new();
+    let mut near_miss_begins: BTreeSet<(u32, u32, u64)> = BTreeSet::new();
     for step in &steps {
         for event in &step.events {
             let (first, second, contacting, entering) = match event {
@@ -419,19 +420,15 @@ fn pair_records_match_an_independent_swept_query() {
                     .entry(key)
                     .or_default()
                     .push((contacting, step.tick));
-                contact_ticks.insert((key.0, key.1, step.tick, contacting));
+                if contacting {
+                    contact_begins.insert((key.0, key.1, step.tick));
+                }
                 assert_eq!(
                     contact_this_tick, contacting,
                     "pair {key:?} reported contact {contacting} at tick {} but the swept \
                      query says {contact_this_tick}",
                     step.tick
                 );
-                if contacting {
-                    assert!(
-                        !near_this_tick || contact_this_tick,
-                        "a contact begin must also be a contact"
-                    );
-                }
             } else if let Some(entering) = entering {
                 // The documented near-miss predicate is the band less contact, so
                 // the same expression decides both edges. Contact owns its own
@@ -445,11 +442,7 @@ fn pair_records_match_an_independent_swept_query() {
                     near_this_tick && !contact_this_tick
                 );
                 if entering {
-                    assert!(
-                        !contact_ticks.contains(&(key.0, key.1, step.tick, true)),
-                        "pair {key:?} began a near miss and a contact at tick {}",
-                        step.tick
-                    );
+                    near_miss_begins.insert((key.0, key.1, step.tick));
                 }
                 near_miss
                     .entry(key)
@@ -458,6 +451,20 @@ fn pair_records_match_an_independent_swept_query() {
             }
         }
     }
+    // The two families are nested per-tick predicates, so one tick can never
+    // begin both for one pair: a contact is also inside the near-miss band with
+    // the band's own edge suppressed, so contact owns the begin. This structural
+    // check reads only the emitted stream, independent of the order the records
+    // arrived in, so it holds even if the per-tick geometry recomputation above
+    // were wrong.
+    let both_families: Vec<(u32, u32, u64)> = contact_begins
+        .intersection(&near_miss_begins)
+        .copied()
+        .collect();
+    assert!(
+        both_families.is_empty(),
+        "pair(s) began a contact and a near miss in the same tick: {both_families:?}"
+    );
     assert!(
         !contact.is_empty(),
         "the fixture must contain at least one body contact"
