@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T21:46:49Z
+updated: 2026-09-12T22:08:16Z
 summary: Phase 1 Increment 4 adds a deterministic uniform-grid broad phase, exact and swept geometry queries, typed safety events with a versioned union, online TTC/minimum-separation and PET occupancy, and viewer event overlays and inspector links.
-next: Add typed collision, near-miss, violation, entry/exit, queue, and control-transition events with deterministic ordering and a documented emission-once lifecycle, make EVENT_VERSION describe the full event union (F4), and carry the agent mode through Event::Spawned (F5).
+next: Add online time-to-collision and minimum-separation tracking, and conflict-region occupancy intervals for PET.
 ---
 
 # Outcome
@@ -264,6 +264,172 @@ unchanged and no schema regeneration or drift-test update was needed.
   on `glam::DVec2` and slice B extends that layer, so the crate still has no
   parry dependency; the deviation stands for the coordinator to accept or
   reverse.
+
+## Slice C — typed safety events, EVENT_VERSION union, and spawned mode
+
+Slice C adds the typed safety-event layer over the shared world and closes the
+two recorded TAS-028 residuals. The tick still does not rewire its
+crossing-occupancy query: the safety pass observes each integrated tick before
+new demand is admitted, and the yield rule keeps slice A's static candidates, so
+the walking trace is unchanged apart from the two deliberate record changes
+below.
+
+### Variants
+
+`crate::event` gains one closed union with the existing lifecycle records:
+
+- `Collision { agent, other, clearance_m, contacting }` — actual body overlap or
+  contact, swept over the tick, with `agent` the lower id of the pair.
+- `NearMiss { agent, other, clearance_m, entering }` — a pair that came within
+  `safety::NEAR_MISS_THRESHOLD_M` (1.0 m) without contact.
+- `Violation { agent, kind }` — `RanRedLight` for a vehicle that crossed its
+  stop line while the recorded decision was to proceed past a forbidding head,
+  `CrossedAgainstSignal` for a pedestrian that entered a crossing region while
+  the recorded decision was to cross against a forbidding signal.
+- `Entry`/`Exit { agent, region }` — a body reaching, then clearing, a crossing
+  or conflict region (`RegionKey`), for both modes.
+- `Queue { agent, joined }` — reached, or left, a standstill: longitudinal speed
+  at or below `safety::QUEUE_STOP_SPEED_MPS` (1e-3 m/s).
+- `ControlTransition { agent, control, active }` — a recorded decision state
+  change: `SignalStop` for a vehicle holding at a signal-controlled line,
+  `CrossingWait` for a pedestrian waiting at a signal-controlled crossing. The
+  yield transition keeps its own `Event::Yielded` record, which carries the
+  crossing it belongs to.
+
+`Event::Spawned` gains `mode: AgentMode` (F5), and `AgentMode::label()` is the
+stable spelling for a trace or inspector. `EventKind` is the payload-free
+discriminator, every variant exposes `Event::kind()`, and `Event::agent()` now
+covers every record.
+
+### Ordering and lifecycle
+
+`Event::order_key()` is the documented within-tick order, and each step sorts its
+buffer by it after every emission point: ascending `AgentId`, then ascending
+`EventKind::order()`, then a tag that separates the variant's key space, then the
+variant's own stable key (partner agent, crossing, region, path, or sub-kind),
+then the record's edge flag. The sort is stable, so two records that agree on all
+of that are the same variant with the same key, which the lifecycle forbids; a
+residual tie can only be two identical records. No hash map is iterated anywhere
+in the pass, and the open-state sets are ordered.
+
+Every variant is edge-triggered on a per-tick predicate, never per-step:
+
+- contact: a candidate pair whose signed clearance reached or passed zero at some
+  time in the tick, confirmed with slice B's `time_of_impact` so a sub-tick touch
+  is not missed. A Lipschitz certificate (the signed clearance cannot change
+  faster than the relative displacement) skips the cast for pairs that cannot
+  have been close.
+- near miss: the band `(0, 1.0 m]` at some time in the tick, less contact. The
+  two families are nested per-tick predicates, not one predicate with a special
+  case: the contact band sits inside the near-miss band, so a pair in contact has
+  no open near miss and the tick that begins a contact also ends the pair's near
+  miss. Both families therefore alternate begin, end, begin for every pair. The
+  un-grown `SweptBroadPhase` pair set (bounds overlap) is not enough for the
+  band, so the candidate grid indexes each body grown by half the threshold.
+- entry/exit: the body's tick-swept bounding circle reaches, then clears, the
+  region ring, so a region the body reaches inside one tick is not missed. The
+  bounding circle may report entry up to `circumradius + |displacement| / 2`
+  early; exact box-versus-polygon clipping is not implemented.
+- queue and control transition: tick-end *state* predicates over the agent's
+  speed and the decision record the kernel already stores, so a state that comes
+  and goes inside a tick is not a transition of that state.
+- violation: once per crossing action, from the decision record alone. The
+  vehicle case reads the previous and current decision in
+  `update_signal_decision`: a `PastStopLine` that follows a proceeding decision
+  with a still-positive stop-line gap is the crossing tick, and the `PastStopLine`
+  record keeps every later tick from repeating it. The pedestrian case fires on
+  the region-entry edge while the recorded decision still describes the approach
+  (`crossing_gap_m > 0`) on a `DontWalk` signal.
+- `Spawned`/`Despawned` delimit an agent's stream, so a despawn clears the agent's
+  open pair and region states without a further record, and closes its open queue
+  and control states with their own departure records. An open pair whose
+  candidate window has passed is closed by an explicit stale pass, so no end
+  record can be missed.
+
+### Version change (F4)
+
+`EVENT_VERSION` goes 1 → 2, the first version that describes the whole record
+union: version 1 named only `Spawned`, `Despawned`, and `Yielded`, and `Spawned`
+was mode-blind. The canonical trace header now records `event_version` next to
+`schema_version`, so a consumer reading only the artifact can tell which union
+the records belong to; the baseline manifest already recorded it.
+
+### Golden regeneration (deliberate)
+
+Two record changes invalidate every event golden, and both are reported:
+
+- `tests/golden/walking_guide_v1.trace.jsonl`: the header gains
+  `"event_version":2`, and each of the six spawned records gains
+  `,"mode":"vehicle"` (+120 bytes: 1197 → 1317 for the standard preset). No other
+  record changed, and the walking run emits no safety record.
+- `tests/golden/walking_guide_v1.trace.sha256`:
+  `dc3207b1…` → `60bd030f…` (full digests below in the commit message).
+- `baselines/phase1/baseline.json`: `event_version` 1 → 2 and the three preset
+  trace hashes and byte counts (fast 1193 → 1313, standard 1197 → 1317, fine
+  1198 → 1318). Counts and the convergence statement are unchanged.
+
+`baselines/phase1/performance.json` is a machine artifact with no trace hashes
+and no test that compares it, so it was left untouched. The renderer and scene
+goldens do not depend on events and are unchanged.
+
+### Schema impact
+
+None. No scenario-source or record schema changed, so schema version 1 is
+unchanged and no schema regeneration or drift-test update was needed.
+
+### Public surface
+
+`tangle_sim::{Event, EventKind, ControlTransitionKind, RegionKey, ViolationKind,
+NEAR_MISS_THRESHOLD_M, QUEUE_STOP_SPEED_MPS, band_entry}`, `AgentMode::label`, and
+the existing `EVENT_VERSION` at 2. `SafetyMonitor` and the safety pass stay
+crate-internal; `BodyShape::inflated` stays crate-private. Consumers updated:
+`crates/tangle-sim/tests/*` (new `safety_events.rs`), `apps/tangle-cli`
+(`trace.rs` record shapes and header, `tests/scenarios.rs`), `apps/tangle-tui` and
+`apps/tangle-viewer` (explicit arms for the new kinds).
+
+### Evidence
+
+- Unit tests in `safety.rs`: the swept circle contains every pose of the tick; a
+  pair's whole lifecycle edge by edge (band begin, contact begin ending the band,
+  separation, band again, band end) with hand-computed clearances; the stale-pair
+  close; a despawn closing queue and control states exactly once; a wait decision
+  reporting one control transition; and a body crossing a region wholly inside
+  one tick still reporting entry and then exit, with one violation on that entry
+  edge.
+- `crates/tangle-sim/tests/safety_events.rs`: the documented tie-breakers on
+  hand-built equal-tick records; the mixed benchmark's stream ordered on every
+  tick, reproduced for the same seed and divergent for another; pair edges checked
+  against an independent swept query built from the observed frames, so a
+  reported edge must be supported by the geometry; region edges alternating for
+  both region kinds; queue and control edges alternating per agent with both modes
+  reaching them; one red-light violation per crossing action with the recorded
+  reason distinguishing a noncompliant run from an entry the vehicle could not
+  brake out of; one crossing-against-signal violation per entry, and none for a
+  compliant pedestrian.
+- Mixed-benchmark evidence over the checked-in `mixed_interaction_v1` sweep (24
+  seeds × 4000 ticks): seed 0 emits 2 collision, 147 near-miss, 73 entry, 71 exit,
+  944 queue, and 72 control-transition records, all in the documented order, with
+  both modes present in the entry, exit, queue, and collision or near-miss
+  families; the whole sweep covers all six families.
+- All five gates pass on the final tree: `cargo test --workspace --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+  `braintree check nodes`.
+
+### Deferred
+
+- `PHASE_1_PLAN.md` Increment 4's online TTC and minimum-separation tracking and
+  the conflict-region occupancy intervals for PET are slice D; the region records
+  the occupancy intervals are built from are already in place.
+- The near-miss threshold (1.0 m) and the standstill speed (1e-3 m/s) are declared
+  reporting constants, not calibrated measures; slice D's metrics might justify
+  revisiting them with a recorded before/after.
+- Region occupancy is a bounding-circle test, which can report entry up to
+  `circumradius + |displacement| / 2` early; an exact box-versus-polygon test
+  remains available if a consumer needs the tighter boundary.
+- The cast bisects to a fixed resolution rather than carrying a
+  continuous-advancement fast path; slice C adds one cast per close candidate
+  pair per tick, and the Lipschitz certificate keeps that bounded.
 
 # Limitations
 
