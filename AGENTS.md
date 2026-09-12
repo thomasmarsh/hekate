@@ -27,17 +27,31 @@ Whenever planning, implementation, or analysis work that uses the Braintree
 skill struggles, capture the friction before handoff so it accumulates into
 later meta-analysis:
 
-- Add one resolved `THO` node under `IDX-002-braintree-feedback` per session.
-  Record findings; do not edit the installed skill or the sidecar in the same
-  session.
+- Record one `FBK` feedback node per session with `braintree feedback record`,
+  routed under `IDX-002-braintree-feedback`:
+
+  ```sh
+  braintree feedback record \
+    --route 'Area [[IDX-002-braintree-feedback]]' \
+    --attempted '…' --friction '…' --improvement '…'
+  ```
+
+  The command allocates the next `FBK` id, stamps `braintree_revision` from the
+  installed record, and writes `nodes/proposed/FBK-<n>-<slug>.md`. Pass
+  `--route` explicitly: without it the command routes to the vault's root hub,
+  not the feedback hub. Record findings; do not edit the installed skill or the
+  sidecar in the same session.
 - Treat as friction: a rule the skill leaves unclear, a `braintree` result that
   surprises you, a check that fails for a reason the skill does not explain, and
   a judgment call that exposes a gap. A fresh-sidecar `braintree allocate`
   returning an ID that already exists in `nodes/` is a concrete example.
-- For each finding record what happened, the exact command and observed output,
-  the expected behavior, and a proposed change to `SKILL.md` or the tooling.
+- Put what happened, the exact command and observed output, the expected
+  behavior, and a proposed change to `SKILL.md` or the tooling into the node's
+  `--friction` and `--improvement` text. Extend the generated node by hand when
+  one session has several findings.
 - Aggregate the notes into concrete Braintree improvements in a separate task
-  under the same hub; the notes are evidence, not the fix.
+  under the same hub; the notes are evidence, not the fix. Collect friction
+  already recorded in other vaults with `braintree feedback scan <vault>`.
 
 ## Commits
 
