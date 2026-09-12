@@ -31,8 +31,8 @@ use std::collections::BTreeMap;
 use glam::DVec2;
 use tangle_model::{CompiledScenario, CrossingId, PathId, parse_scenario_source};
 use tangle_sim::{
-    AgentId, AgentMode, AgentSample, ControllerModelNames, Event, MotionSample, RunConfig,
-    Simulation, SnapshotDetail,
+    AgentId, AgentMode, AgentSample, ControllerModelNames, Event, EventKind, MotionSample,
+    RunConfig, Simulation, SnapshotDetail,
 };
 
 /// The checked-in mixed gate fixture, measured rather than duplicated.
@@ -347,6 +347,15 @@ struct RunReport {
     pedestrians_spawned: u64,
     vehicles_despawned: u64,
     pedestrians_despawned: u64,
+    /// Safety records seen per mode, through the same one event stream.
+    vehicle_safety_events: u64,
+    pedestrian_safety_events: u64,
+    /// Safety records seen per kind, so the gate can require every kind the
+    /// benchmark produces rather than a total.
+    safety_event_kinds: BTreeMap<String, u64>,
+    /// Ticks on which the observed records did not follow the documented
+    /// within-tick order.
+    out_of_order_ticks: u64,
     /// First tick each pedestrian was observed, and the pedestrians still live
     /// at the end, so the run can assert route completion rather than presence.
     pedestrian_first_seen: BTreeMap<u32, u64>,
@@ -380,6 +389,10 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
         pedestrians_spawned: 0,
         vehicles_despawned: 0,
         pedestrians_despawned: 0,
+        vehicle_safety_events: 0,
+        pedestrian_safety_events: 0,
+        safety_event_kinds: BTreeMap::new(),
+        out_of_order_ticks: 0,
         pedestrian_first_seen: BTreeMap::new(),
         live_pedestrians: Vec::new(),
         saw_both_modes_in_one_frame: false,
@@ -401,10 +414,9 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
 
         for event in &events {
             match event {
-                Event::Spawned { agent, .. } => match sim.agent_mode(*agent) {
-                    Some(AgentMode::Vehicle) => report.vehicles_spawned += 1,
-                    Some(AgentMode::Pedestrian) => report.pedestrians_spawned += 1,
-                    None => {}
+                Event::Spawned { mode, .. } => match mode {
+                    AgentMode::Vehicle => report.vehicles_spawned += 1,
+                    AgentMode::Pedestrian => report.pedestrians_spawned += 1,
                 },
                 Event::Despawned { agent, .. } => match sim.agent_mode(*agent) {
                     Some(AgentMode::Vehicle) => report.vehicles_despawned += 1,
@@ -423,10 +435,29 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
                         report.yield_begins_with_occupied_region += 1;
                     }
                 }
-                Event::Yielded {
-                    yielding: false, ..
-                } => {}
+                other => match other.kind() {
+                    EventKind::Spawned | EventKind::Despawned | EventKind::Yielded => {}
+                    kind => {
+                        *report
+                            .safety_event_kinds
+                            .entry(format!("{kind:?}"))
+                            .or_insert(0) += 1;
+                        match sim.agent_mode(other.agent()) {
+                            Some(AgentMode::Vehicle) => report.vehicle_safety_events += 1,
+                            Some(AgentMode::Pedestrian) => report.pedestrian_safety_events += 1,
+                            None => {}
+                        }
+                    }
+                },
             }
+        }
+        // The documented within-tick order is a property of the records, so the
+        // benchmark gate checks it on every tick rather than in one fixture.
+        if !events
+            .windows(2)
+            .all(|pair| pair[0].order_key() <= pair[1].order_key())
+        {
+            report.out_of_order_ticks += 1;
         }
 
         let has_vehicle = after
@@ -874,4 +905,52 @@ fn the_mixed_benchmark_reproduces_for_the_same_seed() {
     }
     assert_eq!(trace(7), trace(7));
     assert_ne!(trace(7), trace(8), "different seeds must diverge");
+}
+
+/// Slice C: the same one stream must carry the typed safety records of both
+/// modes, in the documented within-tick order, deterministically. These are the
+/// slice-E observables of every seed in the sweep, so the gate covers the whole
+/// benchmark rather than one run.
+#[test]
+fn the_mixed_benchmark_emits_one_ordered_safety_stream_for_both_modes() {
+    let mut all_kinds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for seed in 0..SEEDS {
+        let report = run_report(BENCHMARK, seed, GATE_TICKS);
+        assert_eq!(
+            report.out_of_order_ticks, 0,
+            "seed {seed}: a tick's records left the documented order"
+        );
+        assert!(
+            report.vehicle_safety_events > 0 && report.pedestrian_safety_events > 0,
+            "seed {seed}: one stream must carry both modes' safety records \
+             ({} vehicle, {} pedestrian)",
+            report.vehicle_safety_events,
+            report.pedestrian_safety_events,
+        );
+        all_kinds.extend(report.safety_event_kinds.keys().cloned());
+        if seed == 0 {
+            println!(
+                "mixed_interaction_v1 seed 0: {} vehicle and {} pedestrian safety records, \
+                 kinds {:?}",
+                report.vehicle_safety_events,
+                report.pedestrian_safety_events,
+                report.safety_event_kinds,
+            );
+        }
+    }
+    // The sweep as a whole exercises every record family; an individual seed
+    // need not, because a body contact depends on the arrival draw.
+    for kind in [
+        "Collision",
+        "NearMiss",
+        "Entry",
+        "Exit",
+        "Queue",
+        "ControlTransition",
+    ] {
+        assert!(
+            all_kinds.contains(kind),
+            "the sweep never produced a {kind} record; saw {all_kinds:?}"
+        );
+    }
 }

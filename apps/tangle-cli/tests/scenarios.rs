@@ -162,8 +162,15 @@ fn benchmark_demand_generates_routed_vehicles() {
                 .iter()
                 .filter_map(|event| match event {
                     Event::Spawned { agent, .. } => Some(*agent),
-                    Event::Despawned { .. } => None,
-                    Event::Yielded { .. } => None,
+                    Event::Despawned { .. }
+                    | Event::Yielded { .. }
+                    | Event::Collision { .. }
+                    | Event::NearMiss { .. }
+                    | Event::Violation { .. }
+                    | Event::Entry { .. }
+                    | Event::Exit { .. }
+                    | Event::Queue { .. }
+                    | Event::ControlTransition { .. } => None,
                 })
                 .collect();
             for agent in arrivals {

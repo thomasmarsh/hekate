@@ -8,13 +8,20 @@
 //!
 //! Record shapes are deliberately closed structs with declaration-order fields.
 //! Never serialize a map here: field order is part of the hash contract.
+//!
+//! The run header names both the scenario schema version it was authored
+//! against and the [`EVENT_VERSION`] of the records that follow, so a consumer
+//! reading only the artifact can tell which event union to expect.
 
 use std::fmt::Write as _;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tangle_model::CompiledScenario;
-use tangle_sim::{DespawnReason, Event, InitError, RunConfig, RunSummary, Simulation, StepOutput};
+use tangle_sim::{
+    DespawnReason, EVENT_VERSION, Event, InitError, RegionKey, RunConfig, RunSummary, Simulation,
+    StepOutput,
+};
 
 /// A canonical trace plus the hash of its exact bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +65,7 @@ impl TraceRecorder {
                 kind: "run",
                 scenario_id: sim.scenario().id(),
                 schema_version: sim.scenario().schema_version(),
+                event_version: EVENT_VERSION,
                 seed: config.seed(),
                 step_s: config.step().as_secs(),
                 ticks,
@@ -68,9 +76,10 @@ impl TraceRecorder {
 
     /// Record one completed step's events, attributed to its tick.
     ///
-    /// Events are recorded in kernel emission order: by ascending step, and
-    /// within a step by ascending agent index. Every event a step produces is
-    /// attributed to the tick that step completes.
+    /// Events are recorded in kernel emission order, which is the documented
+    /// within-tick order: ascending agent, then event kind, then the variant's
+    /// stable key. Every event a step produces is attributed to the tick that
+    /// step completes.
     pub fn record(&mut self, output: &StepOutput<'_>) {
         let tick = output.time().tick();
         for event in output.events() {
@@ -100,9 +109,10 @@ impl TraceRecorder {
 
 /// Run a compiled scenario for exactly `ticks` fixed steps and serialize it.
 ///
-/// Events are recorded in kernel emission order: by ascending step, and within
-/// a step by ascending agent index. Every event a step produces is attributed
-/// to the tick that step completes.
+/// Events are recorded in kernel emission order, which is the documented
+/// within-tick order: ascending agent, then event kind, then the variant's
+/// stable key. Every event a step produces is attributed to the tick that step
+/// completes.
 pub fn canonical_trace(
     scenario: CompiledScenario,
     config: RunConfig,
@@ -138,6 +148,7 @@ struct RunHeader<'a> {
     kind: &'static str,
     scenario_id: &'a str,
     schema_version: u32,
+    event_version: u32,
     seed: u64,
     step_s: f64,
     ticks: u64,
@@ -164,59 +175,149 @@ struct EventRecord {
     crossing: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     yielding: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    other: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clearance_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    contacting: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entering: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    joined: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    violation: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    control: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region: Option<u32>,
 }
 
+/// A record with every field empty but the ones this variant owns.
 impl EventRecord {
+    /// The empty record for `tick`, before the variant's own fields are set.
+    const fn empty(tick: u64, event: &'static str, agent: u32) -> Self {
+        Self {
+            kind: "event",
+            tick,
+            event,
+            agent,
+            path: None,
+            distance_m: None,
+            reason: None,
+            crossing: None,
+            yielding: None,
+            mode: None,
+            other: None,
+            clearance_m: None,
+            contacting: None,
+            entering: None,
+            joined: None,
+            active: None,
+            violation: None,
+            control: None,
+            region_kind: None,
+            region: None,
+        }
+    }
+
     fn new(tick: u64, event: Event) -> Self {
         match event {
             Event::Spawned {
                 agent,
+                mode,
                 path,
                 distance_m,
             } => Self {
-                kind: "event",
-                tick,
-                event: "spawned",
-                agent: agent.get(),
                 path: Some(path.get()),
                 distance_m: Some(distance_m),
-                reason: None,
-                crossing: None,
-                yielding: None,
+                mode: Some(mode.label()),
+                ..Self::empty(tick, "spawned", agent.get())
             },
             Event::Despawned {
                 agent,
                 path,
                 reason,
             } => Self {
-                kind: "event",
-                tick,
-                event: "despawned",
-                agent: agent.get(),
                 path: Some(path.get()),
-                distance_m: None,
                 reason: Some(match reason {
                     DespawnReason::ExitedPath => "exited_path",
                 }),
-                crossing: None,
-                yielding: None,
+                ..Self::empty(tick, "despawned", agent.get())
             },
             Event::Yielded {
                 agent,
                 crossing,
                 yielding,
             } => Self {
-                kind: "event",
-                tick,
-                event: "yielded",
-                agent: agent.get(),
-                path: None,
-                distance_m: None,
-                reason: None,
                 crossing: Some(crossing.get()),
                 yielding: Some(yielding),
+                ..Self::empty(tick, "yielded", agent.get())
+            },
+            Event::Collision {
+                agent,
+                other,
+                clearance_m,
+                contacting,
+            } => Self {
+                other: Some(other.get()),
+                clearance_m: Some(clearance_m),
+                contacting: Some(contacting),
+                ..Self::empty(tick, "collision", agent.get())
+            },
+            Event::NearMiss {
+                agent,
+                other,
+                clearance_m,
+                entering,
+            } => Self {
+                other: Some(other.get()),
+                clearance_m: Some(clearance_m),
+                entering: Some(entering),
+                ..Self::empty(tick, "near_miss", agent.get())
+            },
+            Event::Violation { agent, kind } => Self {
+                violation: Some(kind.label()),
+                ..Self::empty(tick, "violation", agent.get())
+            },
+            Event::Entry { agent, region } => Self {
+                region_kind: Some(region_kind_label(region)),
+                region: Some(region.get()),
+                ..Self::empty(tick, "entry", agent.get())
+            },
+            Event::Exit { agent, region } => Self {
+                region_kind: Some(region_kind_label(region)),
+                region: Some(region.get()),
+                ..Self::empty(tick, "exit", agent.get())
+            },
+            Event::Queue { agent, joined } => Self {
+                joined: Some(joined),
+                ..Self::empty(tick, "queue", agent.get())
+            },
+            Event::ControlTransition {
+                agent,
+                control,
+                active,
+            } => Self {
+                control: Some(control.label()),
+                active: Some(active),
+                ..Self::empty(tick, "control_transition", agent.get())
             },
         }
+    }
+}
+
+/// Stable label of a region's kind, the tag its key spaces apart.
+const fn region_kind_label(region: RegionKey) -> &'static str {
+    match region {
+        RegionKey::Crossing(_) => "crossing",
+        RegionKey::ConflictRegion(_) => "conflict_region",
     }
 }
 
@@ -283,7 +384,7 @@ mod tests {
         assert!(trace.bytes().ends_with(b"\n"));
         assert_eq!(
             lines[0],
-            r#"{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"seed":0,"step_s":0.05,"ticks":250}"#
+            r#"{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"event_version":2,"seed":0,"step_s":0.05,"ticks":250}"#
         );
         assert_eq!(
             *lines.last().expect("footer"),
@@ -299,8 +400,11 @@ mod tests {
         let trace = canonical_trace(walking(), RunConfig::new(0), 250).expect("runs");
         let lines = lines(&trace);
         assert!(lines[1].starts_with(
-            r#"{"kind":"event","tick":1,"event":"spawned","agent":0,"path":0,"distance_m":0.0}"#
+            r#"{"kind":"event","tick":1,"event":"spawned","agent":0,"path":0,"distance_m":0.0"#
         ));
+        // The spawned record carries the agent mode (F5), so a consumer can
+        // interpret the body without a second lookup.
+        assert!(lines[1].ends_with(r#","mode":"vehicle"}"#));
         assert!(
             lines
                 .iter()
@@ -322,5 +426,144 @@ mod tests {
             })
             .collect();
         assert!(ticks.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    /// The header names the event union, so a consumer reading only the
+    /// artifact knows which record set follows.
+    #[test]
+    fn the_run_header_names_the_event_version() {
+        let trace = canonical_trace(walking(), RunConfig::new(0), 1).expect("runs");
+        let header: serde_json::Value =
+            serde_json::from_str(lines(&trace)[0]).expect("header JSON");
+        assert_eq!(
+            header["event_version"].as_u64(),
+            Some(u64::from(EVENT_VERSION))
+        );
+    }
+
+    /// Every variant of the record union serializes through one shape: the
+    /// shared fields first, then the fields that variant owns, and nothing
+    /// serializes as `null`.
+    #[test]
+    fn each_record_shape_serializes_its_own_fields_in_order() {
+        use tangle_model::{ConflictRegionId, CrossingId, PathId};
+        use tangle_sim::{AgentId, AgentMode, ControlTransitionKind, RegionKey, ViolationKind};
+
+        let agent = AgentId::from_index(3);
+        let partner = AgentId::from_index(7);
+        let cases: [(&str, Event); 10] = [
+            (
+                "spawned",
+                Event::Spawned {
+                    agent,
+                    mode: AgentMode::Pedestrian,
+                    path: PathId::from_index(1),
+                    distance_m: 2.5,
+                },
+            ),
+            (
+                "despawned",
+                Event::Despawned {
+                    agent,
+                    path: PathId::from_index(1),
+                    reason: DespawnReason::ExitedPath,
+                },
+            ),
+            (
+                "yielded",
+                Event::Yielded {
+                    agent,
+                    crossing: CrossingId::from_index(2),
+                    yielding: true,
+                },
+            ),
+            (
+                "collision",
+                Event::Collision {
+                    agent,
+                    other: partner,
+                    clearance_m: -0.25,
+                    contacting: true,
+                },
+            ),
+            (
+                "near_miss",
+                Event::NearMiss {
+                    agent,
+                    other: partner,
+                    clearance_m: 0.75,
+                    entering: false,
+                },
+            ),
+            (
+                "violation",
+                Event::Violation {
+                    agent,
+                    kind: ViolationKind::RanRedLight,
+                },
+            ),
+            (
+                "entry",
+                Event::Entry {
+                    agent,
+                    region: RegionKey::Crossing(CrossingId::from_index(0)),
+                },
+            ),
+            (
+                "exit",
+                Event::Exit {
+                    agent,
+                    region: RegionKey::ConflictRegion(ConflictRegionId::from_index(4)),
+                },
+            ),
+            (
+                "queue",
+                Event::Queue {
+                    agent,
+                    joined: true,
+                },
+            ),
+            (
+                "control_transition",
+                Event::ControlTransition {
+                    agent,
+                    control: ControlTransitionKind::CrossingWait,
+                    active: true,
+                },
+            ),
+        ];
+
+        for (name, event) in cases {
+            let mut bytes = Vec::new();
+            write_line(&mut bytes, &EventRecord::new(9, event));
+            let line = std::str::from_utf8(&bytes).expect("UTF-8");
+            let value: serde_json::Value = serde_json::from_str(line).expect("record JSON");
+            assert_eq!(value["event"], name, "line {line}");
+            assert_eq!(value["tick"], 9);
+            assert_eq!(value["agent"], 3);
+            // The shared prefix, then the fields this variant owns; nothing else.
+            assert!(line.starts_with(&format!(
+                "{{\"kind\":\"event\",\"tick\":9,\"event\":\"{name}\",\"agent\":3"
+            )));
+            assert!(!line.contains("null"), "line {line} serialized a null");
+            let expected = match name {
+                "spawned" => Some(r#""mode":"pedestrian""#),
+                "despawned" => Some(r#""reason":"exited_path""#),
+                "yielded" => Some(r#""crossing":2,"yielding":true"#),
+                "collision" => Some(r#""other":7,"clearance_m":-0.25,"contacting":true"#),
+                "near_miss" => Some(r#""other":7,"clearance_m":0.75,"entering":false"#),
+                "violation" => Some(r#""violation":"ran_red_light""#),
+                "entry" => Some(r#""region_kind":"crossing","region":0"#),
+                "exit" => Some(r#""region_kind":"conflict_region","region":4"#),
+                "queue" => Some(r#""joined":true"#),
+                "control_transition" => Some(r#""active":true,"control":"crossing_wait""#),
+                _ => None,
+            };
+            let expected = expected.expect("every variant has a case");
+            assert!(
+                line.contains(expected),
+                "{name} must serialize {expected}; got {line}"
+            );
+        }
     }
 }

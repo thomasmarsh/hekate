@@ -181,6 +181,39 @@ impl BodyShape {
         }
     }
 
+    /// The body grown by `margin_m` metres on every face, keeping its centre,
+    /// orientation, and convex shape.
+    ///
+    /// A box grows by the margin on each of its four faces and a circle grows
+    /// by the margin on its radius, so the grown shape contains the original and
+    /// every point within the margin of it. Growing both bodies of a pair by
+    /// half a margin therefore makes them overlap whenever their surface
+    /// clearance is at or below the whole margin: for a circle pair the gap
+    /// shrinks by exactly the margin, and for any pair of axis-aligned face
+    /// gaps a corner-to-corner distance within the margin implies each axis gap
+    /// is within it. That is the containment the near-miss candidate query in
+    /// [`crate::safety`] relies on: the query may report a pair that turns out to
+    /// be further apart, and never misses one inside the margin.
+    pub(crate) fn inflated(&self, margin_m: f64) -> Self {
+        match *self {
+            Self::Circle { centre, radius_m } => Self::Circle {
+                centre,
+                radius_m: radius_m + margin_m,
+            },
+            Self::Box {
+                centre,
+                heading_rad,
+                length_m,
+                width_m,
+            } => Self::Box {
+                centre,
+                heading_rad,
+                length_m: length_m + 2.0 * margin_m,
+                width_m: width_m + 2.0 * margin_m,
+            },
+        }
+    }
+
     /// The tight axis-aligned box around the body, in world metres.
     pub fn bounds(&self) -> Aabb {
         match *self {

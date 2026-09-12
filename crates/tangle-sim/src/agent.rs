@@ -25,6 +25,16 @@ pub enum AgentMode {
     Pedestrian,
 }
 
+impl AgentMode {
+    /// Short stable label for traces, inspectors, and event records.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Vehicle => "vehicle",
+            Self::Pedestrian => "pedestrian",
+        }
+    }
+}
+
 /// Stable identifier of one agent for the lifetime of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AgentId(u32);

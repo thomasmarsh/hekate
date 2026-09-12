@@ -1,10 +1,10 @@
-{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"seed":0,"step_s":0.05,"ticks":250}
-{"kind":"event","tick":1,"event":"spawned","agent":0,"path":0,"distance_m":0.0}
-{"kind":"event","tick":1,"event":"spawned","agent":1,"path":0,"distance_m":20.0}
-{"kind":"event","tick":1,"event":"spawned","agent":2,"path":0,"distance_m":40.0}
-{"kind":"event","tick":1,"event":"spawned","agent":3,"path":0,"distance_m":60.0}
-{"kind":"event","tick":1,"event":"spawned","agent":4,"path":0,"distance_m":80.0}
-{"kind":"event","tick":1,"event":"spawned","agent":5,"path":0,"distance_m":100.0}
+{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"event_version":2,"seed":0,"step_s":0.05,"ticks":250}
+{"kind":"event","tick":1,"event":"spawned","agent":0,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":1,"event":"spawned","agent":1,"path":0,"distance_m":20.0,"mode":"vehicle"}
+{"kind":"event","tick":1,"event":"spawned","agent":2,"path":0,"distance_m":40.0,"mode":"vehicle"}
+{"kind":"event","tick":1,"event":"spawned","agent":3,"path":0,"distance_m":60.0,"mode":"vehicle"}
+{"kind":"event","tick":1,"event":"spawned","agent":4,"path":0,"distance_m":80.0,"mode":"vehicle"}
+{"kind":"event","tick":1,"event":"spawned","agent":5,"path":0,"distance_m":100.0,"mode":"vehicle"}
 {"kind":"event","tick":34,"event":"despawned","agent":5,"path":0,"reason":"exited_path"}
 {"kind":"event","tick":67,"event":"despawned","agent":4,"path":0,"reason":"exited_path"}
 {"kind":"event","tick":101,"event":"despawned","agent":3,"path":0,"reason":"exited_path"}

@@ -38,12 +38,12 @@ use tangle_model::{
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore};
-use crate::compliance::{self, ComplianceDecision, SignalAction};
+use crate::compliance::{self, ComplianceDecision, ComplianceReason, SignalAction};
 use crate::config::RunConfig;
 use crate::control::{Constraint, IDM_STANDSTILL_GAP_M};
 use crate::controller::{ControllerModelNames, ControllerModels};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
-use crate::event::{DespawnReason, Event};
+use crate::event::{DespawnReason, Event, ViolationKind};
 use crate::index::{self, SpatialIndex};
 use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
@@ -54,6 +54,7 @@ use crate::rng::{
     STREAM_COMPLIANCE, STREAM_DEMAND, STREAM_PEDESTRIAN_DEMAND, STREAM_PROFILE, derive_stream,
     uniform01,
 };
+use crate::safety::SafetyMonitor;
 use crate::signal::{self, PedestrianSignalColor, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 use crate::time::SimTime;
@@ -218,6 +219,11 @@ pub struct Simulation {
     /// Shared uniform-grid spatial index over live agents of both modes,
     /// rebuilt once at the start of each tick.
     spatial: SpatialIndex,
+    /// Per-tick observation of the safety records slice C adds: body contacts,
+    /// near misses, region transits, standstill queues, and control
+    /// transitions. See [`crate::safety`] for the predicates and the
+    /// once-per-transition lifecycle.
+    safety: SafetyMonitor,
     /// Reused candidate buffer for a crossing-occupancy query, so the query
     /// does not allocate inside the tick loop.
     candidates: Vec<AgentId>,
@@ -354,6 +360,7 @@ impl Simulation {
             waypoints,
             conflicts: Vec::new(),
             spatial: SpatialIndex::default(),
+            safety: SafetyMonitor::default(),
             candidates: Vec::new(),
             events: Vec::new(),
             population_announced: false,
@@ -661,6 +668,7 @@ impl Simulation {
             }
             self.events.push(Event::Spawned {
                 agent: AgentId::from_index(index),
+                mode: self.agents.mode[index],
                 path: self.agents.path[index],
                 distance_m: self.agents.distance_m[index],
             });
@@ -682,8 +690,11 @@ impl Simulation {
 
         // Rebuild the shared spatial index once, before any body moves, so
         // every crossing-occupancy query this tick sees one consistent
-        // candidate view that does not depend on agent iteration order.
+        // candidate view that does not depend on agent iteration order. The
+        // safety monitor records the tick-start bodies here too, so its swept
+        // bodies span the whole tick.
         self.spatial.rebuild(&self.agents);
+        self.safety.begin_tick(&self.agents);
 
         for index in 0..self.agents.len() {
             if !self.agents.alive[index] {
@@ -695,7 +706,19 @@ impl Simulation {
             }
         }
 
+        // Observe the integrated tick once, before new demand is admitted, so
+        // every safety record describes exactly the state this tick produced.
+        self.safety
+            .observe(&self.agents, &self.scenario, &mut self.events);
+
         self.advance_demand(dt);
+
+        // The documented within-tick order: ascending agent, then kind, then the
+        // variant's stable key. Sorting here, after every emission point, makes
+        // the order a property of the records and not of where they were
+        // produced. The sort is stable, so only identical records can tie; see
+        // [`Event::order_key`].
+        self.events.sort_by_key(|event| event.order_key());
     }
 
     /// Advance one vehicle under IDM or, without a sampled profile, at the
@@ -1276,8 +1299,32 @@ impl Simulation {
     }
 
     /// Compute and record the agent's current signal-compliance decision.
+    ///
+    /// This is also where a red-light violation is recorded, because the two
+    /// decision records make the crossing unambiguous without recomputing any
+    /// geometry: the recorded previous decision was to proceed with the front
+    /// bumper still upstream of a line whose head forbade it (its gap is
+    /// positive, its action is `Proceed`, and its color is not green), and the
+    /// decision this tick reports `PastStopLine` for the first time. A vehicle
+    /// whose recorded decision was to stop is not a noncompliant run even when
+    /// it comes to rest exactly on the line, and the `PastStopLine` record keeps
+    /// every later tick from repeating the violation, so the record is emitted
+    /// exactly once per crossing action.
     fn update_signal_decision(&mut self, index: usize) {
+        let previous = self.agents.decision[index];
         let decision = self.signal_decision(index);
+        if let Some(previous) = previous
+            && let Some(decision) = decision
+            && decision.reason == ComplianceReason::PastStopLine
+            && previous.action == SignalAction::Proceed
+            && previous.color != SignalColor::Green
+            && previous.stop_line_gap_m > 0.0
+        {
+            self.events.push(Event::Violation {
+                agent: AgentId::from_index(index),
+                kind: ViolationKind::RanRedLight,
+            });
+        }
         self.agents.decision[index] = decision;
     }
 
@@ -1480,6 +1527,7 @@ impl Simulation {
         self.spawned_total += 1;
         self.events.push(Event::Spawned {
             agent: agent_id,
+            mode: AgentMode::Vehicle,
             path: path_id,
             distance_m: entry_distance,
         });
@@ -1561,6 +1609,7 @@ impl Simulation {
         self.spawned_total += 1;
         self.events.push(Event::Spawned {
             agent: agent_id,
+            mode: AgentMode::Pedestrian,
             path: path_id,
             distance_m: entry_distance,
         });

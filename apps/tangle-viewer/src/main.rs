@@ -353,7 +353,15 @@ fn advance_simulation(time: Res<Time>, mut state: ResMut<ViewerState>) {
                 match event {
                     Event::Spawned { .. } => spawned += 1,
                     Event::Despawned { .. } => despawned += 1,
-                    Event::Yielded { .. } => {}
+                    // Safety and control records change no population counter.
+                    Event::Yielded { .. }
+                    | Event::Collision { .. }
+                    | Event::NearMiss { .. }
+                    | Event::Violation { .. }
+                    | Event::Entry { .. }
+                    | Event::Exit { .. }
+                    | Event::Queue { .. }
+                    | Event::ControlTransition { .. } => {}
                 }
             }
         }

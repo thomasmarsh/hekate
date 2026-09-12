@@ -172,19 +172,42 @@ pub struct TimeOfImpact {
 
 /// The first time within one tick at which two moving bodies enter the contact
 /// band, or `None` when they stay clear of it for the whole tick.
+/// The first time within one tick at which two moving bodies enter the contact
+/// band, or `None` when they stay clear of it for the whole tick.
+///
+/// This is [`band_entry`] with the contact band
+/// [`CONTACT_EPSILON_M`](crate::CONTACT_EPSILON_M), so a swept and a static
+/// query agree exactly on what touching means.
 ///
 /// See the module card for the contact semantics, the algorithm, and the
 /// declared tolerances.
 pub fn time_of_impact(first: &SweptBody, second: &SweptBody) -> Option<TimeOfImpact> {
+    band_entry(first, second, CONTACT_EPSILON_M)
+}
+
+/// The first time within one tick at which two moving bodies enter the band of
+/// signed clearances `<= band_m`, or `None` when they stay clear of it.
+///
+/// The signed clearance between two convex bodies translating linearly is
+/// convex in the tick fraction, so the set of fractions inside a band is a
+/// single interval and the same bisection that finds the contact of
+/// [`time_of_impact`] finds a wider band. `band_m` must be non-negative; the
+/// contact band [`CONTACT_EPSILON_M`](crate::CONTACT_EPSILON_M) is the
+/// narrowest useful value, and a wider band is how a caller asks whether a pair
+/// came within a threshold, such as the near-miss band of [`crate::safety`].
+///
+/// A start clearance already inside the band reports `time = 0.0`.
+pub fn band_entry(first: &SweptBody, second: &SweptBody, band_m: f64) -> Option<TimeOfImpact> {
+    let band_m = band_m.max(0.0);
     let start_clearance = body_clearance_m(&first.shape, &second.shape);
-    if start_clearance <= CONTACT_EPSILON_M {
+    if start_clearance <= band_m {
         return Some(contact(first, second, 0.0, start_clearance));
     }
-    if clearance_at(first, second, 1.0) <= CONTACT_EPSILON_M {
+    if clearance_at(first, second, 1.0) <= band_m {
         // The tick ends inside the band, so the band interval ends at or before
         // the tick end and the band predicate is false-then-true on the tick.
         let time = first_fraction(0.0, 1.0, |fraction| {
-            clearance_at(first, second, fraction) <= CONTACT_EPSILON_M
+            clearance_at(first, second, fraction) <= band_m
         });
         return Some(contact(
             first,
@@ -193,10 +216,10 @@ pub fn time_of_impact(first: &SweptBody, second: &SweptBody) -> Option<TimeOfImp
             clearance_at(first, second, time),
         ));
     }
-    // Clear of the band at both tick endpoints, so a contact needs the
-    // clearance rate to turn non-negative inside the tick. The rate is
-    // non-decreasing, so its sign is the monotone predicate to bisect: it is
-    // negative exactly while the bodies are still closing.
+    // Clear of the band at both tick endpoints, so an entry needs the clearance
+    // rate to turn non-negative inside the tick. The rate is non-decreasing, so
+    // its sign is the monotone predicate to bisect: it is negative exactly while
+    // the bodies are still closing.
     let relative_m = second.displacement_m - first.displacement_m;
     if clearance_rate(first, second, relative_m, 0.0) >= 0.0
         || clearance_rate(first, second, relative_m, 1.0) < 0.0
@@ -204,18 +227,18 @@ pub fn time_of_impact(first: &SweptBody, second: &SweptBody) -> Option<TimeOfImp
         // Either the bodies already stop closing at the tick start, so the
         // clearance can never fall, or they are still closing at the tick end,
         // so the tick's lowest clearance is the one it ends with. Both are
-        // above the band, so there is no contact this tick.
+        // above the band, so there is no entry this tick.
         return None;
     }
     let turning = first_fraction(0.0, 1.0, |fraction| {
         clearance_rate(first, second, relative_m, fraction) >= 0.0
     });
     let closest = clearance_at(first, second, turning);
-    if closest > CONTACT_EPSILON_M {
+    if closest > band_m {
         return None;
     }
     let time = first_fraction(0.0, turning, |fraction| {
-        clearance_at(first, second, fraction) <= CONTACT_EPSILON_M
+        clearance_at(first, second, fraction) <= band_m
     });
     Some(contact(
         first,

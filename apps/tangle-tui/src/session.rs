@@ -290,7 +290,15 @@ impl<B: SessionBackend> TuiSession<B> {
             match event {
                 Event::Spawned { .. } => self.spawned += 1,
                 Event::Despawned { .. } => self.despawned += 1,
-                Event::Yielded { .. } => {}
+                // Safety and control records change no population counter.
+                Event::Yielded { .. }
+                | Event::Collision { .. }
+                | Event::NearMiss { .. }
+                | Event::Violation { .. }
+                | Event::Entry { .. }
+                | Event::Exit { .. }
+                | Event::Queue { .. }
+                | Event::ControlTransition { .. } => {}
             }
         }
         self.curr = self.sim.snapshot(SnapshotDetail::Full);

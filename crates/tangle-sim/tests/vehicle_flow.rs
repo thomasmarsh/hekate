@@ -179,6 +179,13 @@ fn every_admitted_vehicle_receives_its_assigned_route() {
                 Event::Spawned { agent, .. } => Some(*agent),
                 Event::Despawned { .. } => None,
                 Event::Yielded { .. } => None,
+                Event::Collision { .. }
+                | Event::NearMiss { .. }
+                | Event::Violation { .. }
+                | Event::Entry { .. }
+                | Event::Exit { .. }
+                | Event::Queue { .. }
+                | Event::ControlTransition { .. } => None,
             })
             .collect();
         for agent in spawned {
@@ -250,6 +257,13 @@ fn profile_sampling_stays_within_the_configured_ranges() {
                 Event::Spawned { agent, .. } => Some(*agent),
                 Event::Despawned { .. } => None,
                 Event::Yielded { .. } => None,
+                Event::Collision { .. }
+                | Event::NearMiss { .. }
+                | Event::Violation { .. }
+                | Event::Entry { .. }
+                | Event::Exit { .. }
+                | Event::Queue { .. }
+                | Event::ControlTransition { .. } => None,
             })
             .collect();
         for agent in spawned {
@@ -345,6 +359,13 @@ fn same_seed_reproduces_demand_and_profiles() {
                     Event::Spawned { agent, .. } => Some(*agent),
                     Event::Despawned { .. } => None,
                     Event::Yielded { .. } => None,
+                    Event::Collision { .. }
+                    | Event::NearMiss { .. }
+                    | Event::Violation { .. }
+                    | Event::Entry { .. }
+                    | Event::Exit { .. }
+                    | Event::Queue { .. }
+                    | Event::ControlTransition { .. } => None,
                 })
                 .collect();
             for agent in spawned {

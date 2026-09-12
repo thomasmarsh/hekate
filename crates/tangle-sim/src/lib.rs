@@ -46,6 +46,7 @@ mod pedestrian_compliance;
 mod profile;
 mod query;
 mod rng;
+mod safety;
 mod signal;
 mod sim;
 mod snapshot;
@@ -57,7 +58,9 @@ pub use agent::{AgentId, AgentMode};
 pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
 pub use config::{DEFAULT_STEP, RunConfig};
 pub use controller::ControllerModelNames;
-pub use event::{DespawnReason, EVENT_VERSION, Event};
+pub use event::{
+    ControlTransitionKind, DespawnReason, EVENT_VERSION, Event, EventKind, RegionKey, ViolationKind,
+};
 pub use index::{BroadPhase, SweptBroadPhase};
 pub use pedestrian::{PedestrianWaypoint, PedestrianZone};
 pub use pedestrian_compliance::{
@@ -67,10 +70,11 @@ pub use profile::{PedestrianProfile, VehicleProfile};
 pub use query::{
     Aabb, BodyShape, CONTACT_EPSILON_M, bodies_intersect, body_clearance_m, body_contact_normal,
 };
+pub use safety::{NEAR_MISS_THRESHOLD_M, QUEUE_STOP_SPEED_MPS};
 pub use signal::PedestrianSignalColor;
 pub use sim::{InitError, RunSummary, Simulation, StepOutput};
 pub use snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
-pub use swept::{SweptBody, TOI_TIME_TOLERANCE, TimeOfImpact, time_of_impact};
+pub use swept::{SweptBody, TOI_TIME_TOLERANCE, TimeOfImpact, band_entry, time_of_impact};
 pub use time::SimTime;
 pub use units::Seconds;
 
