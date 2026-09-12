@@ -41,6 +41,7 @@ mod controller;
 mod demand;
 mod event;
 mod index;
+mod metrics;
 pub mod pedestrian;
 mod pedestrian_compliance;
 mod profile;
@@ -62,6 +63,11 @@ pub use event::{
     ControlTransitionKind, DespawnReason, EVENT_VERSION, Event, EventKind, RegionKey, ViolationKind,
 };
 pub use index::{BroadPhase, SweptBroadPhase};
+pub use metrics::{
+    INTERACTION_RANGE_M, InteractionMetrics, MetricMinimum, ModePair, PostEncroachment,
+    RegionOccupancy, SEPARATION_RESOLUTION_M, TTC_HORIZON_S, TTC_TIME_TOLERANCE_S,
+    tick_minimum_clearance_m, time_to_collision,
+};
 pub use pedestrian::{PedestrianWaypoint, PedestrianZone};
 pub use pedestrian_compliance::{
     PedestrianComplianceDecision, PedestrianComplianceReason, PedestrianSignalAction,

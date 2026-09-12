@@ -206,7 +206,7 @@ pub fn band_entry(first: &SweptBody, second: &SweptBody, band_m: f64) -> Option<
     if clearance_at(first, second, 1.0) <= band_m {
         // The tick ends inside the band, so the band interval ends at or before
         // the tick end and the band predicate is false-then-true on the tick.
-        let time = first_fraction(0.0, 1.0, |fraction| {
+        let time = first_fraction(0.0, 1.0, TOI_TIME_TOLERANCE, |fraction| {
             clearance_at(first, second, fraction) <= band_m
         });
         return Some(contact(
@@ -230,14 +230,14 @@ pub fn band_entry(first: &SweptBody, second: &SweptBody, band_m: f64) -> Option<
         // above the band, so there is no entry this tick.
         return None;
     }
-    let turning = first_fraction(0.0, 1.0, |fraction| {
+    let turning = first_fraction(0.0, 1.0, TOI_TIME_TOLERANCE, |fraction| {
         clearance_rate(first, second, relative_m, fraction) >= 0.0
     });
     let closest = clearance_at(first, second, turning);
     if closest > band_m {
         return None;
     }
-    let time = first_fraction(0.0, turning, |fraction| {
+    let time = first_fraction(0.0, turning, TOI_TIME_TOLERANCE, |fraction| {
         clearance_at(first, second, fraction) <= band_m
     });
     Some(contact(
@@ -268,14 +268,22 @@ fn clearance_at(first: &SweptBody, second: &SweptBody, fraction: f64) -> f64 {
 /// The rate in metres per tick at which the clearance between two swept bodies
 /// changes at `fraction`.
 ///
-/// The signed clearance is a convex function of the tick fraction, and this is
-/// its derivative: the relative displacement of the second body projected onto
-/// the contact normal, whose sign says whether the bodies are still closing.
-/// Where the bodies already overlap or touch that convex function is flat at
-/// zero, so the reported rate is zero as well. Either way the value is a
-/// subgradient of the convex clearance, so the sequence over the tick is
-/// non-decreasing and its sign is a monotone predicate.
-fn clearance_rate(first: &SweptBody, second: &SweptBody, relative_m: DVec2, fraction: f64) -> f64 {
+/// The signed clearance is a convex function of the tick fraction where the pair
+/// is disjoint, and this is its derivative there: the relative displacement of
+/// the second body projected onto the contact normal, whose sign says whether
+/// the bodies are still closing. Where the bodies already overlap or touch that
+/// convex function is flat at zero, so the reported rate is zero as well. Either
+/// way the value is a subgradient of the convex clearance, so the sequence over
+/// the tick is non-decreasing and its sign is a monotone predicate.
+///
+/// Crate-internal so the online interaction metrics in [`crate::metrics`] reuse
+/// this one definition of "still closing" rather than restating it.
+pub(crate) fn clearance_rate(
+    first: &SweptBody,
+    second: &SweptBody,
+    relative_m: DVec2,
+    fraction: f64,
+) -> f64 {
     let first_shape = first.shape_at(fraction);
     let second_shape = second.shape_at(fraction);
     if body_clearance_m(&first_shape, &second_shape) <= 0.0 {
@@ -285,15 +293,26 @@ fn clearance_rate(first: &SweptBody, second: &SweptBody, relative_m: DVec2, frac
     }
 }
 
-/// The first fraction in `[low, high]` at which a monotone predicate holds.
+/// The first fraction in `[low, high]` at which a monotone predicate holds, to
+/// the given resolution.
 ///
 /// The predicate must be false at `low`, true at `high`, and false-then-true
-/// across the interval. Both callers bisect a convex predicate whose true set is
-/// a single interval, so that holds. The search stops when the bracket is no
-/// wider than [`TOI_TIME_TOLERANCE`] or when floating point can no longer split
-/// it, and returns the fraction that satisfies the predicate.
-fn first_fraction(mut low: f64, mut high: f64, predicate: impl Fn(f64) -> bool) -> f64 {
-    while high - low > TOI_TIME_TOLERANCE {
+/// across the interval. Every caller bisects the contact predicate of two convex
+/// bodies, whose true set is a single interval, so that holds. The search stops
+/// when the bracket is no wider than `tolerance` or when floating point can no
+/// longer split it, and returns the fraction that satisfies the predicate, so
+/// the result is within `tolerance` of the boundary.
+///
+/// The cast passes [`TOI_TIME_TOLERANCE`], the resolution of a reported time of
+/// impact. The online interaction metrics in [`crate::metrics`] pass their own
+/// declared resolutions, so both reuse one bisection rather than restating it.
+pub(crate) fn first_fraction(
+    mut low: f64,
+    mut high: f64,
+    tolerance: f64,
+    predicate: impl Fn(f64) -> bool,
+) -> f64 {
+    while high - low > tolerance {
         let midpoint = 0.5 * (low + high);
         if midpoint <= low || midpoint >= high {
             break;

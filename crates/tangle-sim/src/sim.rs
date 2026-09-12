@@ -29,6 +29,11 @@
 //! kernel keeps every interaction decision and calls the vehicle longitudinal
 //! model and the pedestrian model through their traits, so the IDM and
 //! waypoint models are replaceable without editing the interaction logic.
+//! Increment 4 slice D adds the online interaction metrics ([`crate::metrics`]):
+//! time to collision and minimum surface separation over the swept candidate
+//! pairs, and conflict-region post-encroachment time. The pass only reads the
+//! integrated tick, so it reports how close the run came to a conflict without
+//! changing a trajectory.
 
 use glam::DVec2;
 use tangle_model::{
@@ -45,6 +50,7 @@ use crate::controller::{ControllerModelNames, ControllerModels};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
 use crate::event::{DespawnReason, Event, ViolationKind};
 use crate::index::{self, SpatialIndex};
+use crate::metrics::InteractionMetrics;
 use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
 use crate::profile::{
@@ -224,6 +230,11 @@ pub struct Simulation {
     /// transitions. See [`crate::safety`] for the predicates and the
     /// once-per-transition lifecycle.
     safety: SafetyMonitor,
+    /// Online interaction metrics observed from the same integrated tick: time
+    /// to collision, minimum surface separation, and conflict-region
+    /// post-encroachment time. See [`crate::metrics`] for the definitions. The
+    /// pass only borrows state, so it cannot change the simulated trajectory.
+    metrics: InteractionMetrics,
     /// Reused candidate buffer for a crossing-occupancy query, so the query
     /// does not allocate inside the tick loop.
     candidates: Vec<AgentId>,
@@ -361,6 +372,7 @@ impl Simulation {
             conflicts: Vec::new(),
             spatial: SpatialIndex::default(),
             safety: SafetyMonitor::default(),
+            metrics: InteractionMetrics::default(),
             candidates: Vec::new(),
             events: Vec::new(),
             population_announced: false,
@@ -650,6 +662,16 @@ impl Simulation {
         self.controllers.names()
     }
 
+    /// Online interaction metrics for the run so far.
+    ///
+    /// Time to collision, minimum surface separation, and conflict-region
+    /// post-encroachment time, observed once per tick from the state the tick
+    /// integrated. See [`crate::metrics`] for the definitions, the candidate
+    /// set, and the declared tolerances.
+    pub fn interaction_metrics(&self) -> &InteractionMetrics {
+        &self.metrics
+    }
+
     /// Install replacement motion models.
     ///
     /// The kernel calls both modes through [`crate::controller::ControllerModels`],
@@ -695,6 +717,7 @@ impl Simulation {
         // bodies span the whole tick.
         self.spatial.rebuild(&self.agents);
         self.safety.begin_tick(&self.agents);
+        self.metrics.begin_tick(&self.agents);
 
         for index in 0..self.agents.len() {
             if !self.agents.alive[index] {
@@ -710,6 +733,14 @@ impl Simulation {
         // every safety record describes exactly the state this tick produced.
         self.safety
             .observe(&self.agents, &self.scenario, &mut self.events);
+
+        // The online interaction metrics observe the same state, for the same
+        // reason: the same live bodies the tick integrated, and the region edges
+        // the safety records just added. The pass borrows the state and the
+        // events and writes only its own records, so it cannot change the
+        // trajectory, a trace, or a golden.
+        self.metrics
+            .observe(&self.agents, self.tick, self.config, &self.events);
 
         self.advance_demand(dt);
 
