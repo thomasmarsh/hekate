@@ -29,9 +29,10 @@
 use std::collections::BTreeMap;
 
 use glam::DVec2;
-use tangle_model::{CompiledScenario, CrossingId, parse_scenario_source};
+use tangle_model::{CompiledScenario, CrossingId, PathId, parse_scenario_source};
 use tangle_sim::{
-    AgentMode, AgentSample, ControllerModelNames, Event, RunConfig, Simulation, SnapshotDetail,
+    AgentId, AgentMode, AgentSample, ControllerModelNames, Event, MotionSample, RunConfig,
+    Simulation, SnapshotDetail,
 };
 
 /// The checked-in mixed gate fixture, measured rather than duplicated.
@@ -120,12 +121,79 @@ fn circle_box_clearance(
     point_to_box(circle_m, centre_m, heading_rad, length_m, width_m) - radius_m
 }
 
-/// Surface clearance in metres between two oriented box bodies.
+/// Surface clearance in metres between two oriented box bodies, negative when
+/// they overlap.
 ///
-/// Both boxes are convex, so for two disjoint boxes the closest point pair has
-/// at least one vertex as an endpoint: clamping each box's vertices onto the
-/// other box gives the exact distance, and zero exactly when they overlap.
+/// In 2-D two convex boxes are disjoint exactly when one of their face-normal
+/// axes separates them, so the separating-axis test over the four axes is
+/// exact. When no axis separates them the boxes penetrate, and the signed
+/// clearance is the negative of the least projection overlap, the minimum
+/// translation that separates them. When an axis separates them the boxes are
+/// disjoint and the exact distance is the closest vertex-to-box distance, which
+/// for two disjoint convex polygons is achieved with a vertex of one as an
+/// endpoint. The previous vertex-clamp-only form was always `>= 0`, so it could
+/// not detect an overlap at all.
+///
+/// A penetration no larger than [`BOX_CONTACT_EPSILON_M`] reads as touching
+/// (`0.0`): the anti-overlap cap deliberately holds a follower's front bumper at
+/// the leader's rear, and the projection arithmetic at that exact contact can
+/// read a few ulps negative. This absorbs only that sub-nanometre band, never a
+/// physical overlap, so the vehicle-vehicle non-overlap assertion stays
+/// meaningful.
 fn box_box_clearance(first: &AgentSample, second: &AgentSample) -> f64 {
+    let mut penetration_m = f64::INFINITY;
+    for axis in [
+        box_face_normal(first, true),
+        box_face_normal(first, false),
+        box_face_normal(second, true),
+        box_face_normal(second, false),
+    ] {
+        let (first_min, first_max) = box_projection(first, axis);
+        let (second_min, second_max) = box_projection(second, axis);
+        let overlap = first_max.min(second_max) - first_min.max(second_min);
+        if overlap < 0.0 {
+            return vertex_box_distance(first, second);
+        }
+        penetration_m = penetration_m.min(overlap);
+    }
+    if penetration_m <= BOX_CONTACT_EPSILON_M {
+        0.0
+    } else {
+        -penetration_m
+    }
+}
+
+/// Penetration in metres at or below which two touching boxes are treated as
+/// exactly touching rather than overlapping.
+const BOX_CONTACT_EPSILON_M: f64 = 1e-9;
+
+/// One of the two axis-aligned face normals of an oriented box body, in world
+/// coordinates. `forward` selects the box's forward axis; otherwise its left
+/// axis, which is perpendicular for a rigid box.
+fn box_face_normal(sample: &AgentSample, forward: bool) -> DVec2 {
+    let (sin, cos) = sample.heading_rad.sin_cos();
+    if forward {
+        DVec2::new(cos, sin)
+    } else {
+        DVec2::new(-sin, cos)
+    }
+}
+
+/// Interval `[min, max]` an oriented box body spans when projected onto `axis`.
+fn box_projection(sample: &AgentSample, axis: DVec2) -> (f64, f64) {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for corner in box_corners(sample) {
+        let projection = corner.dot(axis);
+        min = min.min(projection);
+        max = max.max(projection);
+    }
+    (min, max)
+}
+
+/// Exact distance in metres between two disjoint oriented box bodies, via
+/// clamping each box's vertices onto the other box.
+fn vertex_box_distance(first: &AgentSample, second: &AgentSample) -> f64 {
     let first_motion = first.motion.expect("full detail");
     let second_motion = second.motion.expect("full detail");
     let mut clearance_m = f64::INFINITY;
@@ -520,6 +588,70 @@ fn describe(minimum: Minimum) -> String {
     } else {
         "never observed (a mode was absent)".to_owned()
     }
+}
+
+/// A synthetic vehicle sample, so the signed box-box measure can be unit
+/// checked without running the kernel.
+fn vehicle_sample(
+    id: u32,
+    position: DVec2,
+    heading_rad: f64,
+    length_m: f64,
+    width_m: f64,
+) -> AgentSample {
+    AgentSample {
+        id: AgentId::from_index(id as usize),
+        position,
+        heading_rad,
+        motion: Some(MotionSample {
+            mode: AgentMode::Vehicle,
+            speed_mps: 0.0,
+            path: PathId::from_index(0),
+            path_distance_m: 0.0,
+            body_length_m: length_m,
+            body_width_m: width_m,
+            route: None,
+            profile: None,
+            pedestrian_route: None,
+            pedestrian_profile: None,
+            decision: None,
+            pedestrian_decision: None,
+            yield_crossing: None,
+        }),
+    }
+}
+
+/// The vehicle-vehicle arm must be able to fail on a real overlap: a signed
+/// box-box measure is negative when two aligned boxes overlap, zero when they
+/// touch, and positive when they are clear. The old vertex-clamp form read
+/// exactly `0.0` for the overlapping case, so the `>= 0.0` assertion could never
+/// detect it.
+#[test]
+fn box_box_clearance_detects_an_overlap() {
+    let first = vehicle_sample(0, DVec2::ZERO, 0.0, 4.0, 2.0);
+    // Centres 3 m apart: the 4 m-long boxes overlap by 1 m along x.
+    let overlapping = vehicle_sample(1, DVec2::new(3.0, 0.0), 0.0, 4.0, 2.0);
+    assert!(
+        box_box_clearance(&first, &overlapping) < 0.0,
+        "an aligned overlap must be negative, got {}",
+        box_box_clearance(&first, &overlapping)
+    );
+    // Centres exactly 4 m apart: the faces touch, the closest non-overlapping
+    // state, which is not an overlap.
+    let touching = vehicle_sample(2, DVec2::new(4.0, 0.0), 0.0, 4.0, 2.0);
+    assert_eq!(box_box_clearance(&first, &touching), 0.0);
+    // Centres 5 m apart: a 1 m gap.
+    let clear = vehicle_sample(3, DVec2::new(5.0, 0.0), 0.0, 4.0, 2.0);
+    assert!((box_box_clearance(&first, &clear) - 1.0).abs() < 1e-12);
+    // A rotated 90-degree box also overlaps when it reaches the first box.
+    let turned = vehicle_sample(
+        4,
+        DVec2::new(2.5, 0.0),
+        std::f64::consts::FRAC_PI_2,
+        4.0,
+        2.0,
+    );
+    assert!(box_box_clearance(&first, &turned) < 0.0);
 }
 
 #[test]

@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T18:31:38Z
+updated: 2026-09-12T18:42:45Z
 summary: Phase 1 Increment 3 adds pedestrian bodies, demand, and waypoint/collision-avoidance control, contextual crossing-against-signal noncompliance, vehicle yielding to occupied crossings, and explicit controller interfaces so cars and pedestrians share one world, rule and event representation, and mixed benchmark.
-next: Independently verify every Done-when criterion of this increment from the final tree, read-only, against the slice A–E evidence recorded in `# Result`.
+next: Resolve this increment from the integrated tree; slice G closed review findings F1–F3, F4/F5 are recorded residual limitations, and all five gates pass.
 ---
 
 # Outcome
@@ -719,3 +719,101 @@ seeds. The residual itself is unchanged and belongs to Increment 4.
 - `Event::Spawned` still does not carry the agent mode, and the presentation
   projection (`crates/tangle-present/src/scene.rs`) still draws every body as a
   vehicle; both stay outside this slice's write set and are unchanged.
+
+## Slice G — review-finding closeout
+
+An independent read-only review of slices A–E raised five findings. This slice
+closes F1–F3 and records F4/F5 as explicit residual limitations. No schema,
+golden, baseline, or schema-v2 field changed, and every existing named stream
+and event is unchanged.
+
+### F1 — backward-movement yielding (fixed)
+
+`next_crossing` and `crossing_yield_constraint` mixed two progress conventions:
+the vehicle front used the `direction`-signed convention of `signal_decision`
+(`direction * distance_m + body_length/2`) while `crossing_entry_progress`
+returned `pedestrian::route_progress_m` travel progress. For `direction = -1`
+the two differ by `path_length`, so the committed guard never fired and the
+yield gap was a whole path length too large: a backward movement with a crossing
+and a `yield` rule emitted `Event::Yielded` and reported yielding without ever
+braking.
+
+`crossing_entry_progress` now returns `direction * closest_arc(...)`, the same
+signed convention as `signal_decision` and `nearest_leader`, so the front and
+the entry are directly comparable in either direction. The forward yield path
+is unchanged because `direction = 1` makes the two conventions identical.
+
+The new regression test
+`vehicle_yielding.rs::a_backward_vehicle_brakes_before_an_occupied_crossing`
+reverses only the checked-in benchmark's road movement and demand portal (its
+`from` portal is now on the path end, so `direction = -1`), leaving the
+crossing, its signal, the pedestrian route, and the `yield` rule byte-identical.
+Over six seeds it asserts every yielding vehicle holds its leading bumper clear
+of the region's `+x` entry and that the lowest speed reached while yielding is
+`0` m/s. Reverting only the entry convention reproduces the failure in seed 0
+(`agent 2 yielded with its front bumper at 1.98`, past the entry).
+
+### F2 — crossing-occupancy query against an unbounded radius (fixed)
+
+`CROSSING_QUERY_MARGIN_M = 0.5` widened the crossing region's bounding box, but
+`validate_pedestrian_profiles` places no upper bound on
+`pedestrian_profiles.radius_m`, so a body with a larger radius whose centre sat
+outside the widened box was never a candidate and `crossing_occupied` returned
+`false`. The margin is now derived from the scenario rather than a fixed
+constant: `Simulation::crossing_query_margin_m` returns the largest authored
+pedestrian radius (with the old constant, renamed
+`MIN_CROSSING_QUERY_MARGIN_M`, as a floor for a non-finite or degenerate range),
+so the candidate set is permissive for any sampled body.
+
+The new unit test
+`sim::tests::the_crossing_candidate_query_covers_a_far_over_large_pedestrian`
+(adds no schema diagnostic, so schema v1 is untouched) authors a crossing with
+`radius_m: { min: 4.0, max: 4.0 }` and parks a 4 m-radius pedestrian body with
+its centre 3.9 m past the `+x` face — outside both the 0.5 m floor and the grid
+cell covering it, yet reaching into the region. Reverting the margin to the
+fixed constant reproduces the failure (`crossing_occupied` false).
+
+### F3 — vacuous vehicle–vehicle benchmark arm (fixed)
+
+`mixed_interaction.rs::box_box_clearance` clamped vertices only, so it was
+always `>= 0` and an aligned overlap read exactly `0.0`; the vehicle–vehicle
+non-overlap assertion could not fail. It is now an exact 2-D separating-axis
+test over the four face normals, returning the negative penetration depth (the
+minimum translation that separates the boxes) when they overlap and the exact
+vertex-to-box distance when an axis separates them. A sub-nanometre penetration
+band (`BOX_CONTACT_EPSILON_M = 1e-9`) reads as touching, because the
+anti-overlap cap deliberately holds a follower's bumper at the leader's rear;
+the benchmark's vehicle–vehicle signed minimum is `-7.1e-15` there. The
+cross-mode and pedestrian–pedestrian measures are unchanged.
+
+The new unit test `mixed_interaction.rs::box_box_clearance_detects_an_overlap`
+builds synthetic vehicle samples and asserts a 1 m aligned overlap (and a
+rotated overlap) is negative, touching is exactly `0.0`, and a 1 m gap is
+`+1.0`. Reverting to the old vertex-clamp form fails the overlap assertion
+(`got 0`).
+
+### F4/F5 — recorded limitations (not implemented)
+
+- **F4:** `EVENT_VERSION` stays `1`. Adding `Event::Yielded` without a bump is
+  accepted because no existing event stream or golden changed, so version `1`
+  is no longer a complete description of the record union: a consumer that
+  keys on version `1` cannot assume the variant set. Making the version
+  describe the union is deferred to the event-versioning work; bumping it here
+  would invalidate every unchanged golden.
+- **F5:** the agent mode stays hidden in `Event::Spawned` and
+  `SceneBody::project`, so a renderer still cannot style a pedestrian
+  distinctly from those two seams. It is observable only through the snapshot
+  `MotionSample::mode`, which is unchanged. Carrying the mode through those
+  seams remains deferred presentation work.
+
+### Evidence
+
+- New/changed tests: `vehicle_yielding.rs` +
+  `a_backward_vehicle_brakes_before_an_occupied_crossing` (8 in that target),
+  `mixed_interaction.rs` + `box_box_clearance_detects_an_overlap` (5 in that
+  target), and `sim::tests::the_crossing_candidate_query_covers_a_far_over_large_pedestrian`
+  (lib tests 83). Each of F1–F3 was verified to fail with only its fix reverted.
+- The five gates pass on the final tree: `cargo test --workspace --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+  `braintree check nodes`. No schema, golden, or baseline changed.
