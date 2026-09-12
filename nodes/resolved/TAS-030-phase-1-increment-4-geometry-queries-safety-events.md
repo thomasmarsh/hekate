@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T23:19:27Z
+updated: 2026-09-12T23:24:00Z
 summary: Phase 1 Increment 4 adds a deterministic uniform-grid broad phase, exact and swept geometry queries, typed safety events with a versioned union, online TTC/minimum-separation and PET occupancy, and viewer event overlays and inspector links.
-next: Independent read-only verification of every Increment 4 Done-when criterion against the integrated tree.
 ---
 
 # Outcome
@@ -860,6 +859,126 @@ Bevy context.
   and `tangle-sim` still carry no Bevy type, and `f64`/`glam::DVec2` are
   unchanged.
 
+# Final verification
+
+Every `# Done when` criterion is met on the integrated tree (HEAD `9074df3`,
+verified after the slice-G closeout). The orchestrator reran the five gates on
+the final tree: `cargo test --workspace --all-features` exit 0 with no failed
+test binary; `cargo clippy --workspace --all-targets --all-features -- -D
+warnings` exit 0; `cargo fmt --all --check` clean;
+`./scripts/check-dependency-direction.sh` reports `dependency direction OK`; and
+`braintree check nodes` passes (54 nodes). An independent read-only review
+(slice F) verified each criterion against the source and tests and raised no
+merge blocker; slice G closed its three P2 test-quality findings (two
+unfalsifiable assertions replaced, and app-layer overlay tests added, which also
+caught and fixed a terminal emphasis-gating defect).
+
+Per criterion:
+
+1. **Property tests compare indexed candidates with an all-pairs reference on
+   randomized small worlds.** `crates/tangle-sim/tests/geometry_queries.rs`:
+   `broad_phase_candidates_cover_every_overlapping_pair` (12 fixed seeds x
+   16-body random worlds) compares the broad phase with the independent all-pairs
+   BTreeSet reference `reference_overlapping_bounds`, and
+   `exact_queries_match_the_brute_force_reference` covers the narrow phase. Slice
+   G made every assertion falsifiable: the test now asserts the sandwich (exact
+   intersections are a subset of the candidates, and the candidates are a subset
+   of the box-overlap relation), with two recorded mutations that fail it.
+   Evidence: `crates/tangle-sim/src/query.rs` and `src/index.rs` unit tests.
+2. **Swept fixtures detect crossing bodies that do not overlap at either tick
+   endpoint.** `crates/tangle-sim/tests/swept_queries.rs` covers a fast box
+   through a thin wall (`!bodies_intersect` at both endpoints, time of impact
+   0.29), a circle crossing at 1/3, a diagonal crossing against its analytic time
+   and normal, and 20 narrow-window crossings, all against
+   `crates/tangle-sim/src/swept.rs`; `src/index.rs` has a unit test that the
+   static phase pairs nothing while the swept phase pairs the crossing body.
+3. **Event pairs have deterministic ordering and are emitted once according to a
+   documented lifecycle.** The lifecycle is documented at
+   `crates/tangle-sim/src/event.rs:32`; `EventKind` (`event.rs:81`) and
+   `order_key` (`event.rs:391`) give the stable order, sorted once per step at
+   `sim.rs:752`; emission predicates live in `src/safety.rs` (`:13`, `:41`).
+   Tests: `crates/tangle-sim/tests/safety_events.rs` tie-breaker, per-tick order,
+   once-per-transition, and stream-wide tests (`:217`, `:287`, `:377`, `:486`,
+   `:528`), plus the 24-seed x 4000-tick mixed stream test in
+   `mixed_interaction.rs`.
+4. **Fine-step differential tests agree with analytic/simple fixtures within
+   declared tolerances.** `crates/tangle-sim/tests/metrics.rs` checks the
+   analytic 15.5 m lane at steps 0.05/0.0125/0.003125 (`:322`), a closed-form
+   quadratic circle TTC (`:372`), and PET against an independently detected
+   continuous occupancy over three steps and three seeds (`:526`, worst
+   deviation inside the declared four-step bound). Tolerances are declared in
+   `crates/tangle-sim/src/metrics.rs`.
+5. **`EVENT_VERSION` describes the full event union (F4), and the agent mode is
+   carried through `Event::Spawned` and `SceneBody::project` (F5).** F4:
+   `EVENT_VERSION = 2` (`event.rs:66`) names the full 10-variant union
+   (`event.rs:210`), which `kind()`/`agent()`/`order_key()` cover exhaustively
+   with no wildcard. F5: `Event::Spawned { mode, .. }` (`event.rs:213`) is in the
+   trace (`apps/tangle-cli/src/trace.rs:68,240`) and `SceneBody::project`
+   (`crates/tangle-present/src/scene.rs:679-681`) with mode tests at
+   `scene.rs:932`. The walking trace golden, its hash, the scene golden, and the
+   Phase 1 baseline were deliberately regenerated for this change; no unrelated
+   golden moved.
+6. **Viewer overlays and inspector links connect an event to its participants.**
+   `crates/tangle-present/src/safety.rs` exposes `EventParticipants::of`,
+   `others`, `events_involving`, `safety_markers`, `body_emphasis`,
+   `occupied_regions`, and `event_summary`; the Bevy viewer
+   (`apps/tangle-viewer/src/main.rs`) draws the occupancy ring, emphasis and link
+   rings, and markers and lists a body's records; the terminal backends draw the
+   same overlays (`b`). Evidence: `crates/tangle-present/tests/safety_overlays.rs`
+   over the real 800-tick mixed stream, the slice-G viewer shape-plan tests, and
+   the new terminal-backend tests.
+7. **Online TTC and minimum-separation tracking, and conflict-region occupancy
+   intervals for PET, have evidence.** `crates/tangle-sim/src/metrics.rs` owns
+   `time_to_collision`, `tick_minimum_clearance_m`, and the occupancy/PET state
+   (`:316`, `:414`, `:720`), wired into the tick at `sim.rs:743` and readable via
+   `Simulation::interaction_metrics()`. Evidence: the `metrics.rs` unit tests and
+   the six differential tests in `tests/metrics.rs`.
+8. **Five gates on the final tree.** Rerun by the orchestrator; all pass (see
+   above).
+
 # Limitations
 
-None yet.
+All are accepted scope boundaries or recorded residuals, not failures of the
+criteria above:
+
+- **Swept queries are a capability, not yet a tick consumer.**
+  `SweptBroadPhase` and `time_of_impact` are exercised by the safety and metrics
+  passes and their fixtures, but the tick still rebuilds the static
+  `SpatialIndex` (`sim.rs:718`) and no trajectory (yielding or the anti-overlap
+  caps) consumes a cast. Tunneling protection is available to consumers; wiring
+  it into motion would change behavior and the goldens and is left to a later
+  increment.
+- **Geometry is dependency-free on `glam`.** `query.rs` and `swept.rs` implement
+  box/box, circle/circle, box/circle distance, intersection, and casts directly
+  on `f64`/`glam::DVec2`. `PHASE_1_PLAN.md` names `parry2d-f64` as an option, but
+  the f64/glam constraint was preferred and no new dependency was added.
+- **Region occupancy uses a swept bounding circle.** A metric occupancy boundary
+  can precede the exact body-versus-ring crossing by up to the sweep margin; the
+  PET differential test measures that bound rather than eliminating it.
+- **PET is defined only for non-overlapping successions.** Two bodies that
+  occupy a conflict region together report occupancy but no post-encroachment
+  time.
+- **Contacting-pair minimum separation is the contact entry.** A pair that
+  contacts reports its contact-entry clearance, not the deepest mid-tick
+  penetration; a consumer that needs penetration depth reads the contact
+  record's `clearance_m`.
+- **The online metrics pass is always on.** It costs roughly 22 microseconds per
+  tick in a release build on `mixed_interaction_v1` (about 8x more in an
+  unoptimized test build). Whether it should be switchable is deferred to
+  Increment 5, which owns profiling before optimization.
+- **Reporting constants are declared, not calibrated.** The 20 m relevance
+  range, 5 s TTC horizon, 1 m near-miss threshold, 1e-3 m/s queue stop speed,
+  and 2 s marker lifetime are documented choices, not measured measures.
+- **Event selection is body-first.** An inspector reaches a record through a
+  participating body or a marker; pointer-picks-an-event is not implemented.
+  Overlays show events and occupancy, not the numeric TTC/separation/PET values.
+- **Bevy ECS wiring is source-verified only.** The pure overlay-to-shape plan is
+  tested, but the `Gizmos` calls and system registration hold no mapping a
+  headless test can falsify.
+- **Event-record version.** `EVENT_VERSION` was deliberately bumped 1 -> 2 so it
+  describes the union; consumers keying on version 1 must migrate. The walking
+  trace golden, its hash, the scene golden, and the Phase 1 baseline were
+  regenerated deliberately; the cell and Kitty goldens legitimately stayed
+  identical because the walking run emits no safety record.
+- **TAS-029 red-queue emergency-cap residual** remains a separate P2 node under
+  `IDX-001`; it does not gate this increment.
