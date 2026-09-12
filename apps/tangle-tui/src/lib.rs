@@ -19,7 +19,10 @@ mod backend;
 pub mod capability;
 pub mod fallback;
 mod grid;
+mod hud;
+mod kitty;
 mod palette;
+mod pixel;
 mod raster;
 mod session;
 pub mod terminal;
@@ -29,12 +32,14 @@ pub use capability::{
     BackendKind, BackendRequest, CapabilityResponder, CapabilityVerdict, Detection,
     EnvironmentHints, TerminalResponder,
 };
-pub use fallback::BackendFallback;
+pub use fallback::{BackendFallback, BackendPair};
 pub use grid::{Cell, CellGrid};
+pub use kitty::{KittyBackend, Multiplexer};
 pub use palette::{ColorDepth, Rgb, ansi256_color, to_ansi16, to_ansi256};
+pub use pixel::{PixelRasterizer, RgbaImage};
 pub use raster::{
     BACKGROUND, BODY_COLOR, CELL_ASPECT, PATH_COLOR, PORTAL_COLOR, Rasterizer, SELECTED_COLOR,
     VECTOR_COLOR,
 };
-pub use session::TuiSession;
+pub use session::{SessionBackend, TuiSession};
 pub use terminal::{RealTerminal, TerminalModes};

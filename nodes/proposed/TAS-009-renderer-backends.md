@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T14:06:20Z
+updated: 2026-09-12T14:35:30Z
 summary: Render one simulation through interchangeable GUI and terminal renderer backends.
-next: Implement the opt-in Kitty graphics backend behind the shared contract ([[TAS-013-terminal-viewer-kitty]]).
+next: Pin every backend with deterministic golden-output and cross-backend parity tests ([[TAS-015-renderer-conformance-suite]]).
 ---
 
 # Outcome

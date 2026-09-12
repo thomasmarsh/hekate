@@ -9,9 +9,11 @@
 //! the presentation controller, outside this type, so the same [`SceneFrame`]
 //! is replayed to the fallback and the viewer's state is preserved.
 
+use crate::backend::RunInfo;
 use crate::capability::BackendKind;
+use crate::session::SessionBackend;
 use crate::terminal::TerminalModes;
-use tangle_present::{BackendResult, RendererBackend, SceneFrame};
+use tangle_present::{BackendCapabilities, BackendResult, RendererBackend, SceneFrame};
 
 /// Tracks which backend is active while a run may fall back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +76,101 @@ impl BackendFallback {
     }
 }
 
+/// A terminal session's live backend: an opt-in primary plus the character-cell
+/// fallback it can switch to.
+///
+/// The pair is the single [`SessionBackend`] a [`crate::session::TuiSession`]
+/// owns. It buffers the frame from `draw` and runs it through
+/// [`BackendFallback::render`] in `present`, so a primitive backend failure
+/// restores the terminal and replays the same frame in cells without the
+/// session, the controller, or the kernel noticing.
+pub struct BackendPair<C, K, T> {
+    cells: C,
+    kitty: K,
+    fallback: BackendFallback,
+    terminal: T,
+    pending: Option<SceneFrame>,
+}
+
+impl<C: SessionBackend, K: SessionBackend, T: TerminalModes> BackendPair<C, K, T> {
+    /// Pair a character-cell backend with an opt-in backend, starting on
+    /// `active`.
+    pub fn new(cells: C, kitty: K, terminal: T, active: BackendKind) -> Self {
+        Self {
+            cells,
+            kitty,
+            fallback: BackendFallback::new(active),
+            terminal,
+            pending: None,
+        }
+    }
+
+    /// The backend currently rendering.
+    pub const fn active(&self) -> BackendKind {
+        self.fallback.active()
+    }
+
+    /// Whether the run has switched away from its starting backend.
+    pub const fn fell_back(&self) -> bool {
+        self.fallback.fell_back()
+    }
+}
+
+impl<C: SessionBackend, K: SessionBackend, T: TerminalModes> RendererBackend
+    for BackendPair<C, K, T>
+{
+    fn capabilities(&self) -> BackendCapabilities {
+        match self.fallback.active() {
+            BackendKind::Kitty => self.kitty.capabilities(),
+            BackendKind::Ascii => self.cells.capabilities(),
+        }
+    }
+
+    fn resize(&mut self, width: u32, height: u32) -> BackendResult {
+        self.cells.resize(width, height)?;
+        self.kitty.resize(width, height)
+    }
+
+    fn draw(&mut self, frame: &SceneFrame) -> BackendResult {
+        self.pending = Some(frame.clone());
+        Ok(())
+    }
+
+    fn present(&mut self) -> BackendResult {
+        let Some(frame) = self.pending.take() else {
+            return Ok(());
+        };
+        self.fallback
+            .render(&frame, &mut self.kitty, &mut self.cells, &mut self.terminal)
+    }
+}
+
+impl<C: SessionBackend, K: SessionBackend, T: TerminalModes> SessionBackend
+    for BackendPair<C, K, T>
+{
+    fn set_run_info(&mut self, run: RunInfo) {
+        self.cells.set_run_info(run);
+        self.kitty.set_run_info(run);
+    }
+
+    fn resize_terminal(&mut self, columns: u32, rows: u32) -> BackendResult {
+        self.cells.resize_terminal(columns, rows)?;
+        self.kitty.resize_terminal(columns, rows)
+    }
+
+    fn scene_extent(&self) -> (f64, f64) {
+        match self.fallback.active() {
+            BackendKind::Kitty => self.kitty.scene_extent(),
+            BackendKind::Ascii => self.cells.scene_extent(),
+        }
+    }
+
+    fn shutdown(&mut self) -> BackendResult {
+        self.kitty.shutdown()?;
+        self.cells.shutdown()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +184,8 @@ mod tests {
         BackendCapabilities, FrameStatus, Overlays, SceneGeometry, Speed, Viewport,
     };
     use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
+
+    use crate::backend::RunInfo;
 
     /// A backend that records the ticks and selections it sees and can be told
     /// to fail at either stage.
@@ -150,6 +249,18 @@ mod tests {
             }
             self.presented += 1;
             Ok(())
+        }
+    }
+
+    impl SessionBackend for FakeBackend {
+        fn set_run_info(&mut self, _run: RunInfo) {}
+
+        fn resize_terminal(&mut self, _columns: u32, _rows: u32) -> BackendResult {
+            Ok(())
+        }
+
+        fn scene_extent(&self) -> (f64, f64) {
+            (80.0, 48.0)
         }
     }
 
@@ -292,5 +403,38 @@ mod tests {
         assert!(!fallback.fell_back());
         assert_eq!(terminal.restores, 0);
         assert_eq!(cells.ticks, vec![9]);
+    }
+
+    #[test]
+    fn a_pair_replays_the_same_frame_in_cells_after_a_kitty_failure() {
+        let mut pair = BackendPair::new(
+            FakeBackend::cells(),
+            FakeBackend::failing(),
+            FakeTerminal::default(),
+            BackendKind::Kitty,
+        );
+        pair.draw(&frame(5, Some(1)))
+            .expect("draw buffers the frame");
+        pair.present().expect("pair falls back");
+
+        assert_eq!(pair.active(), BackendKind::Ascii);
+        assert!(pair.fell_back());
+        assert!(pair.capabilities().character_cells);
+    }
+
+    #[test]
+    fn a_healthy_pair_stays_on_kitty() {
+        let mut pair = BackendPair::new(
+            FakeBackend::cells(),
+            FakeBackend::kitty(),
+            FakeTerminal::default(),
+            BackendKind::Kitty,
+        );
+        pair.draw(&frame(1, None)).expect("draw buffers the frame");
+        pair.present().expect("kitty renders");
+
+        assert_eq!(pair.active(), BackendKind::Kitty);
+        assert!(!pair.fell_back());
+        assert!(pair.capabilities().kitty_graphics);
     }
 }

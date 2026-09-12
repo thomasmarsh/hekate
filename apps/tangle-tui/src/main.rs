@@ -26,7 +26,9 @@ use tangle_tui::capability::{
     self, BackendKind, BackendRequest, EnvironmentHints, TerminalResponder,
 };
 use tangle_tui::terminal::{RealTerminal, TerminalModes};
-use tangle_tui::{CELL_ASPECT, ColorDepth, TuiSession};
+use tangle_tui::{
+    BackendPair, CELL_ASPECT, CellBackend, ColorDepth, KittyBackend, SessionBackend, TuiSession,
+};
 
 /// Scenario used when no path is passed on the command line.
 const DEFAULT_SCENARIO: &str = "scenarios/walking/walking_guide_v1.json5";
@@ -54,6 +56,11 @@ usage: tangle-tui [--backend ascii|kitty|auto] [scenario] [seed]
 /// Errors from the event loop are boxed so kernel and terminal errors share a
 /// single return type.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// The concrete session the viewer runs: the character-cell backend, the opt-in
+/// Kitty graphics backend, and safe failover between them.
+type ViewerSession =
+    TuiSession<BackendPair<CellBackend<Stdout>, KittyBackend<Stdout>, RealTerminal>>;
 
 /// Parsed command-line options.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,15 +102,12 @@ fn main() -> Result<(), BoxError> {
     };
 
     let kind = select_backend(options.backend);
-    if kind == BackendKind::Kitty {
-        eprintln!(
-            "note: the Kitty graphics backend is not built in this revision; \
-             using character cells"
-        );
-    }
 
     let depth = ColorDepth::detect();
-    let mut session = match TuiSession::new(scenario, options.seed, io::stdout(), depth) {
+    let cells = CellBackend::new(io::stdout(), depth, Arc::clone(&scenario));
+    let kitty = KittyBackend::new(io::stdout(), Arc::clone(&scenario));
+    let pair = BackendPair::new(cells, kitty, RealTerminal, kind);
+    let mut session = match TuiSession::with_backend(scenario, options.seed, pair) {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: cannot start simulation: {error}");
@@ -115,6 +119,8 @@ fn main() -> Result<(), BoxError> {
     install_panic_hook();
     terminal.enter()?;
     let result = run(&mut session);
+    // Delete any placed graphics image before leaving the alternate screen.
+    let _ = session.backend_mut().shutdown();
     terminal.restore()?;
     result
 }
@@ -179,7 +185,7 @@ fn select_backend(request: BackendRequest) -> BackendKind {
 }
 
 /// Drive the session from terminal events until the user quits.
-fn run(session: &mut TuiSession<Stdout>) -> Result<(), BoxError> {
+fn run(session: &mut ViewerSession) -> Result<(), BoxError> {
     let (columns, rows) = terminal::size()?;
     session.resize(u32::from(columns), u32::from(rows));
 
@@ -210,7 +216,7 @@ fn run(session: &mut TuiSession<Stdout>) -> Result<(), BoxError> {
 }
 
 /// Translate one key press into shared view commands. Returns `false` to quit.
-fn handle_key(session: &mut TuiSession<Stdout>, key: KeyEvent) -> bool {
+fn handle_key(session: &mut ViewerSession, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('q') => return false,
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
@@ -237,7 +243,7 @@ fn handle_key(session: &mut TuiSession<Stdout>, key: KeyEvent) -> bool {
 }
 
 /// Move the viewport by `PAN_CELLS` cells in each direction, in world units.
-fn pan(session: &mut TuiSession<Stdout>, x: f64, y: f64) {
+fn pan(session: &mut ViewerSession, x: f64, y: f64) {
     let scale = session.viewport().scale();
     session.apply(ViewCommand::Pan(DVec2::new(
         x * PAN_CELLS * scale,

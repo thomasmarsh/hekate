@@ -27,8 +27,70 @@ const DEFAULT_COLUMNS: u32 = 80;
 /// Default terminal height before the host reports the real one.
 const DEFAULT_ROWS: u32 = 24;
 
+/// A renderer backend a [`TuiSession`] can drive.
+///
+/// The shared [`RendererBackend`] contract covers drawing and presenting; a
+/// session additionally needs to size the backend to the host terminal, learn
+/// the scene extent to fit the viewport, report run totals, and release any
+/// terminal resources on shutdown.
+pub trait SessionBackend: RendererBackend {
+    /// Update the run totals the status line shows.
+    fn set_run_info(&mut self, run: RunInfo);
+
+    /// Resize to the host terminal's `columns` by `rows` cells.
+    fn resize_terminal(&mut self, columns: u32, rows: u32) -> BackendResult;
+
+    /// The scene area in viewport units, for [`Viewport::fit`].
+    fn scene_extent(&self) -> (f64, f64);
+
+    /// Release terminal resources, such as deleting placed graphics images.
+    fn shutdown(&mut self) -> BackendResult {
+        Ok(())
+    }
+}
+
+impl<W: Write> SessionBackend for CellBackend<W> {
+    fn set_run_info(&mut self, run: RunInfo) {
+        CellBackend::set_run_info(self, run);
+    }
+
+    fn resize_terminal(&mut self, columns: u32, rows: u32) -> BackendResult {
+        self.resize(columns, rows)
+    }
+
+    fn scene_extent(&self) -> (f64, f64) {
+        let (columns, rows) = self.scene_size();
+        (
+            f64::from(columns.max(1)),
+            f64::from(rows.max(1)) * CELL_ASPECT,
+        )
+    }
+}
+
+impl<W: Write> SessionBackend for crate::kitty::KittyBackend<W> {
+    fn set_run_info(&mut self, run: RunInfo) {
+        crate::kitty::KittyBackend::set_run_info(self, run);
+    }
+
+    fn resize_terminal(&mut self, columns: u32, rows: u32) -> BackendResult {
+        self.resize_terminal(columns, rows)
+    }
+
+    fn scene_extent(&self) -> (f64, f64) {
+        let (columns, rows) = self.scene_size();
+        (
+            f64::from(columns.max(1)),
+            f64::from(rows.max(1)) * CELL_ASPECT,
+        )
+    }
+
+    fn shutdown(&mut self) -> BackendResult {
+        self.shutdown()
+    }
+}
+
 /// One terminal viewing session.
-pub struct TuiSession<W: Write> {
+pub struct TuiSession<B: SessionBackend> {
     scenario: Arc<CompiledScenario>,
     sim: Simulation,
     controller: PresentationController,
@@ -37,16 +99,34 @@ pub struct TuiSession<W: Write> {
     seed: u64,
     spawned: u64,
     despawned: u64,
-    backend: CellBackend<W>,
+    backend: B,
 }
 
-impl<W: Write> TuiSession<W> {
-    /// Start `scenario` at `seed`, rendering through `writer` at `depth`.
+impl<W: Write> TuiSession<CellBackend<W>> {
+    /// Start `scenario` at `seed`, rendering through the character-cell backend
+    /// on `writer` at `depth`.
     pub fn new(
         scenario: Arc<CompiledScenario>,
         seed: u64,
         writer: W,
         depth: ColorDepth,
+    ) -> Result<Self, InitError> {
+        let backend = CellBackend::new(writer, depth, Arc::clone(&scenario));
+        Self::with_backend(scenario, seed, backend)
+    }
+
+    /// Consume the session and return the backend sink for assertions.
+    pub fn into_writer(self) -> W {
+        self.backend.into_writer()
+    }
+}
+
+impl<B: SessionBackend> TuiSession<B> {
+    /// Start `scenario` at `seed`, rendering through `backend`.
+    pub fn with_backend(
+        scenario: Arc<CompiledScenario>,
+        seed: u64,
+        backend: B,
     ) -> Result<Self, InitError> {
         let sim = Simulation::new((*scenario).clone(), RunConfig::new(seed))?;
         let step_secs = sim.config().step().as_secs();
@@ -54,7 +134,6 @@ impl<W: Write> TuiSession<W> {
         let geometry = SceneGeometry::from_scenario(&scenario);
         let controller =
             PresentationController::new(geometry, step_secs, Viewport::new(DVec2::ZERO, 1.0));
-        let backend = CellBackend::new(writer, depth, Arc::clone(&scenario));
 
         let mut session = Self {
             scenario,
@@ -74,17 +153,13 @@ impl<W: Write> TuiSession<W> {
     /// React to a terminal resize: reserve the status and footer rows, then
     /// refit the viewport to the new scene area with aspect correction.
     pub fn resize(&mut self, columns: u32, rows: u32) {
-        let _ = self.backend.resize(columns, rows);
-        let (scene_columns, scene_rows) = self.backend.scene_size();
+        let _ = self.backend.resize_terminal(columns, rows);
+        let screen = self.backend.scene_extent();
         let bounds = self
             .controller
             .geometry()
             .bounds()
             .unwrap_or((DVec2::splat(-20.0), DVec2::splat(20.0)));
-        let screen = (
-            f64::from(scene_columns.max(1)),
-            f64::from(scene_rows.max(1)) * CELL_ASPECT,
-        );
         self.controller
             .set_viewport(Viewport::fit(bounds, screen, 1.25));
     }
@@ -130,8 +205,13 @@ impl<W: Write> TuiSession<W> {
     }
 
     /// The rendering backend.
-    pub const fn backend(&self) -> &CellBackend<W> {
+    pub const fn backend(&self) -> &B {
         &self.backend
+    }
+
+    /// The rendering backend, mutably, for shutdown and resource release.
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
     }
 
     /// Apply one shared view command, restarting the kernel if it asks.
@@ -185,9 +265,9 @@ impl<W: Write> TuiSession<W> {
         self.render()
     }
 
-    /// Consume the session and return the backend sink for assertions.
-    pub fn into_writer(self) -> W {
-        self.backend.into_writer()
+    /// Consume the session and return its backend.
+    pub fn into_backend(self) -> B {
+        self.backend
     }
 
     fn project(&self) -> SceneFrame {
@@ -257,7 +337,7 @@ mod tests {
         Arc::new(CompiledScenario::compile(source).expect("scenario compiles"))
     }
 
-    fn session() -> TuiSession<Vec<u8>> {
+    fn session() -> TuiSession<CellBackend<Vec<u8>>> {
         TuiSession::new(scenario(), 0, Vec::new(), ColorDepth::Truecolor).expect("session starts")
     }
 

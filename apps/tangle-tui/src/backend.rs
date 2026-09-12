@@ -9,15 +9,16 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 use tangle_model::CompiledScenario;
-use tangle_present::{BackendCapabilities, BackendResult, RendererBackend, SceneBody, SceneFrame};
+use tangle_present::{BackendCapabilities, BackendResult, RendererBackend, SceneFrame};
 
 use crate::grid::CellGrid;
+use crate::hud::Hud;
 use crate::palette::{ColorDepth, Rgb};
 use crate::raster::{BACKGROUND, Rasterizer};
 
-const HUD_COLOR: Rgb = Rgb::new(224, 237, 255);
-const FOOTER_COLOR: Rgb = Rgb::new(158, 173, 199);
-const FOOTER_SELECTED_COLOR: Rgb = Rgb::new(242, 217, 140);
+pub(crate) const HUD_COLOR: Rgb = Rgb::new(224, 237, 255);
+pub(crate) const FOOTER_COLOR: Rgb = Rgb::new(158, 173, 199);
+pub(crate) const FOOTER_SELECTED_COLOR: Rgb = Rgb::new(242, 217, 140);
 /// Status lines above the scene plus the footer below it.
 const RESERVED_ROWS: u32 = 3;
 
@@ -39,12 +40,8 @@ pub struct CellBackend<W: Write> {
     width: u32,
     height: u32,
     scene_rows: u32,
-    scenario: Arc<CompiledScenario>,
-    run: RunInfo,
+    hud: Hud,
     pending: Option<CellGrid>,
-    status: [String; 2],
-    footer: String,
-    selected: bool,
 }
 
 impl<W: Write> CellBackend<W> {
@@ -57,23 +54,19 @@ impl<W: Write> CellBackend<W> {
             width: 80,
             height: 24,
             scene_rows: 21,
-            scenario,
-            run: RunInfo::default(),
+            hud: Hud::new(scenario),
             pending: None,
-            status: ["Tangle".to_owned(), String::new()],
-            footer: String::new(),
-            selected: false,
         }
     }
 
     /// Update the run totals shown on the status line.
     pub fn set_run_info(&mut self, run: RunInfo) {
-        self.run = run;
+        self.hud.set_run_info(run);
     }
 
     /// Current run totals.
     pub const fn run_info(&self) -> RunInfo {
-        self.run
+        self.hud.run_info()
     }
 
     /// Terminal size in cells, including the status and footer rows.
@@ -93,12 +86,12 @@ impl<W: Write> CellBackend<W> {
 
     /// The status lines last computed by [`Self::draw`].
     pub const fn status_lines(&self) -> &[String; 2] {
-        &self.status
+        self.hud.status_lines()
     }
 
     /// The inspector or help line last computed by [`Self::draw`].
     pub fn footer_line(&self) -> &str {
-        &self.footer
+        self.hud.footer_line()
     }
 
     /// A shared reference to the underlying sink.
@@ -109,79 +102,6 @@ impl<W: Write> CellBackend<W> {
     /// Consume the backend and return its sink, for test assertions.
     pub fn into_writer(self) -> W {
         self.writer
-    }
-
-    /// The two status lines for `frame`, including run totals.
-    fn build_status(&self, frame: &SceneFrame) -> [String; 2] {
-        let paused = if frame.status.paused {
-            "paused"
-        } else {
-            "running"
-        };
-        let selected = frame
-            .status
-            .selection
-            .map_or_else(|| "none".to_owned(), |id| format!("#{id}"));
-        [
-            format!(
-                "Tangle {scenario}   sim {seconds:.2} s   tick {tick}   speed {speed}   {paused}",
-                scenario = frame.scenario_id,
-                seconds = frame.time_seconds,
-                tick = frame.tick,
-                speed = frame.status.speed.label(),
-            ),
-            format!(
-                "seed {seed}   agents {alive}   spawned {spawned}   \
-                 despawned {despawned}   selected {selected}",
-                seed = self.run.seed,
-                alive = frame.status.agents,
-                spawned = self.run.spawned,
-                despawned = self.run.despawned,
-            ),
-        ]
-    }
-
-    /// The inspector for the selected agent, or the control legend otherwise.
-    fn build_footer(&self, frame: &SceneFrame) -> String {
-        match frame.status.selection {
-            Some(id) => frame.body(id).map_or_else(
-                || format!("Agent #{id} is no longer alive."),
-                |body| self.describe(body),
-            ),
-            None => "\
-space pause   . step   1/2/3 speed   r restart   n next seed   \
-WASD/arrows pan   +/- zoom   tab select   g geometry   v vectors   \
-esc clear   q quit"
-                .to_owned(),
-        }
-    }
-
-    /// The same agent fields the Bevy inspector shows, on one line.
-    fn describe(&self, body: &SceneBody) -> String {
-        let mut out = format!(
-            "Agent #{id}   position ({x:.2}, {y:.2}) m   heading {heading:.1}°",
-            id = body.id,
-            x = body.position.x,
-            y = body.position.y,
-            heading = body.heading_rad.to_degrees(),
-        );
-
-        if let Some(speed) = body.speed_mps {
-            let path = body
-                .path
-                .and_then(|id| self.scenario.id_map().path_name(id))
-                .unwrap_or("<unknown>");
-            out.push_str(&format!(
-                "   speed {speed:.2} m/s   path {path}   distance {distance:.2} m   \
-                 body {length:.2} x {width:.2} m   intent hold constant speed along the guide path",
-                distance = body.path_distance_m.unwrap_or(0.0),
-                length = body.length_m,
-                width = body.width_m,
-            ));
-        }
-
-        out.push_str("   decision none yet (Increment 0 has no decisions)");
-        out
     }
 }
 
@@ -207,9 +127,7 @@ impl<W: Write> RendererBackend for CellBackend<W> {
     fn draw(&mut self, frame: &SceneFrame) -> BackendResult {
         let raster = Rasterizer::new(self.width, self.scene_rows);
         self.pending = Some(raster.rasterize(frame));
-        self.status = self.build_status(frame);
-        self.footer = self.build_footer(frame);
-        self.selected = frame.status.selection.is_some();
+        self.hud.update(frame);
         Ok(())
     }
 
@@ -217,7 +135,7 @@ impl<W: Write> RendererBackend for CellBackend<W> {
         let Some(grid) = self.pending.take() else {
             return Ok(());
         };
-        let footer_color = if self.selected {
+        let footer_color = if self.hud.selected() {
             FOOTER_SELECTED_COLOR
         } else {
             FOOTER_COLOR
@@ -226,9 +144,10 @@ impl<W: Write> RendererBackend for CellBackend<W> {
         // Home the cursor, then overwrite exactly `height` full-width rows so a
         // frame never scrolls the alternate screen.
         self.writer.write_all(b"\x1b[H")?;
+        let status = self.hud.status_lines();
         write_row(
             &mut self.writer,
-            &self.status[0],
+            &status[0],
             self.width,
             HUD_COLOR,
             BACKGROUND,
@@ -237,7 +156,7 @@ impl<W: Write> RendererBackend for CellBackend<W> {
         self.writer.write_all(b"\r\n")?;
         write_row(
             &mut self.writer,
-            &self.status[1],
+            &status[1],
             self.width,
             HUD_COLOR,
             BACKGROUND,
@@ -250,7 +169,7 @@ impl<W: Write> RendererBackend for CellBackend<W> {
         self.writer.write_all(b"\r\n")?;
         write_row(
             &mut self.writer,
-            &self.footer,
+            self.hud.footer_line(),
             self.width,
             footer_color,
             BACKGROUND,
@@ -263,7 +182,7 @@ impl<W: Write> RendererBackend for CellBackend<W> {
 }
 
 /// Write one padded, colored, full-width row.
-fn write_row<W: Write>(
+pub(crate) fn write_row<W: Write>(
     out: &mut W,
     text: &str,
     width: u32,
