@@ -1,0 +1,49 @@
+// Benchmark: signal compliance on a single signalized approach.
+//
+// A straight 80 m corridor whose movement stops at an authored 34 m stop line.
+// The head is red for 12 s and green for 20 s, so a fixed-time cycle queues
+// compliant drivers at the line while lower-compliance drivers run a red under
+// ordinary IDM physics. The profiles span the full compliance range so one run
+// exercises both stopping and red-light running, and the CLI test asserts the
+// recorded decisions reproduce for a seed. See PHASE_1_PLAN.md Increment 2.
+{
+  schema_version: 1,
+  id: 'red_light_compliance_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [ { id: 'guide', points: [ { x: -40.0, y: 0.0 }, { x: 40.0, y: 0.0 } ] } ],
+  portals: [
+    { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  movements: [
+    { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0, stop_line_m: 34.0 },
+  ],
+  rules: [ { id: 'r_through', movement: 'through', kind: 'signal', signal: 'main' } ],
+  signals: [
+    {
+      id: 'main',
+      heads: [ { id: 'head', movement: 'through' } ],
+      phases: [
+        { duration_s: 12.0, states: [ { head: 'head', color: 'red' } ] },
+        { duration_s: 20.0, states: [ { head: 'head', color: 'green' } ] },
+      ],
+    },
+  ],
+  demand: [
+    {
+      id: 'inflow',
+      portal: 'entry',
+      rate_vph: 900.0,
+      routes: [ { movement: 'through', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 10.0, max: 10.0 },
+    length_m: { min: 4.0, max: 4.0 },
+    width_m: { min: 2.0, max: 2.0 },
+    time_gap_s: { min: 1.5, max: 1.5 },
+    max_accel_mps2: { min: 2.0, max: 2.0 },
+    comfortable_brake_mps2: { min: 3.0, max: 3.0 },
+    compliance: { min: 0.0, max: 1.0 },
+  },
+}

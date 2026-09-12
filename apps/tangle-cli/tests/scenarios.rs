@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tangle_cli::load_scenario;
-use tangle_sim::{AgentId, Event, RunConfig, Simulation, SnapshotDetail};
+use tangle_sim::{
+    AgentId, ComplianceReason, Event, RunConfig, SignalAction, Simulation, SnapshotDetail,
+};
 
 fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -54,6 +56,7 @@ fn benchmark_layouts_compile_from_general_primitives() {
         "perpendicular_conflict_v1",
         "four_leg_signal_v1",
         "car_following_v1",
+        "red_light_compliance_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
@@ -139,6 +142,7 @@ fn benchmark_demand_generates_routed_vehicles() {
         "perpendicular_conflict_v1",
         "four_leg_signal_v1",
         "car_following_v1",
+        "red_light_compliance_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
@@ -242,5 +246,137 @@ fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
     assert!(
         follow_brakes > 0,
         "the car-following benchmark must exercise braking while following"
+    );
+}
+
+/// Phase 1 Increment 2 gate: the contextual red-light decision records both
+/// compliance and noncompliance, reproduces exactly for a seed, and a
+/// noncompliant runner still moves under ordinary bounded physics.
+#[test]
+fn red_light_benchmark_records_reproducible_compliance_decisions() {
+    let path = repo_path("scenarios/benchmarks/red_light_compliance_v1.json5");
+    let stop_line_m = 34.0;
+
+    fn decision_trace(path: &Path) -> Vec<String> {
+        let scenario = load_scenario(path).expect("red-light benchmark loads");
+        let mut sim = Simulation::new(scenario, RunConfig::new(3)).expect("benchmark runs");
+        let mut log = Vec::new();
+        for _ in 0..3000 {
+            sim.step();
+            for sample in sim.snapshot(SnapshotDetail::Full).agents() {
+                let decision = sample
+                    .motion
+                    .expect("full detail")
+                    .decision
+                    .expect("signal-controlled vehicle records a decision");
+                log.push(format!(
+                    "{}:{}:{:?}:{:?}:{:.6}:{:.6}",
+                    sim.time().tick(),
+                    sample.id.get(),
+                    decision.action,
+                    decision.reason,
+                    decision.stop_line_gap_m,
+                    decision.required_decel_mps2,
+                ));
+            }
+        }
+        log
+    }
+
+    let first = decision_trace(&path);
+    assert!(!first.is_empty(), "no decisions were recorded");
+    assert_eq!(
+        first,
+        decision_trace(&path),
+        "the same seed must reproduce every decision record"
+    );
+
+    // Both outcomes must occur: drivers who obey the head and drivers who run
+    // it. The trace is formatted from the decision enum, so `Stop`/`Proceed`
+    // and the reason labels appear verbatim.
+    assert!(
+        first.iter().any(|entry| entry.contains("CompliantStop")),
+        "no compliant stop was recorded"
+    );
+    assert!(
+        first.iter().any(|entry| entry.contains("NonCompliantRun")),
+        "no red-light run was recorded"
+    );
+
+    // A noncompliant runner still obeys bounded physics: it never teleports,
+    // never overlaps a same-path neighbour, and stays within its profile speed
+    // and the stop line while it is obeying.
+    let step = 0.05;
+    let scenario = load_scenario(&path).expect("red-light benchmark loads");
+    let mut sim = Simulation::new(scenario, RunConfig::new(5)).expect("benchmark runs");
+    let mut previous: HashMap<u32, f64> = HashMap::new();
+    let mut runners = 0usize;
+    let mut crossed_on_a_stop_required_head = false;
+    for _ in 0..4000 {
+        sim.step();
+        let snapshot = sim.snapshot(SnapshotDetail::Full);
+        let agents = snapshot.agents();
+        for (index, sample) in agents.iter().enumerate() {
+            let motion = sample.motion.expect("full detail");
+            let profile = sim.agent_profile(sample.id).expect("profile vehicle");
+            assert!(
+                motion.speed_mps >= -1e-9 && motion.speed_mps <= profile.desired_speed_mps + 1e-9,
+                "runner speed {} left the profile bound",
+                motion.speed_mps
+            );
+            if let Some(decision) = motion.decision {
+                if decision.action == SignalAction::Stop {
+                    let front_m = motion.path_distance_m + motion.body_length_m * 0.5;
+                    assert!(
+                        front_m <= stop_line_m + 1e-6,
+                        "a stopping vehicle crossed the line it obeys: {front_m}"
+                    );
+                }
+                if decision.reason == ComplianceReason::NonCompliantRun {
+                    runners += 1;
+                }
+                // A proceed against a stop-required head crosses on red whether
+                // the reason is an unwillingness to brake (NonCompliantRun) or
+                // an inability to brake (CannotStop). The decision is computed
+                // from the pre-step state, so a front bumper beyond the line at
+                // this tick means the runner crossed while the head still
+                // required a stop.
+                let running_against_red = matches!(
+                    decision.reason,
+                    ComplianceReason::NonCompliantRun | ComplianceReason::CannotStop
+                );
+                if running_against_red {
+                    let front_m = motion.path_distance_m + motion.body_length_m * 0.5;
+                    if front_m > stop_line_m {
+                        crossed_on_a_stop_required_head = true;
+                    }
+                }
+            }
+            if let Some(previous_distance) = previous.get(&sample.id.get()) {
+                let advanced = motion.path_distance_m - previous_distance;
+                assert!(
+                    advanced <= profile.desired_speed_mps * step + 1e-9,
+                    "runner teleported {advanced} m in one step"
+                );
+            }
+            previous.insert(sample.id.get(), motion.path_distance_m);
+            for other in &agents[index + 1..] {
+                let other_motion = other.motion.expect("full detail");
+                if other_motion.path != motion.path {
+                    continue;
+                }
+                let half_lengths = (motion.body_length_m + other_motion.body_length_m) * 0.5;
+                let gap = (motion.path_distance_m - other_motion.path_distance_m).abs();
+                assert!(
+                    gap >= half_lengths - 1e-9,
+                    "bodies overlap (gap {gap} < {half_lengths})"
+                );
+            }
+        }
+    }
+    assert!(runners > 0, "no noncompliant runner was recorded");
+    assert!(
+        crossed_on_a_stop_required_head,
+        "a recorded red-light runner never actually crossed on a stop-required head"
     );
 }
