@@ -1,6 +1,6 @@
 ---
 context_rev: 1
-updated: 2026-09-12T12:34:01Z
+updated: 2026-09-12T13:16:42Z
 summary: Renderer backends implement one trait over a Bevy-free scene frame and view-command stream.
 ---
 

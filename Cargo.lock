@@ -5207,6 +5207,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tangle-present"
+version = "0.0.0"
+dependencies = [
+ "glam 0.33.7",
+ "tangle-model",
+ "tangle-sim",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "tangle-sim"
 version = "0.0.0"
 dependencies = [
@@ -5223,8 +5233,8 @@ dependencies = [
  "bevy",
  "glam 0.33.7",
  "tangle-model",
+ "tangle-present",
  "tangle-sim",
- "thiserror 2.0.20",
 ]
 
 [[package]]

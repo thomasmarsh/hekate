@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T13:10:41Z
+updated: 2026-09-12T13:22:00Z
 summary: Render one simulation through interchangeable GUI and terminal renderer backends.
-next: Extract the shared presentation layer and contract ([[TAS-011-shared-render-layer]]).
+next: Build the character-cell terminal viewer ([[TAS-012-terminal-viewer-ascii]]).
 ---
 
 # Outcome

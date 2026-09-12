@@ -1,18 +1,17 @@
 [package]
-name = "tangle-viewer"
+name = "tangle-present"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Bevy top-down viewer for Tangle."
+description = "Bevy-free, terminal-free presentation layer shared by every Tangle renderer."
 
 [dependencies]
 tangle-model.workspace = true
 tangle-sim.workspace = true
-tangle-present.workspace = true
-bevy.workspace = true
 glam.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

@@ -13,6 +13,7 @@ publish = false
 # Internal crates.
 tangle-model = { path = "crates/tangle-model" }
 tangle-sim = { path = "crates/tangle-sim" }
+tangle-present = { path = "crates/tangle-present" }
 
 # External dependencies. Pin precisely at milestone boundaries and review
 # upgrades deliberately; see PHASE_1_PLAN.md.

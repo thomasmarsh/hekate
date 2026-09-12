@@ -2,13 +2,14 @@
 //!
 //! The kernel owns the authoritative clock: it advances exactly one configured
 //! step per [`tangle_sim::Simulation::step`] call and never reads wall-clock
-//! time. The viewer only decides *how many whole steps* to take from the real
-//! time that elapsed between frames. Pause, single-step, speed, and frame-rate
-//! controls therefore choose which ticks are observed; they cannot change what
-//! those ticks contain or the canonical trace those ticks produce.
+//! time. The presentation layer only decides *how many whole steps* to take
+//! from the real time that elapsed between frames. Pause, single-step, speed,
+//! and frame-rate controls therefore choose which ticks are observed; they
+//! cannot change what those ticks contain or the canonical trace those ticks
+//! produce.
 //!
-//! This module is deliberately free of Bevy types so the playback contract can
-//! be tested headlessly, without a window or a GPU.
+//! This module is deliberately free of Bevy and terminal types so the playback
+//! contract can be tested headlessly, without a window or a GPU.
 
 /// Playback speed selected by the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,8 +47,8 @@ impl Speed {
 
 /// Upper bound on whole steps taken in a single frame.
 ///
-/// A long stall on a slow host must not make the viewer try to catch up with an
-/// unbounded backlog, so the clock caps a frame and discards the remainder.
+/// A long stall on a slow host must not make the renderer try to catch up with
+/// an unbounded backlog, so the clock caps a frame and discards the remainder.
 /// The cap only limits presentation smoothness; it never changes the kernel.
 pub const MAX_TICKS_PER_FRAME: u64 = 240;
 

@@ -1,8 +1,9 @@
 //! Load a JSON5 scenario file into a compiled scenario.
 //!
 //! The kernel crates are filesystem-free by contract, so file access belongs to
-//! the application. The viewer mirrors the headless CLI's load path exactly so
-//! both drive the same validated [`CompiledScenario`].
+//! the presentation layer and its applications. Every renderer mirrors the
+//! headless CLI's load path exactly so all of them drive the same validated
+//! [`CompiledScenario`].
 
 use std::path::{Path, PathBuf};
 
