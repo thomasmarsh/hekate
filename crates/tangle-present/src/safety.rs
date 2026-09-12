@@ -1007,7 +1007,7 @@ mod tests {
             },
         ];
         let bodies = vec![
-            body(0, DVec2::new(0.0, 0.0), AgentMode::Vehicle),
+            body(0, DVec2::new(4.0, 0.0), AgentMode::Vehicle),
             body(1, DVec2::new(10.0, 0.0), AgentMode::Pedestrian),
         ];
         let frame = projected_frame(20, bodies, events);
@@ -1021,9 +1021,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![EventKind::Collision, EventKind::Entry, EventKind::Queue]
         );
-        assert_eq!(markers[0].position(), DVec2::new(5.0, 0.0));
-        // The crossing ring spans x -2..2 and y -4..4, so its centre is origin.
+        // The pair marker is the midpoint of its two live bodies, not either
+        // body's own position.
+        assert_eq!(markers[0].position(), DVec2::new(7.0, 0.0));
+        // The crossing ring spans x -2..2 and y -4..4, so its centre is origin
+        // rather than the entering body's position at (4, 0).
         assert_eq!(markers[1].position(), DVec2::ZERO);
+        assert_ne!(markers[1].position(), DVec2::new(4.0, 0.0));
         assert_eq!(markers[2].position(), DVec2::new(10.0, 0.0));
         assert_eq!(
             markers[0].participants().agents(),
