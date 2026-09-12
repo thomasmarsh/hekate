@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T22:57:47Z
+updated: 2026-09-12T23:00:22Z
 summary: Phase 1 Increment 4 adds a deterministic uniform-grid broad phase, exact and swept geometry queries, typed safety events with a versioned union, online TTC/minimum-separation and PET occupancy, and viewer event overlays and inspector links.
 next: Independent read-only verification of every Increment 4 Done-when criterion against the integrated tree.
 ---
@@ -723,6 +723,11 @@ the frame.
   frames, occupancy in 545 frames, and 2986 body-emphasis entries (2054 control
   transition, 849 near miss, 83 queue) with both modes present; the largest
   retained window is 37 records, inside the 40-tick lifetime.
+- Falsification: three deliberate mutations each fail a named test — forcing
+  the projected mode to `Vehicle` fails the mode test, a marker window with no
+  lifetime fails the window test and the restart test, and a marker anchor that
+  ignores the region centre fails the anchor test and the real-stream overlay
+  test.
 - All five gates pass on the final tree: `cargo test --workspace --all-features`
   (all 40 test binaries, including the regenerated scene golden, the trace
   golden and hash, the Phase 1 baseline, and the renderer goldens),
