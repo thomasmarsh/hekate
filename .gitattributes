@@ -1,0 +1,5 @@
+# Renderer goldens are byte fixtures. Some intentionally contain CRLF (terminal
+# row separators) or arbitrary protocol bytes, and the tests compare them
+# byte-for-byte, so Git must never apply end-of-line conversion to them.
+tests/golden/renderer/*.bin -text
+tests/golden/renderer/*.ansi -text

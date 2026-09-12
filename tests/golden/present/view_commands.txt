@@ -1,0 +1,22 @@
+command TogglePause => None
+  paused=true speed=1x selection=None center=DVec2(0.0, 0.0) scale=1.000000 geometry=true vectors=false
+command SingleStep => None
+  paused=true speed=1x selection=None center=DVec2(0.0, 0.0) scale=1.000000 geometry=true vectors=false
+command SetSpeed(Fast) => None
+  paused=true speed=4x selection=None center=DVec2(0.0, 0.0) scale=1.000000 geometry=true vectors=false
+command TogglePause => None
+  paused=false speed=4x selection=None center=DVec2(0.0, 0.0) scale=1.000000 geometry=true vectors=false
+command Pan(DVec2(3.0, -2.0)) => None
+  paused=false speed=4x selection=None center=DVec2(3.0, -2.0) scale=1.000000 geometry=true vectors=false
+command Zoom(0.5) => None
+  paused=false speed=4x selection=None center=DVec2(3.0, -2.0) scale=0.500000 geometry=true vectors=false
+command SelectNearest(DVec2(0.0, 0.0)) => None
+  paused=false speed=4x selection=Some(0) center=DVec2(3.0, -2.0) scale=0.500000 geometry=true vectors=false
+command ToggleOverlay(Vectors) => None
+  paused=false speed=4x selection=Some(0) center=DVec2(3.0, -2.0) scale=0.500000 geometry=true vectors=true
+command ToggleOverlay(Geometry) => None
+  paused=false speed=4x selection=Some(0) center=DVec2(3.0, -2.0) scale=0.500000 geometry=false vectors=true
+command ClearSelection => None
+  paused=false speed=4x selection=None center=DVec2(3.0, -2.0) scale=0.500000 geometry=false vectors=true
+command Restart(NextSeed) => Restart(NextSeed)
+  paused=false speed=4x selection=None center=DVec2(3.0, -2.0) scale=0.500000 geometry=false vectors=true

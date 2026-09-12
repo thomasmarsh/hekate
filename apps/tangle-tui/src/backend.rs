@@ -89,6 +89,12 @@ impl<W: Write> CellBackend<W> {
         self.hud.status_lines()
     }
 
+    /// The character grid produced by the last [`Self::draw`], before it is
+    /// serialized to the sink by [`Self::present`].
+    pub fn grid(&self) -> Option<&CellGrid> {
+        self.pending.as_ref()
+    }
+
     /// The inspector or help line last computed by [`Self::draw`].
     pub fn footer_line(&self) -> &str {
         self.hud.footer_line()

@@ -5303,6 +5303,7 @@ dependencies = [
  "crossterm",
  "glam 0.33.7",
  "mio",
+ "tangle-cli",
  "tangle-model",
  "tangle-present",
  "tangle-sim",

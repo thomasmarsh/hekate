@@ -185,7 +185,12 @@ mod tests {
     };
     use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
+    use crate::backend::CellBackend;
     use crate::backend::RunInfo;
+    use crate::kitty::{KittyBackend, Multiplexer};
+    use crate::palette::ColorDepth;
+    use crate::session::TuiSession;
+    use tangle_present::ViewCommand;
 
     /// A backend that records the ticks and selections it sees and can be told
     /// to fail at either stage.
@@ -436,5 +441,51 @@ mod tests {
         assert_eq!(pair.active(), BackendKind::Kitty);
         assert!(!pair.fell_back());
         assert!(pair.capabilities().kitty_graphics);
+    }
+
+    fn walking_scenario() -> Arc<CompiledScenario> {
+        let source = parse_scenario_source(
+            "{ schema_version: 1, id: 'walking', \
+             coordinate_system: { x: 'east_m', y: 'north_m' }, \
+             paths: [ { id: 'guide', points: [ { x: 0, y: 0 }, { x: 120, y: 0 } ] } ], \
+             portals: [ { id: 'west', path: 'guide', end: 'start', width_m: 4.0 }, \
+             { id: 'east', path: 'guide', end: 'end', width_m: 4.0 } ], \
+             population: { vehicle_count: 4, vehicle_speed_mps: 12.0, vehicle_spacing_m: 20.0, \
+             vehicle_length_m: 4.5, vehicle_width_m: 1.8 } }",
+        )
+        .expect("parses");
+        Arc::new(CompiledScenario::compile(source).expect("compiles"))
+    }
+
+    #[test]
+    fn a_session_keeps_playback_state_across_a_real_capability_fallback() {
+        // A GNU screen multiplexer cannot carry a Kitty graphics frame, so the
+        // real Kitty backend declines and the pair must switch to cells.
+        let scenario = walking_scenario();
+        let cells = CellBackend::new(Vec::new(), ColorDepth::Truecolor, Arc::clone(&scenario));
+        let kitty = KittyBackend::with_mux(Vec::new(), Arc::clone(&scenario), Multiplexer::Screen);
+        let pair = BackendPair::new(cells, kitty, FakeTerminal::default(), BackendKind::Kitty);
+        let mut session =
+            TuiSession::with_backend(Arc::clone(&scenario), 0, pair).expect("session starts");
+        session.resize(80, 24);
+
+        session.advance(0.25);
+        session.apply(ViewCommand::SetSpeed(Speed::Fast));
+        session.apply(ViewCommand::TogglePause);
+        session.select_next();
+        let tick = session.tick();
+        let selection = session.selection();
+        assert!(selection.is_some(), "an agent must be selectable");
+
+        session
+            .advance_and_render(0.1)
+            .expect("the pair falls back to cells");
+
+        assert!(session.backend().fell_back());
+        assert_eq!(session.backend().active(), BackendKind::Ascii);
+        assert_eq!(session.tick(), tick, "fallback must not move the clock");
+        assert_eq!(session.speed(), Speed::Fast);
+        assert!(session.paused());
+        assert_eq!(session.selection(), selection);
     }
 }

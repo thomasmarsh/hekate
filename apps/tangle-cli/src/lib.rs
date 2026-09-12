@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use tangle_model::{CompiledScenario, Diagnostic, ParseError, parse_scenario_source};
 
-pub use trace::{Trace, canonical_trace};
+pub use trace::{Trace, TraceRecorder, canonical_trace};
 
 /// Failure to load and compile a scenario file.
 #[derive(Debug, thiserror::Error)]

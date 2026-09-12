@@ -14,6 +14,7 @@ publish = false
 tangle-model = { path = "crates/tangle-model" }
 tangle-sim = { path = "crates/tangle-sim" }
 tangle-present = { path = "crates/tangle-present" }
+tangle-cli = { path = "apps/tangle-cli" }
 
 # External dependencies. Pin precisely at milestone boundaries and review
 # upgrades deliberately; see PHASE_1_PLAN.md.

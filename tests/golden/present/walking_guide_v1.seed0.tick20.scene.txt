@@ -1,0 +1,215 @@
+SceneFrame {
+    scenario_id: "walking_guide_v1",
+    time_seconds: 1.0,
+    tick: 20,
+    status: FrameStatus {
+        agents: 6,
+        speed: Real,
+        paused: false,
+        selection: None,
+    },
+    viewport: Viewport {
+        center: DVec2(
+            0.0,
+            0.0,
+        ),
+        scale: 1.0,
+    },
+    geometry: SceneGeometry {
+        paths: [
+            ScenePath {
+                id: PathId(
+                    0,
+                ),
+                points: [
+                    DVec2(
+                        0.0,
+                        0.0,
+                    ),
+                    DVec2(
+                        60.0,
+                        0.0,
+                    ),
+                    DVec2(
+                        120.0,
+                        0.0,
+                    ),
+                ],
+            },
+        ],
+        portals: [
+            ScenePortal {
+                id: PortalId(
+                    0,
+                ),
+                position: DVec2(
+                    0.0,
+                    0.0,
+                ),
+                heading: 0.0,
+                width_m: 3.5,
+            },
+            ScenePortal {
+                id: PortalId(
+                    1,
+                ),
+                position: DVec2(
+                    120.0,
+                    0.0,
+                ),
+                heading: 0.0,
+                width_m: 3.5,
+            },
+        ],
+        bounds: Some(
+            (
+                DVec2(
+                    -1.75,
+                    -1.75,
+                ),
+                DVec2(
+                    121.75,
+                    1.75,
+                ),
+            ),
+        ),
+    },
+    bodies: [
+        SceneBody {
+            id: 0,
+            position: DVec2(
+                11.699999999999996,
+                0.0,
+            ),
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            kind: Vehicle,
+            speed_mps: Some(
+                12.0,
+            ),
+            path: Some(
+                PathId(
+                    0,
+                ),
+            ),
+            path_distance_m: Some(
+                11.999999999999996,
+            ),
+        },
+        SceneBody {
+            id: 1,
+            position: DVec2(
+                31.700000000000028,
+                0.0,
+            ),
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            kind: Vehicle,
+            speed_mps: Some(
+                12.0,
+            ),
+            path: Some(
+                PathId(
+                    0,
+                ),
+            ),
+            path_distance_m: Some(
+                32.00000000000003,
+            ),
+        },
+        SceneBody {
+            id: 2,
+            position: DVec2(
+                51.70000000000003,
+                0.0,
+            ),
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            kind: Vehicle,
+            speed_mps: Some(
+                12.0,
+            ),
+            path: Some(
+                PathId(
+                    0,
+                ),
+            ),
+            path_distance_m: Some(
+                52.00000000000003,
+            ),
+        },
+        SceneBody {
+            id: 3,
+            position: DVec2(
+                71.69999999999993,
+                0.0,
+            ),
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            kind: Vehicle,
+            speed_mps: Some(
+                12.0,
+            ),
+            path: Some(
+                PathId(
+                    0,
+                ),
+            ),
+            path_distance_m: Some(
+                71.99999999999993,
+            ),
+        },
+        SceneBody {
+            id: 4,
+            position: DVec2(
+                91.69999999999989,
+                0.0,
+            ),
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            kind: Vehicle,
+            speed_mps: Some(
+                12.0,
+            ),
+            path: Some(
+                PathId(
+                    0,
+                ),
+            ),
+            path_distance_m: Some(
+                91.99999999999989,
+            ),
+        },
+        SceneBody {
+            id: 5,
+            position: DVec2(
+                111.69999999999989,
+                0.0,
+            ),
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            kind: Vehicle,
+            speed_mps: Some(
+                12.0,
+            ),
+            path: Some(
+                PathId(
+                    0,
+                ),
+            ),
+            path_distance_m: Some(
+                111.99999999999989,
+            ),
+        },
+    ],
+    overlays: Overlays {
+        geometry: true,
+        vectors: false,
+    },
+}

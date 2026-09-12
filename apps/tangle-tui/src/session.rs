@@ -247,15 +247,24 @@ impl<B: SessionBackend> TuiSession<B> {
         ticks
     }
 
-    /// Project, draw, and present one frame through the backend sink.
-    pub fn render(&mut self) -> BackendResult {
+    /// Project and draw one frame through the backend without presenting it.
+    ///
+    /// This is the draw half of [`Self::render`], exposed so a test can inspect
+    /// the backend's pending output (for example a character grid) before it is
+    /// serialized to the sink.
+    pub fn draw(&mut self) -> BackendResult {
         self.backend.set_run_info(RunInfo {
             seed: self.seed,
             spawned: self.spawned,
             despawned: self.despawned,
         });
         let frame = self.project();
-        self.backend.draw(&frame)?;
+        self.backend.draw(&frame)
+    }
+
+    /// Project, draw, and present one frame through the backend sink.
+    pub fn render(&mut self) -> BackendResult {
+        self.draw()?;
         self.backend.present()
     }
 

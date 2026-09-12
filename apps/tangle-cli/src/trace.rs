@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tangle_model::CompiledScenario;
-use tangle_sim::{DespawnReason, Event, InitError, RunConfig, Simulation};
+use tangle_sim::{DespawnReason, Event, InitError, RunConfig, RunSummary, Simulation, StepOutput};
 
 /// A canonical trace plus the hash of its exact bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +35,69 @@ impl Trace {
     }
 }
 
+/// Build a canonical trace incrementally from a simulation the caller drives.
+///
+/// [`canonical_trace`] is the common entry point, but a golden-parity test may
+/// advance the same kernel through a presentation clock instead of a plain
+/// step loop. Recording through this type gives that driven run the same bytes
+/// and hash as the direct run, so clock pacing cannot change a trace.
+///
+/// The header is written from `sim` and `config` at construction, and `ticks`
+/// must be the total number of steps the caller will record.
+pub struct TraceRecorder {
+    bytes: Vec<u8>,
+}
+
+impl TraceRecorder {
+    /// Start a trace for `sim`, which the caller will step `ticks` times.
+    pub fn new(sim: &Simulation, config: &RunConfig, ticks: u64) -> Self {
+        let mut bytes = Vec::new();
+        write_line(
+            &mut bytes,
+            &RunHeader {
+                kind: "run",
+                scenario_id: sim.scenario().id(),
+                schema_version: sim.scenario().schema_version(),
+                seed: config.seed(),
+                step_s: config.step().as_secs(),
+                ticks,
+            },
+        );
+        Self { bytes }
+    }
+
+    /// Record one completed step's events, attributed to its tick.
+    ///
+    /// Events are recorded in kernel emission order: by ascending step, and
+    /// within a step by ascending agent index. Every event a step produces is
+    /// attributed to the tick that step completes.
+    pub fn record(&mut self, output: &StepOutput<'_>) {
+        let tick = output.time().tick();
+        for event in output.events() {
+            write_line(&mut self.bytes, &EventRecord::new(tick, *event));
+        }
+    }
+
+    /// Finish the trace with the run summary and hash its exact bytes.
+    pub fn finish(mut self, summary: RunSummary) -> Trace {
+        write_line(
+            &mut self.bytes,
+            &RunFooter {
+                kind: "summary",
+                ticks: summary.ticks(),
+                spawned: summary.spawned(),
+                despawned: summary.despawned(),
+                remaining: summary.remaining(),
+            },
+        );
+        let hash = sha256_hex(&self.bytes);
+        Trace {
+            bytes: self.bytes,
+            hash,
+        }
+    }
+}
+
 /// Run a compiled scenario for exactly `ticks` fixed steps and serialize it.
 ///
 /// Events are recorded in kernel emission order: by ascending step, and within
@@ -46,42 +109,13 @@ pub fn canonical_trace(
     ticks: u64,
 ) -> Result<Trace, InitError> {
     let mut sim = Simulation::new(scenario, config)?;
-    let mut bytes = Vec::new();
-
-    write_line(
-        &mut bytes,
-        &RunHeader {
-            kind: "run",
-            scenario_id: sim.scenario().id(),
-            schema_version: sim.scenario().schema_version(),
-            seed: config.seed(),
-            step_s: config.step().as_secs(),
-            ticks,
-        },
-    );
+    let mut recorder = TraceRecorder::new(&sim, &config, ticks);
 
     for _ in 0..ticks {
-        let output = sim.step();
-        let tick = output.time().tick();
-        for event in output.events() {
-            write_line(&mut bytes, &EventRecord::new(tick, *event));
-        }
+        recorder.record(&sim.step());
     }
 
-    let summary = sim.finish();
-    write_line(
-        &mut bytes,
-        &RunFooter {
-            kind: "summary",
-            ticks: summary.ticks(),
-            spawned: summary.spawned(),
-            despawned: summary.despawned(),
-            remaining: summary.remaining(),
-        },
-    );
-
-    let hash = sha256_hex(&bytes);
-    Ok(Trace { bytes, hash })
+    Ok(recorder.finish(sim.finish()))
 }
 
 fn write_line<T: Serialize>(bytes: &mut Vec<u8>, record: &T) {
