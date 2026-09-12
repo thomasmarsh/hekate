@@ -212,6 +212,7 @@ fn profile_sampling_stays_within_the_configured_ranges() {
         time_gap_s: 1.5,
         max_accel_mps2: 2.0,
         comfortable_brake_mps2: 3.0,
+        compliance: 1.0,
     };
     let mut checked = 0;
     for _ in 0..2000 {

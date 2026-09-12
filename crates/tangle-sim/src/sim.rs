@@ -7,8 +7,9 @@
 //! assignment, per-agent profile sampling, and safe spawn admission. Slice B
 //! adds path-distance tracking under a documented IDM longitudinal controller
 //! ([`crate::control`]), leader/following/queue/exit behavior, authored stop
-//! lines, and the fixed-time signal phase state machine ([`crate::signal`]).
-//! The contextual red-light decision is later work.
+//! lines, the fixed-time signal phase state machine ([`crate::signal`]), and the
+//! contextual signal-compliance decision ([`crate::compliance`]) that gates the
+//! stop-line constraint and records a traceable reason.
 
 use tangle_model::{
     CompiledMovement, CompiledScenario, DemandId, MovementId, PathEnd, PathId, PortalId,
@@ -16,12 +17,13 @@ use tangle_model::{
 };
 
 use crate::agent::{AgentId, AgentInit, AgentStore};
+use crate::compliance::{self, ComplianceDecision, SignalAction};
 use crate::config::RunConfig;
 use crate::control::{self, Constraint, IDM_STANDSTILL_GAP_M};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_route};
 use crate::event::{DespawnReason, Event};
 use crate::profile::{VehicleProfile, sample_profile};
-use crate::rng::{STREAM_DEMAND, STREAM_PROFILE, derive_stream, uniform01};
+use crate::rng::{STREAM_COMPLIANCE, STREAM_DEMAND, STREAM_PROFILE, derive_stream, uniform01};
 use crate::signal::{self, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
 use crate::time::SimTime;
@@ -288,6 +290,7 @@ impl Simulation {
                         path_distance_m: self.agents.distance_m[index],
                         body_length_m: self.agents.body_length_m[index],
                         body_width_m: self.agents.body_width_m[index],
+                        decision: self.agents.decision[index],
                     }),
                 },
             })
@@ -349,6 +352,14 @@ impl Simulation {
         self.agents.profile.get(agent.index()).copied().flatten()
     }
 
+    /// Most recent signal-compliance decision of an agent.
+    ///
+    /// Present for vehicles whose movement is signal-controlled, including a
+    /// green proceed, so every state-affecting signal decision is traceable.
+    pub fn agent_decision(&self, agent: AgentId) -> Option<ComplianceDecision> {
+        self.agents.decision.get(agent.index()).copied().flatten()
+    }
+
     /// Current display color of the signal head controlling a movement.
     ///
     /// `None` when the movement has no signal rule or no matching head. This is
@@ -397,6 +408,10 @@ impl Simulation {
                 continue;
             }
             let path_id = self.agents.path[index];
+            // Recompute the agent's signal decision before integrating its
+            // speed, so the stop-line constraint the controller sees is exactly
+            // the recorded decision.
+            self.update_signal_decision(index);
             let Some(path) = self.scenario.path(path_id) else {
                 continue;
             };
@@ -516,17 +531,22 @@ impl Simulation {
         })
     }
 
-    /// Stop-line constraint for an agent whose control currently says stop.
+    /// Compute and record the agent's current signal-compliance decision.
+    fn update_signal_decision(&mut self, index: usize) {
+        let decision = self.signal_decision(index);
+        self.agents.decision[index] = decision;
+    }
+
+    /// The contextual signal-compliance decision for one agent, if its
+    /// movement is signal-controlled.
     ///
-    /// A vehicle already past the line returns `None` and continues; it is not
-    /// pulled backward. The constraint means a red or yellow signal head for
-    /// the agent's movement; the contextual choice to obey that head is later
-    /// work, so this slice always stops.
-    fn stop_line_constraint(&self, index: usize) -> Option<Constraint> {
+    /// Pure in the agent's current state and the governing head; see
+    /// [`crate::compliance`] for the model. The recorded decision is what the
+    /// inspector shows and what [`Self::stop_line_constraint`] obeys.
+    fn signal_decision(&self, index: usize) -> Option<ComplianceDecision> {
         let movement_id = self.agents.movement[index]?;
-        if !self.control_requires_stop(movement_id) {
-            return None;
-        }
+        let color = self.movement_signal(movement_id)?;
+        let profile = self.agents.profile[index]?;
         let movement = self.scenario.movement(movement_id)?;
         let path = self.scenario.path(self.agents.path[index])?;
         let direction = self.agents.direction[index];
@@ -540,22 +560,30 @@ impl Simulation {
         let own_progress = direction * self.agents.distance_m[index];
         let own_front = own_progress + self.agents.body_length_m[index] * 0.5;
         let gap = direction * stop_line_distance - own_front;
-        if gap < 0.0 {
+        Some(compliance::decide(
+            color,
+            gap,
+            self.agents.speed_mps[index],
+            profile.compliance,
+            profile.comfortable_brake_mps2,
+        ))
+    }
+
+    /// Stop-line constraint for an agent whose recorded decision is to stop.
+    ///
+    /// A vehicle whose decision proceeded (green, already past the line, or a
+    /// noncompliant run) returns `None` and continues under ordinary IDM
+    /// control; it is never pulled backward or given a special trajectory.
+    fn stop_line_constraint(&self, index: usize) -> Option<Constraint> {
+        let decision = self.agents.decision[index]?;
+        if decision.action != SignalAction::Stop {
             return None;
         }
         Some(Constraint {
-            gap_m: gap,
+            gap_m: decision.stop_line_gap_m.max(0.0),
             speed_mps: 0.0,
             standstill_m: 0.0,
         })
-    }
-
-    /// Whether the signal head governing a movement currently says stop.
-    fn control_requires_stop(&self, movement: MovementId) -> bool {
-        matches!(
-            self.movement_signal(movement),
-            Some(SignalColor::Red | SignalColor::Yellow)
-        )
     }
 
     /// Generate demand arrivals, then admit them subject to portal clearance.
@@ -617,11 +645,14 @@ impl Simulation {
         };
 
         // The profile is derived from the stable agent id, so a blocked arrival
-        // re-derives the same profile on the next attempt.
+        // re-derives the same profile on the next attempt. Physical/longitudinal
+        // parameters use the `profile` stream and the compliance propensity the
+        // `compliance` stream; the two never share a generator.
         let agent_id = AgentId::from_index(self.agents.len());
         let profile = sample_profile(
             self.scenario.profiles(),
             &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
+            &mut derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get()),
         );
         if !self.entry_clear(path_id, entry_distance, profile.length_m) {
             return false;
@@ -655,6 +686,9 @@ impl Simulation {
             path: path_id,
             distance_m: entry_distance,
         });
+        // Record the entry decision immediately so a snapshot taken right after
+        // admission already carries a traceable reason.
+        self.update_signal_decision(agent_id.index());
         true
     }
 

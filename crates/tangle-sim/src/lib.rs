@@ -34,6 +34,7 @@
 //! ```
 
 mod agent;
+mod compliance;
 mod config;
 mod control;
 mod demand;
@@ -47,6 +48,7 @@ mod time;
 mod units;
 
 pub use agent::AgentId;
+pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
 pub use config::{DEFAULT_STEP, RunConfig};
 pub use event::{DespawnReason, EVENT_VERSION, Event};
 pub use profile::VehicleProfile;

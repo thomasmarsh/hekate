@@ -8,6 +8,7 @@
 use glam::DVec2;
 use tangle_model::{MovementId, PathId};
 
+use crate::compliance::ComplianceDecision;
 use crate::profile::VehicleProfile;
 
 /// Stable identifier of one agent for the lifetime of a run.
@@ -72,6 +73,9 @@ pub(crate) struct AgentStore {
     pub(crate) direction: Vec<f64>,
     pub(crate) movement: Vec<Option<MovementId>>,
     pub(crate) profile: Vec<Option<VehicleProfile>>,
+    /// Most recent signal-compliance decision, present for signal-controlled
+    /// vehicles. `None` for vehicles with no signal rule.
+    pub(crate) decision: Vec<Option<ComplianceDecision>>,
 }
 
 impl AgentStore {
@@ -89,6 +93,7 @@ impl AgentStore {
         self.direction.push(init.direction);
         self.movement.push(init.movement);
         self.profile.push(init.profile);
+        self.decision.push(None);
         id
     }
 

@@ -8,6 +8,7 @@ use glam::DVec2;
 use tangle_model::PathId;
 
 use crate::agent::AgentId;
+use crate::compliance::ComplianceDecision;
 use crate::time::SimTime;
 
 /// How much per-agent detail a snapshot carries.
@@ -34,6 +35,10 @@ pub struct MotionSample {
     pub body_length_m: f64,
     /// Body width in metres.
     pub body_width_m: f64,
+    /// Most recent signal-compliance decision, present for signal-controlled
+    /// vehicles. The snapshot deliberately carries only this small record, not
+    /// the controller's internal state.
+    pub decision: Option<ComplianceDecision>,
 }
 
 /// One agent as observed at a single instant.

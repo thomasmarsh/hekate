@@ -6,10 +6,10 @@
 //! one mutable generator, so adding a draw to one stream cannot reshuffle
 //! another.
 //!
-//! This module owns only the derivation for the two streams Increment 2 slice A
-//! draws from: one `demand` substream per demand source, and one `profile`
-//! substream per agent. The `compliance` and `perception` streams belong to
-//! later slices and are not derived here.
+//! This module owns the derivation for the streams Increment 2 draws from:
+//! one `demand` substream per demand source, one `profile` substream per
+//! agent, and one `compliance` substream per agent. The `perception` stream
+//! belongs to a later increment and is not derived here.
 
 use rand_chacha::ChaCha20Rng;
 use rand_chacha::rand_core::{Rng, SeedableRng};
@@ -19,6 +19,14 @@ pub const STREAM_DEMAND: &str = "demand";
 
 /// Stream name for per-agent physical and behavior profile sampling.
 pub const STREAM_PROFILE: &str = "profile";
+
+/// Stream name for per-agent signal-compliance propensity sampling.
+///
+/// The red-light decision itself is a deterministic function of its context
+/// (signal color, stop-line gap, speed, and the sampled propensity), so this
+/// stream carries the stable per-agent draw rather than a fresh coin flip each
+/// decision. See [`crate::compliance`].
+pub const STREAM_COMPLIANCE: &str = "compliance";
 
 /// FNV-1a 64-bit offset basis.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -95,6 +103,29 @@ mod tests {
         assert_ne!(draw(42, STREAM_DEMAND, 0), draw(42, STREAM_PROFILE, 0));
         assert_ne!(draw(42, STREAM_DEMAND, 0), draw(42, STREAM_DEMAND, 1));
         assert_ne!(draw(42, STREAM_DEMAND, 0), draw(43, STREAM_DEMAND, 0));
+        assert_ne!(draw(42, STREAM_COMPLIANCE, 0), draw(42, STREAM_PROFILE, 0));
+    }
+
+    #[test]
+    fn an_extra_compliance_draw_does_not_perturb_demand_or_profile() {
+        // The stream-isolation contract: drawing from one named stream cannot
+        // reshuffle another, so an added compliance draw leaves the demand and
+        // profile sequences byte-identical.
+        fn demand_and_profile(root: u64, id: u32, compliance_draws: usize) -> (Vec<u64>, Vec<u64>) {
+            let mut demand = derive_stream(root, STREAM_DEMAND, id);
+            let demand_values = (0..8).map(|_| demand.next_u64()).collect();
+
+            let mut compliance = derive_stream(root, STREAM_COMPLIANCE, id);
+            for _ in 0..compliance_draws {
+                let _ = uniform01(&mut compliance);
+            }
+
+            let mut profile = derive_stream(root, STREAM_PROFILE, id);
+            let profile_values = (0..8).map(|_| profile.next_u64()).collect();
+            (demand_values, profile_values)
+        }
+
+        assert_eq!(demand_and_profile(17, 3, 0), demand_and_profile(17, 3, 5));
     }
 
     #[test]

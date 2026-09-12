@@ -1,9 +1,9 @@
 //! Per-agent physical and behavior profile sampling.
 //!
-//! A vehicle samples one stable profile when it is admitted, drawing every
-//! parameter from its own `profile` substream (see [`crate::rng`]). The profile
-//! carries the body dimensions and longitudinal behavior the controller will
-//! read once it exists; Increment 2 slice A only records and exposes it.
+//! A vehicle samples one stable profile when it is admitted. Its physical and
+//! longitudinal parameters come from its own `profile` substream, while its
+//! signal-compliance propensity comes from its own `compliance` substream (see
+//! [`crate::rng`]), so the two concerns never share a mutable generator.
 
 use rand_chacha::ChaCha20Rng;
 use tangle_model::CompiledProfile;
@@ -28,27 +28,41 @@ pub struct VehicleProfile {
     pub max_accel_mps2: f64,
     /// Comfortable deceleration in metres per second squared.
     pub comfortable_brake_mps2: f64,
+    /// Signal-compliance propensity in `[0, 1]`, drawn from the `compliance`
+    /// stream. See [`crate::compliance`] for how the red-light decision uses
+    /// it.
+    pub compliance: f64,
 }
 
-/// Draw one profile from `rng`, sampling every range in a fixed order.
+/// Draw one profile from `profile_rng` and its compliance propensity from
+/// `compliance_rng`, each sampled in a fixed order.
 ///
-/// The draw order is part of the reproducibility contract: reordering these
-/// calls changes every sampled profile for the same seed.
-pub(crate) fn sample_profile(profile: &CompiledProfile, rng: &mut ChaCha20Rng) -> VehicleProfile {
+/// The physical/longitudinal draw order is part of the reproducibility
+/// contract: reordering those calls changes every sampled profile for the same
+/// seed. Compliance is drawn from a separate stream so it can be resampled
+/// without disturbing the rest of the profile.
+pub(crate) fn sample_profile(
+    profile: &CompiledProfile,
+    profile_rng: &mut ChaCha20Rng,
+    compliance_rng: &mut ChaCha20Rng,
+) -> VehicleProfile {
     VehicleProfile {
-        desired_speed_mps: profile.speed_mps().sample(uniform01(rng)),
-        length_m: profile.length_m().sample(uniform01(rng)),
-        width_m: profile.width_m().sample(uniform01(rng)),
-        time_gap_s: profile.time_gap_s().sample(uniform01(rng)),
-        max_accel_mps2: profile.max_accel_mps2().sample(uniform01(rng)),
-        comfortable_brake_mps2: profile.comfortable_brake_mps2().sample(uniform01(rng)),
+        desired_speed_mps: profile.speed_mps().sample(uniform01(profile_rng)),
+        length_m: profile.length_m().sample(uniform01(profile_rng)),
+        width_m: profile.width_m().sample(uniform01(profile_rng)),
+        time_gap_s: profile.time_gap_s().sample(uniform01(profile_rng)),
+        max_accel_mps2: profile.max_accel_mps2().sample(uniform01(profile_rng)),
+        comfortable_brake_mps2: profile
+            .comfortable_brake_mps2()
+            .sample(uniform01(profile_rng)),
+        compliance: profile.compliance().sample(uniform01(compliance_rng)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rng::{STREAM_PROFILE, derive_stream};
+    use crate::rng::{STREAM_COMPLIANCE, STREAM_PROFILE, derive_stream};
     use tangle_model::{CompiledScenario, parse_scenario_source};
 
     const FLOW: &str = r#"
@@ -87,11 +101,14 @@ mod tests {
         let profile = sample_profile(
             scenario().profiles(),
             &mut derive_stream(1, STREAM_PROFILE, 0),
+            &mut derive_stream(1, STREAM_COMPLIANCE, 0),
         );
         assert!((profile.desired_speed_mps - 10.0).abs() < 1e-9);
         assert!((profile.length_m - 4.0).abs() < 1e-9);
         assert!((profile.time_gap_s - 1.5).abs() < 1e-9);
         assert!((profile.comfortable_brake_mps2 - 3.0).abs() < 1e-9);
+        // A profile that omits `compliance` defaults to fully compliant.
+        assert!((profile.compliance - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -100,10 +117,12 @@ mod tests {
         let first = sample_profile(
             scenario.profiles(),
             &mut derive_stream(9, STREAM_PROFILE, 4),
+            &mut derive_stream(9, STREAM_COMPLIANCE, 4),
         );
         let second = sample_profile(
             scenario.profiles(),
             &mut derive_stream(9, STREAM_PROFILE, 4),
+            &mut derive_stream(9, STREAM_COMPLIANCE, 4),
         );
         assert_eq!(first, second);
     }

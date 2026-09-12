@@ -259,6 +259,7 @@ fn every_vehicle_keeps_its_sampled_profile_speed_bound() {
         time_gap_s: 1.5,
         max_accel_mps2: 2.0,
         comfortable_brake_mps2: 3.0,
+        compliance: 1.0,
     };
     for _ in 0..700 {
         sim.step();

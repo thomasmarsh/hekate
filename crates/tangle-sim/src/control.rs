@@ -150,6 +150,7 @@ mod tests {
             time_gap_s: 1.5,
             max_accel_mps2: 2.0,
             comfortable_brake_mps2: 3.0,
+            compliance: 1.0,
         }
     }
 
