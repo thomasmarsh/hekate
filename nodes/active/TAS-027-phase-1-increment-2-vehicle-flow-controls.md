@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T16:39:53Z
+updated: 2026-09-12T16:50:21Z
 summary: Phase 1 Increment 2 turns portals into demand, gives cars an IDM longitudinal controller with stop-line, signal, leader, queue, and exit behavior, and records reproducible contextual red-light decisions.
-next: Implement the contextual red-light decision over signal state, distance to the new authored stop_line_m, speed, urgency, and the compliance profile, and record traceable decision reasons for the inspector.
+next: Verify the integrated Increment 2 slices against every Done-when criterion and resolve the node.
 ---
 
 # Outcome
@@ -52,10 +52,62 @@ no Phase 2 field is added here.
 # Result
 
 Slice A (portal demand, route assignment, profile sampling, safe spawn
-admission) and slice B (path-distance tracking under a documented IDM
+admission), slice B (path-distance tracking under a documented IDM
 longitudinal controller, leader/following/queue/exit behavior, authored stop
-lines, and the fixed-time signal phase state machine) have landed. The
-contextual red-light decision and the inspector decision records remain.
+lines, and the fixed-time signal phase state machine), and slice C (the
+contextual red-light decision, its recorded reasons, and inspector display)
+have landed. Final verification of the integrated increment remains.
+
+## Slice C — contextual signal-compliance decision
+
+- `crates/tangle-model/src/source.rs` adds an additive schema version 1
+  `compliance` range to `profiles`, a fraction of the driver's comfortable
+  braking in `[0, 1]` with a serde default of `1.0` (fully compliant).
+  `validate.rs` adds `E_PROFILE_COMPLIANCE` and `compiled.rs` compiles
+  `CompiledProfile::compliance()`; `schemas/scenario-source.schema.json` is
+  regenerated and the checked-in-schema drift test passes.
+- `crates/tangle-sim/src/rng.rs` adds `STREAM_COMPLIANCE`. `profile.rs` samples
+  the propensity from the agent's `compliance` substream while the
+  physical/longitudinal fields stay on the `profile` stream, so no two concerns
+  share a mutable generator.
+- `crates/tangle-sim/src/compliance.rs` is the documented decision model card:
+  a stop-required head is obeyed when
+  `required_deceleration <= comfortable_brake * compliance`, where
+  `required_deceleration = v^2 / (2 * stop_line_gap)`. Reasons are `Green`,
+  `PastStopLine`, `CannotStop`, `CompliantStop`, and `NonCompliantRun`; the
+  comparison is inclusive, so the boundary decision is `Stop` (the documented
+  tie-breaker). The propensity is the only random input and it comes from the
+  `compliance` stream, so the decision is a deterministic function of its
+  context, not a per-tick coin flip.
+- `sim.rs` computes and records the decision before integrating each profile
+  vehicle's speed; the stop-line constraint applies only when the decision is
+  `Stop`, so a noncompliant runner proceeds under ordinary IDM and is never
+  teleported. `Simulation::agent_decision` and the snapshot's `MotionSample`
+  expose the small record, `tangle-present` projects it onto `SceneBody` and
+  formats it with `decision_summary`, and both the TUI HUD and the Bevy viewer
+  show the latest reason.
+- `scenarios/benchmarks/red_light_compliance_v1.json5` runs a fixed-time
+  red/green cycle with a full compliance range so one run exercises both
+  stopping and red-light running.
+
+Evidence:
+
+- `crates/tangle-sim/src/compliance.rs` unit tests cover the green, red, and
+  yellow boundaries, the inclusive tie-breaker, the zero-compliance limit, and
+  the urgency formula.
+- `crates/tangle-sim/tests/signal_compliance.rs` covers green/yellow/red at the
+  simulation level, the recorded reason in snapshots, same-seed reproducibility,
+  and `compliance`/`demand`/`profile` stream isolation.
+- `crates/tangle-sim/src/rng.rs` proves an added `compliance` draw leaves the
+  `demand` and `profile` sequences byte-identical.
+- `apps/tangle-cli/tests/scenarios.rs` runs `red_light_compliance_v1` and
+  asserts reproducible decision records, both outcomes, and that a recorded
+  runner crosses the stop line on a stop-required head while staying inside its
+  profile speed bound, without teleporting or overlapping.
+- `cargo test --workspace --all-features`, clippy with `-D warnings`,
+  `cargo fmt --all --check`, and `./scripts/check-dependency-direction.sh`
+  pass; the walking golden trace is unchanged and the scene golden only gains
+  the new `decision: None` field.
 
 ## Slice B — longitudinal control and signals
 
