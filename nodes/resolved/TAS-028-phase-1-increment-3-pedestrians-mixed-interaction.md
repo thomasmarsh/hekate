@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T18:42:45Z
+updated: 2026-09-12T18:48:37Z
 summary: Phase 1 Increment 3 adds pedestrian bodies, demand, and waypoint/collision-avoidance control, contextual crossing-against-signal noncompliance, vehicle yielding to occupied crossings, and explicit controller interfaces so cars and pedestrians share one world, rule and event representation, and mixed benchmark.
-next: Resolve this increment from the integrated tree; slice G closed review findings F1–F3, F4/F5 are recorded residual limitations, and all five gates pass.
 ---
 
 # Outcome
@@ -783,8 +782,9 @@ minimum translation that separates the boxes) when they overlap and the exact
 vertex-to-box distance when an axis separates them. A sub-nanometre penetration
 band (`BOX_CONTACT_EPSILON_M = 1e-9`) reads as touching, because the
 anti-overlap cap deliberately holds a follower's bumper at the leader's rear;
-the benchmark's vehicle–vehicle signed minimum is `-7.1e-15` there. The
-cross-mode and pedestrian–pedestrian measures are unchanged.
+the benchmark's raw pre-clamp SAT minimum is `-7.1e-15` there, which the
+contact band reports as `0.0`. The cross-mode and pedestrian–pedestrian
+measures are unchanged.
 
 The new unit test `mixed_interaction.rs::box_box_clearance_detects_an_overlap`
 builds synthetic vehicle samples and asserts a 1 m aligned overlap (and a
@@ -817,3 +817,86 @@ rotated overlap) is negative, touching is exactly `0.0`, and a 1 m gap is
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
   `braintree check nodes`. No schema, golden, or baseline changed.
+
+# Final verification
+
+Every `Done when` criterion is met on the integrated tree (HEAD `935c90d`,
+verified after the slice G closeout). The orchestrator reran the five gates on
+the final tree: `cargo test --workspace --all-features` exit 0 with no failed
+test binary; `cargo clippy --workspace --all-targets --all-features -- -D
+warnings` exit 0; `cargo fmt --all --check` clean;
+`./scripts/check-dependency-direction.sh` reports `dependency direction OK`; and
+`braintree check nodes` passes (48 nodes). The focused regressions also pass:
+`a_backward_vehicle_brakes_before_an_occupied_crossing`,
+`box_box_clearance_detects_an_overlap`, and
+`the_crossing_candidate_query_covers_a_far_over_large_pedestrian`.
+
+Per criterion:
+
+1. **Cars and pedestrians share the world, index, rule representation, and
+   event system.** One `AgentStore` with an `AgentMode` column, one
+   `SpatialIndex` built over both modes (`crates/tangle-sim/src/index.rs`), the
+   authored crossing/movement `RuleKind::Yield` obligation, and `Event::Yielded`
+   in the same `Event` enum. Evidence:
+   `crates/tangle-sim/tests/mixed_interaction.rs::the_mixed_benchmark_shares_one_world_one_rule_and_one_event_stream`
+   and the `index.rs` both-modes unit test; the slice F verifier confirmed the
+   shared seams by reading.
+2. **Noncompliance is a choice over a physically possible movement, drawn only
+   from the named `compliance` stream.** `crates/tangle-sim/src/pedestrian_compliance.rs`
+   returns `Cross` with no extra constraint, and `step_pedestrian` integrates
+   position from bounded speed with no positional cap or teleport. Evidence:
+   `crates/tangle-sim/tests/pedestrian_compliance.rs::a_noncompliant_pedestrian_crosses_against_a_forbidding_signal`
+   and `::every_pedestrian_step_stays_within_its_bounded_speed`; the `compliance`
+   stream isolation test in `rng.rs`.
+3. **Mixed benchmark completes without NaNs, overlaps, or deadlock, and is
+   reproducible.** `crates/tangle-sim/tests/mixed_interaction.rs` sweeps 24
+   seeds × 4000 ticks on `scenarios/benchmarks/mixed_interaction_v1.json5`:
+   zero non-finite states, zero overlaps, zero cross-mode and vehicle-initiated
+   overlaps, no dropped arrivals, no stall ≥ 1800 ticks, and an identical trace
+   for the same seed (divergent across seeds). Measured signed minima:
+   cross-mode 0.2313 m, pedestrian–pedestrian 0.0500 m, vehicle–vehicle 0.0 m
+   (a touching limit, not penetration, on the now-signed SAT measure).
+4. **Waypoint following, local avoidance, signal-compliance boundaries, and
+   yielding have evidence.** `crates/tangle-sim/src/pedestrian.rs` unit tests
+   plus `crates/tangle-sim/tests/pedestrian_control.rs`; the
+   `pedestrian_compliance.rs` boundary and phase-wrap tests; and
+   `crates/tangle-sim/tests/vehicle_yielding.rs`, including the slice G
+   backward-movement regression.
+5. **Explicit controller interfaces and model cards.**
+   `crates/tangle-sim/src/controller.rs` (`VehicleController`,
+   `PedestrianController`, `ControllerModels::initial`), the vehicle card at
+   `crates/tangle-sim/src/control.rs:3-152`, the pedestrian card at
+   `crates/tangle-sim/src/pedestrian.rs:3-190`, and
+   `crates/tangle-sim/tests/model_cards.rs` plus the stub-swap replaceability
+   test.
+6. **Five gates on the final tree.** Rerun by the orchestrator; all pass (see
+   above).
+
+# Limitations
+
+All are accepted scope boundaries or recorded residuals, not failures of the
+criteria above:
+
+- **Event version union (F4):** `EVENT_VERSION` stays `1`. `Event::Yielded` is
+  a new variant and no existing stream or golden changed, so version `1` is no
+  longer a complete description of the record union. This carries into the
+  Phase 1 Increment 4 typed-event work.
+- **Mode-blind seams (F5):** `Event::Spawned` and `SceneBody::project` still do
+  not carry the agent mode; it is observable only through
+  `MotionSample::mode`. This carries into the Phase 1 Increment 4 event and
+  presentation work.
+- **Committed-vehicle hazard:** a vehicle already inside a crossing region does
+  not reserve it against a pedestrian arriving afterwards, and pedestrian
+  avoidance is a closing-component cap, not a swept query. The benchmark is
+  clean over its declared sweep at its demand; minimum-separation/TTC and swept
+  queries are Increment 4 work.
+- **Yield stop point:** it is the least-progress crossing ring vertex, an
+  approximation for oblique crossings.
+- **Emergency cap:** the last-resort anti-overlap cap can engage a few steps if
+  a pedestrian enters the region inside the vehicle's braking distance. The
+  separate red-queue comfort residual from Increment 2 is tracked by
+  [[TAS-029-bound-red-queue-emergency-cap]].
+- **Demand-contingent committed-vehicle exposure:** at higher than nominal
+  demand the committed-vehicle case can still produce a cross-mode overlap; the
+  checked-in benchmark demand was fixed by measurement and the exposure is
+  documented in slice E.
