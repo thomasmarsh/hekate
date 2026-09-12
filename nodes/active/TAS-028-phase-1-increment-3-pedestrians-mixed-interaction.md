@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T17:22:16Z
+updated: 2026-09-12T17:42:30Z
 summary: Phase 1 Increment 3 adds pedestrian bodies, demand, and waypoint/collision-avoidance control, contextual crossing-against-signal noncompliance, vehicle yielding to occupied crossings, and explicit controller interfaces so cars and pedestrians share one world, rule and event representation, and mixed benchmark.
-next: Add the pedestrian waypoint controller over the slice-A routes: track waypoint/path progress and apply bounded steering with local collision avoidance, replacing the constant-speed route tracking.
+next: Add pedestrian signal compliance as a contextual choice over a physically possible movement, deciding only from the named `compliance` stream whether to cross against the signal, with no teleport and no special trajectory.
 ---
 
 # Outcome
@@ -189,4 +189,121 @@ multi-path routes are later work.
 `SceneBody::project` still reports every body as a vehicle, so a renderer
 cannot yet style a pedestrian distinctly; both stay out of this slice's write
 set.
+
+## Slice B — pedestrian waypoint controller, bounded steering, local avoidance
+
+Slice A's constant-speed route tracking is replaced by a documented waypoint
+controller in a new `crates/tangle-sim/src/pedestrian.rs` (a public module
+holding the model card, the documented constants, `PedestrianWaypoint`, and
+`PedestrianZone`, re-exported from the crate root). No schema change was needed.
+
+### Waypoints and path progress
+
+`Simulation` derives each route's waypoints once, at construction, from the
+compiled route: one waypoint per named waiting area and crossing, at the
+projection of the zone region's polygon centroid onto the route path, and the
+route exit last. Waypoints are ordered by route progress with an explicit total
+tie-break (kind, waiting areas before crossings, then dense id). The entry is the
+admission point, not a waypoint, so the first target is the first zone ahead, or
+the exit for a route that names no zone. A pedestrian's cursor advances past
+every waypoint it has reached and never backward, and the exit is the last
+waypoint, so the target is always ahead.
+
+A pedestrian is now steered in world space: its state is a world position, a
+canonical heading in `(-pi, pi]`, and a speed, and `path_distance_m` becomes the
+projection of that position onto the route path. Progress is that arc measured
+from the route entry along the direction of travel, so a route entering at the
+path end travels inward and despawns at the path start. The spawn heading is the
+direction of the first waypoint, which corrects the previous path-tangent
+heading for backward routes.
+
+### Local avoidance
+
+`Simulation::collect_conflicts` scans every live agent in ascending `AgentId`
+order (no hash map in state-affecting logic) within the 4 m sense radius and
+reports, per neighbour, the vector to the nearest surface point of its body — an
+exact circle for a pedestrian, an exact oriented box for a vehicle — plus the
+signed surface clearance and the neighbour's speed. Steering is a bounded
+deflection toward the free side: the perpendicular component of "away" from the
+body, plus a fixed right-hand term that applies only to a body strictly ahead,
+so a pedestrian is never steered into a body beside it, and a body behind is
+ignored so a queue cannot push itself forward.
+
+### Bounds and the emergency spacing cap
+
+Model-card constants: sense radius 4 m, personal space 0.5 m, maximum turn rate
+2 rad/s, maximum lateral acceleration 2 m/s², speed-change bounds 1.5 m/s² up and
+2.0 m/s² down, radial gain 1.0, lateral gain 0.5, turn slowdown 0.75 down to a
+0.25 fraction of the desired speed, and a 0.05 m contact margin. Every step the
+turn is bounded by `min(2 rad/s, 2 m/s² / max(v, 0.5 m/s)) * dt`, so the implied
+lateral acceleration never exceeds its bound; the speed stays in `[0, v0]`; and
+the speed change stays inside the acceleration bounds except when the hard
+spacing cap binds, which is counted in the new
+`Simulation::pedestrian_cap_steps`, mirroring the vehicle
+`emergency_cap_steps` seam. The cap bounds the closing component of the step by
+the available surface clearance less the neighbour's worst-case translation and
+the contact margin, so a pedestrian never tunnels through a body, never
+teleports, never initiates contact with a body ahead, and cannot deadlock on a
+body (the cap never applies to motion away from one). It does not cover a
+neighbour whose orientation changes within a step; exact swept queries remain a
+later increment.
+
+### New public surface
+
+`crate::pedestrian` with the model card and the constants above, re-exported
+`PedestrianWaypoint`/`PedestrianZone`, and `Simulation::route_waypoints`,
+`Simulation::pedestrian_waypoint`, and `Simulation::pedestrian_cap_steps`.
+
+### Evidence
+
+- `crates/tangle-sim/src/pedestrian.rs` unit tests: closest-arc projection on a
+bent path, free-flow seeking, the turn-rate and lateral bounds, head-on
+deflection direction, bodies behind and abeam, the minimum-over-candidates cap,
+the agent-id tie-break for a perfect overlap, the speed-change bounds, the
+contact-margin cap, nearest surface points for a circle and a rotated box,
+route-progress direction, and heading normalization.
+- `crates/tangle-sim/tests/pedestrian_control.rs` (new, 11 tests): waypoint
+derivation in travel order for a forward route, a reversed route, and a route
+that names no zone; the monotone cursor reaching the exit; the steering,
+lateral, speed, and speed-change bounds with the counted cap exception; a
+pedestrian passing a shared-path vehicle while holding the contact margin (worst
+observed clearance exactly 0.05 m) with lateral deviation above 1 m and no
+deadlock; opposite-direction pedestrians passing without overlap or teleport; a
+same-speed saturated queue holding its admission spacing; no reaction beyond the
+sense radius; mixed-benchmark completion with no NaN, no pedestrian overlap, no
+pedestrian-initiated contact, no route deadlock, no dropped arrivals, and the
+cap engaged in fewer than a tenth of steps; and same-seed reproducibility.
+- The controller draws nothing from any random stream, so the `demand`,
+`pedestrian_demand`, `profile`, and `compliance` streams are untouched; slice A's
+stream-isolation and same-seed tests still pass.
+- The five gates pass on the final tree: `cargo test --workspace --all-features`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+`braintree check nodes`. The walking trace golden, the scene golden, and the
+Phase 1 baseline are unchanged, and no checked-in scenario needed editing.
+
+### Deferred to later slices
+
+- Pedestrian signal compliance and the choice to cross against a signal
+(slice C), and vehicle yielding to an occupied crossing (slice D). A pedestrian
+therefore cannot yet avoid a vehicle that is already committed across its path:
+on the checked-in `pedestrian_crossing_v1` benchmark, six seeds over 4000 ticks
+each show 0 pedestrian overlaps, 0 pedestrian-initiated contacts, and 4–10
+vehicle-initiated overlaps per seed with a worst penetration of 0.30 m. Closing
+those is exactly slice D's vehicle-side work.
+- Slice C has no pedestrian signal primitive yet: a crossing names the movements
+it crosses but no signal rule for pedestrians, so it needs either an additive
+schema-v1 field or a rule derived from the crossing's movements, plus a named
+pedestrian decision stream draw.
+- A body that parks on a route waypoint leaves that waypoint unreachable, so the
+pedestrian waits beside it; with no vehicle yielding yet, a vehicle that creeps
+onto a waiting pedestrian is not prevented.
+- Cross-path and cross-mode vehicle logic is untouched: `nearest_leader` and
+`entry_clear` still act only on the same path, and no vehicle reacts to a
+pedestrian.
+- A neighbour whose orientation changes within a step can sweep a corner past a
+pedestrian circle without a translation; exact swept queries belong to the
+broad-phase/collision-query increment.
+- `Event::Spawned` still does not carry the agent mode and `SceneBody::project`
+still draws every body as a vehicle (slice A's deferral, unchanged).
 

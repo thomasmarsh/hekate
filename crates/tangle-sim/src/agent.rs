@@ -97,6 +97,9 @@ pub(crate) struct AgentStore {
     pub(crate) profile: Vec<Option<VehicleProfile>>,
     pub(crate) pedestrian_route: Vec<Option<PedestrianRouteId>>,
     pub(crate) pedestrian_profile: Vec<Option<PedestrianProfile>>,
+    /// Index of the pedestrian's next waypoint target along its route. Always
+    /// `0` for a vehicle, which has no waypoint plan.
+    pub(crate) pedestrian_waypoint_index: Vec<usize>,
     /// Most recent signal-compliance decision, present for signal-controlled
     /// vehicles. `None` for vehicles with no signal rule.
     pub(crate) decision: Vec<Option<ComplianceDecision>>,
@@ -120,6 +123,7 @@ impl AgentStore {
         self.profile.push(init.profile);
         self.pedestrian_route.push(init.pedestrian_route);
         self.pedestrian_profile.push(init.pedestrian_profile);
+        self.pedestrian_waypoint_index.push(0);
         self.decision.push(None);
         id
     }

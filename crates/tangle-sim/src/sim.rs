@@ -12,9 +12,13 @@
 //! stop-line constraint and records a traceable reason. Increment 3 slice A
 //! adds pedestrian agents generated from pedestrian demand: they share the
 //! agent store, identifier space, events, and clock with vehicles and track
-//! their assigned route at the sampled walking speed. Waypoint control, local
-//! collision avoidance, and mixed interaction are later slices.
+//! their assigned route at the sampled walking speed. Increment 3 slice B
+//! replaces that constant-speed tracking with the documented pedestrian
+//! waypoint controller ([`crate::pedestrian`]): waypoint and path-progress
+//! tracking, bounded steering, and local collision avoidance against every
+//! nearby body. Mixed interaction beyond avoidance is a later slice.
 
+use glam::DVec2;
 use tangle_model::{
     CompiledMovement, CompiledPedestrianRoute, CompiledScenario, DemandId, MovementId, PathEnd,
     PathId, PedestrianDemandId, PedestrianRouteId, PortalId, SignalColor, SignalId,
@@ -26,6 +30,7 @@ use crate::config::RunConfig;
 use crate::control::{self, Constraint, IDM_STANDSTILL_GAP_M};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
 use crate::event::{DespawnReason, Event};
+use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint};
 use crate::profile::{
     PedestrianProfile, VehicleProfile, sample_pedestrian_profile, sample_profile,
 };
@@ -164,12 +169,19 @@ pub struct Simulation {
     pedestrian_demand: Vec<DemandRuntime<PedestrianRouteId>>,
     signals: Vec<SignalRuntime>,
     signal_heads: Vec<Option<(SignalId, usize)>>,
+    /// Waypoints of every compiled pedestrian route, in travel order and
+    /// indexed by dense route id.
+    waypoints: Vec<Vec<PedestrianWaypoint>>,
+    /// Reused per-pedestrian neighbour buffer, so the avoidance scan does not
+    /// allocate inside the tick loop.
+    conflicts: Vec<Conflict>,
     events: Vec<Event>,
     population_announced: bool,
     spawned_total: u64,
     despawned_total: u64,
     dropped_total: u64,
     emergency_cap_steps: u64,
+    pedestrian_cap_steps: u64,
 }
 
 impl Simulation {
@@ -224,6 +236,16 @@ impl Simulation {
             .map(|signal| SignalRuntime::new(signal.cycle_s()))
             .collect();
         let signal_heads = signal::movement_signal_map(&scenario);
+        // Waypoint plans are derived once per run from the compiled routes, so
+        // the tick loop only reads them.
+        let waypoints: Vec<Vec<PedestrianWaypoint>> = scenario
+            .pedestrian_routes()
+            .iter()
+            .map(|route| {
+                let (_, direction) = route_entry(&scenario, route);
+                pedestrian::plan_route(&scenario, route, direction)
+            })
+            .collect();
         let mut agents = AgentStore::default();
         let mut spawned_total = 0;
         if demand.is_empty() && pedestrian_demand.is_empty() && population.vehicle_count > 0 {
@@ -272,12 +294,15 @@ impl Simulation {
             pedestrian_demand,
             signals,
             signal_heads,
+            waypoints,
+            conflicts: Vec::new(),
             events: Vec::new(),
             population_announced: false,
             spawned_total,
             despawned_total: 0,
             dropped_total: 0,
             emergency_cap_steps: 0,
+            pedestrian_cap_steps: 0,
         })
     }
 
@@ -438,6 +463,42 @@ impl Simulation {
         self.emergency_cap_steps
     }
 
+    /// Derived waypoints of a compiled pedestrian route, in travel order with
+    /// the route exit last.
+    ///
+    /// Empty for an unknown route. See [`crate::pedestrian`] for how the
+    /// waypoints are derived and ordered.
+    pub fn route_waypoints(&self, route: PedestrianRouteId) -> &[PedestrianWaypoint] {
+        self.waypoints.get(route.index()).map_or(&[], Vec::as_slice)
+    }
+
+    /// The waypoint a pedestrian is currently steering toward.
+    ///
+    /// Present for a live demand pedestrian, whose cursor advances along its
+    /// route's derived waypoints and never moves backward.
+    pub fn pedestrian_waypoint(&self, agent: AgentId) -> Option<PedestrianWaypoint> {
+        let route = self
+            .agents
+            .pedestrian_route
+            .get(agent.index())
+            .copied()
+            .flatten()?;
+        let cursor = *self.agents.pedestrian_waypoint_index.get(agent.index())?;
+        self.route_waypoints(route).get(cursor).copied()
+    }
+
+    /// Steps so far in which the pedestrian spacing cap forced more braking
+    /// than the steering model's bounded deceleration.
+    ///
+    /// The pedestrian controller's heading and speed bounds hold for its
+    /// steering command; the hard spacing cap that keeps a pedestrian from
+    /// tunnelling into a nearby body is an emergency backstop outside that
+    /// bound. This counter is the assertion seam for that documented exception,
+    /// mirroring [`Self::emergency_cap_steps`] for vehicles.
+    pub fn pedestrian_cap_steps(&self) -> u64 {
+        self.pedestrian_cap_steps
+    }
+
     /// Most recent signal-compliance decision of an agent.
     ///
     /// Present for vehicles whose movement is signal-controlled, including a
@@ -493,52 +554,209 @@ impl Simulation {
             if !self.agents.alive[index] {
                 continue;
             }
-            let path_id = self.agents.path[index];
-            // Recompute the agent's signal decision before integrating its
-            // speed, so the stop-line constraint the controller sees is exactly
-            // the recorded decision.
-            self.update_signal_decision(index);
-            let direction = self.agents.direction[index];
-            // Profile vehicles drive under IDM; the walking skeleton's static
-            // population keeps its constant speed and is byte-identical.
-            let profile = self.agents.profile[index];
-            let speed_mps = match profile {
-                Some(profile) => self.controlled_speed(index, &profile, dt),
-                None => self.agents.speed_mps[index],
-            };
-            let Some(path) = self.scenario.path(path_id) else {
-                continue;
-            };
-            let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
-            let length = path.length();
-            let distance_m = if direction < 0.0 {
-                travelled.max(0.0)
-            } else {
-                travelled.min(length)
-            };
-
-            self.agents.speed_mps[index] = speed_mps;
-            self.agents.distance_m[index] = distance_m;
-            self.agents.position[index] = path.position_at(distance_m);
-            self.agents.heading_rad[index] = path.heading_at(distance_m);
-
-            let exited = if direction < 0.0 {
-                travelled <= 0.0
-            } else {
-                travelled >= length
-            };
-            if exited {
-                self.agents.alive[index] = false;
-                self.despawned_total += 1;
-                self.events.push(Event::Despawned {
-                    agent: AgentId::from_index(index),
-                    path: path_id,
-                    reason: DespawnReason::ExitedPath,
-                });
+            match self.agents.mode[index] {
+                AgentMode::Pedestrian => self.step_pedestrian(index, dt),
+                AgentMode::Vehicle => self.step_vehicle(index, dt),
             }
         }
 
         self.advance_demand(dt);
+    }
+
+    /// Advance one vehicle under IDM or, without a sampled profile, at the
+    /// static walking skeleton's constant speed.
+    fn step_vehicle(&mut self, index: usize, dt: f64) {
+        let path_id = self.agents.path[index];
+        // Recompute the agent's signal decision before integrating its
+        // speed, so the stop-line constraint the controller sees is exactly
+        // the recorded decision.
+        self.update_signal_decision(index);
+        let direction = self.agents.direction[index];
+        // Profile vehicles drive under IDM; the walking skeleton's static
+        // population keeps its constant speed and is byte-identical.
+        let profile = self.agents.profile[index];
+        let speed_mps = match profile {
+            Some(profile) => self.controlled_speed(index, &profile, dt),
+            None => self.agents.speed_mps[index],
+        };
+        let Some(path) = self.scenario.path(path_id) else {
+            return;
+        };
+        let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
+        let length = path.length();
+        let distance_m = if direction < 0.0 {
+            travelled.max(0.0)
+        } else {
+            travelled.min(length)
+        };
+
+        self.agents.speed_mps[index] = speed_mps;
+        self.agents.distance_m[index] = distance_m;
+        self.agents.position[index] = path.position_at(distance_m);
+        self.agents.heading_rad[index] = path.heading_at(distance_m);
+
+        let exited = if direction < 0.0 {
+            travelled <= 0.0
+        } else {
+            travelled >= length
+        };
+        if exited {
+            self.agents.alive[index] = false;
+            self.despawned_total += 1;
+            self.events.push(Event::Despawned {
+                agent: AgentId::from_index(index),
+                path: path_id,
+                reason: DespawnReason::ExitedPath,
+            });
+        }
+    }
+
+    /// Advance one pedestrian under the documented waypoint controller.
+    ///
+    /// A pedestrian is steered in world space rather than integrated along its
+    /// path: it seeks the next derived waypoint, deflects around the nearby
+    /// bodies ahead of it, and reports route progress as the projection of its
+    /// world position onto the route path. See [`crate::pedestrian`] for the
+    /// model card, its bounds, and its emergency spacing cap.
+    fn step_pedestrian(&mut self, index: usize, dt: f64) {
+        let (Some(route_id), Some(profile)) = (
+            self.agents.pedestrian_route[index],
+            self.agents.pedestrian_profile[index],
+        ) else {
+            // A pedestrian slot without a demand route has no waypoint plan; it
+            // keeps the walking skeleton's constant-speed path.
+            self.step_vehicle(index, dt);
+            return;
+        };
+        let path_id = self.agents.path[index];
+        let direction = self.agents.direction[index];
+        let path_length_m = self
+            .scenario
+            .path(path_id)
+            .map_or(0.0, |path| path.length());
+
+        // Advance the cursor past every waypoint already reached, so the target
+        // is always ahead and the cursor is monotone.
+        let progress_m =
+            pedestrian::route_progress_m(self.agents.distance_m[index], direction, path_length_m);
+        self.advance_waypoint(index, progress_m);
+        let cursor = self.agents.pedestrian_waypoint_index[index];
+        let Some(target) = self.route_waypoints(route_id).get(cursor).copied() else {
+            return;
+        };
+
+        self.collect_conflicts(index);
+        let state = PedestrianState {
+            agent: AgentId::from_index(index),
+            position: self.agents.position[index],
+            heading_rad: self.agents.heading_rad[index],
+            speed_mps: self.agents.speed_mps[index],
+            target: target.position(),
+        };
+        let steering = pedestrian::steer(&profile, &state, &self.conflicts, dt);
+        let (speed_mps, capped) = pedestrian::advance_speed(
+            state.speed_mps,
+            steering.speed_target_mps,
+            steering.spacing_cap_mps,
+            dt,
+        );
+        if capped {
+            self.pedestrian_cap_steps += 1;
+        }
+        let heading_rad = steering.heading_rad;
+        let position = state.position + DVec2::from_angle(heading_rad) * (speed_mps * dt);
+
+        let Some(path) = self.scenario.path(path_id) else {
+            return;
+        };
+        let arc_m = pedestrian::closest_arc(path, position);
+        let progress_m = pedestrian::route_progress_m(arc_m, direction, path_length_m);
+
+        self.agents.speed_mps[index] = speed_mps;
+        self.agents.heading_rad[index] = heading_rad;
+        self.agents.position[index] = position;
+        self.agents.distance_m[index] = arc_m;
+
+        if progress_m >= path_length_m {
+            self.agents.alive[index] = false;
+            self.despawned_total += 1;
+            self.events.push(Event::Despawned {
+                agent: AgentId::from_index(index),
+                path: path_id,
+                reason: DespawnReason::ExitedPath,
+            });
+        }
+    }
+
+    /// Move a pedestrian's waypoint cursor past every waypoint it has reached.
+    ///
+    /// The cursor is monotone: it advances past a waypoint only once the
+    /// pedestrian's route progress has reached it, and never off the last
+    /// waypoint, so the current target is always the next waypoint ahead.
+    fn advance_waypoint(&mut self, index: usize, progress_m: f64) {
+        let Some(route_id) = self.agents.pedestrian_route[index] else {
+            return;
+        };
+        let path_length_m = self
+            .scenario
+            .path(self.agents.path[index])
+            .map_or(0.0, |path| path.length());
+        let direction = self.agents.direction[index];
+        let Some(plan) = self.waypoints.get(route_id.index()) else {
+            return;
+        };
+        let mut cursor = self.agents.pedestrian_waypoint_index[index];
+        while cursor + 1 < plan.len()
+            && progress_m >= pedestrian::waypoint_progress_m(plan[cursor], direction, path_length_m)
+        {
+            cursor += 1;
+        }
+        self.agents.pedestrian_waypoint_index[index] = cursor;
+    }
+
+    /// Gather the bodies a pedestrian must avoid, in ascending agent id order.
+    ///
+    /// The order is the documented scan order and tie-break, so the interaction
+    /// terms are summed deterministically and no hash map is iterated for
+    /// state-affecting logic. Bodies beyond [`pedestrian::SENSE_RADIUS_M`] are
+    /// not considered.
+    fn collect_conflicts(&mut self, index: usize) {
+        self.conflicts.clear();
+        let position = self.agents.position[index];
+        let radius_m = self.agents.body_length_m[index] * 0.5;
+        for other in 0..self.agents.len() {
+            if other == index || !self.agents.alive[other] {
+                continue;
+            }
+            let other_position = self.agents.position[other];
+            if (other_position - position).length() > pedestrian::SENSE_RADIUS_M {
+                continue;
+            }
+            let nearest = match self.agents.mode[other] {
+                AgentMode::Pedestrian => pedestrian::nearest_circle_point(
+                    other_position,
+                    self.agents.body_length_m[other] * 0.5,
+                    position,
+                ),
+                AgentMode::Vehicle => pedestrian::nearest_box_point(
+                    other_position,
+                    self.agents.heading_rad[other],
+                    self.agents.body_length_m[other],
+                    self.agents.body_width_m[other],
+                    position,
+                ),
+            };
+            // The conflict reports the vector from the pedestrian's centre to
+            // the neighbour's nearest surface point, which is what the steering
+            // model's direction and clearance both need.
+            let to_surface = nearest - position;
+            self.conflicts.push(Conflict {
+                agent: AgentId::from_index(other),
+                to_surface,
+                clearance_m: to_surface.length() - radius_m,
+                speed_mps: self.agents.speed_mps[other],
+            });
+        }
     }
 
     /// Speed for one profile vehicle after IDM, its bounds, and safety caps.
@@ -843,11 +1061,11 @@ impl Simulation {
 
     /// Admit one pedestrian on `route_id` when the portal entry is clear.
     ///
-    /// A pedestrian enters at its sampled walking speed and tracks its route at
-    /// that constant speed. Body shape, demand, route assignment, and admission
-    /// are this slice; waypoint steering, local collision avoidance, and signal
-    /// compliance are later slices, so an admitted pedestrian follows the route
-    /// path without any steering law.
+    /// A pedestrian enters at its sampled walking speed, heading at the first
+    /// waypoint of its route, and is then steered by the documented waypoint
+    /// controller. Body shape, demand, route assignment, and admission are
+    /// unchanged from the previous slice; a route that names no zone heads at
+    /// the route exit.
     fn try_admit_pedestrian(&mut self, route_id: PedestrianRouteId) -> bool {
         let Some((path_id, entry_distance, direction)) =
             self.scenario.pedestrian_route(route_id).map(|route| {
@@ -878,7 +1096,20 @@ impl Simulation {
             return false;
         };
         let position = path.position_at(entry_distance);
-        let heading_rad = path.heading_at(entry_distance);
+        // Enter heading at the first waypoint, so the controller starts with a
+        // zero heading error and a route that enters at the path end heads
+        // inward rather than along the path tangent.
+        let mut heading_rad = path.heading_at(entry_distance);
+        if let Some(first) = self
+            .waypoints
+            .get(route_id.index())
+            .and_then(|plan| plan.first())
+        {
+            let toward = first.position() - position;
+            if toward.length() > 0.0 {
+                heading_rad = toward.y.atan2(toward.x);
+            }
+        }
 
         self.agents.push(AgentInit {
             mode: AgentMode::Pedestrian,
