@@ -52,6 +52,9 @@ commands:
 options:
   --scene walking|dense   scene to render (default walking)
   --transport raw|zlib|file|shm   payload medium (default zlib)
+  --lifecycle pair|reuse|rotate    image/placement lifecycle (default pair)
+  --cursor stay|move      C=1 keeps the cursor still after placing (default stay)
+  --budget-mb N           stop after N MiB of raw frame data, 0 disables (default 256)
   --frames N              frames to transmit (default 300)
   --fps N                 cap frames per second, 0 for unlimited (default 0)
   --mux auto|none|tmux|screen     passthrough wrapper (default auto)
@@ -67,6 +70,9 @@ struct Options {
     command: String,
     scene: String,
     transport: String,
+    lifecycle: String,
+    cursor: String,
+    budget_mb: u64,
     frames: u32,
     fps: f64,
     mux: String,
@@ -83,6 +89,9 @@ impl Default for Options {
             command: String::new(),
             scene: "walking".to_string(),
             transport: "zlib".to_string(),
+            lifecycle: "pair".to_string(),
+            cursor: "stay".to_string(),
+            budget_mb: 256,
             frames: 300,
             fps: 0.0,
             mux: "auto".to_string(),
@@ -114,6 +123,9 @@ fn parse_args(args: Vec<String>) -> Result<Options, String> {
         match flag.as_str() {
             "--scene" => options.scene = value()?,
             "--transport" => options.transport = value()?,
+            "--lifecycle" => options.lifecycle = value()?,
+            "--cursor" => options.cursor = value()?,
+            "--budget-mb" => options.budget_mb = value()?.parse().map_err(|_| "bad --budget-mb")?,
             "--frames" => options.frames = value()?.parse().map_err(|_| "bad --frames")?,
             "--fps" => options.fps = value()?.parse().map_err(|_| "bad --fps")?,
             "--mux" => options.mux = value()?,
@@ -405,8 +417,17 @@ fn command_run(options: &Options) -> i32 {
     let mut medium_paths: Vec<String> = Vec::new();
     let mut last_size = term.size();
     let mut notes: Vec<String> = Vec::new();
+    let mut raw_sent = 0u64;
+    let budget_bytes = options.budget_mb.saturating_mul(1024 * 1024);
 
     for frame in 0..options.frames {
+        if budget_bytes > 0 && raw_sent >= budget_bytes {
+            notes.push(format!(
+                "stopped at frame {frame}: raw transmit budget of {} MiB reached",
+                options.budget_mb
+            ));
+            break;
+        }
         let size = term.size();
         if size != last_size {
             resize_events += 1;
@@ -423,16 +444,21 @@ fn command_run(options: &Options) -> i32 {
         let rgba = scene::render(&spec, frame);
         let raster_done = Instant::now();
 
-        let (sequences, account) = match encode_transport(options, &spec, &rgba, &mut medium_paths)
-        {
-            Ok(result) => result,
-            Err(error) => {
-                eprintln!("encode failed: {error}");
-                drop(cleanup);
-                term.leave_raw();
-                return 5;
-            }
+        let image_id = if options.lifecycle == "rotate" {
+            1 + (frame % 2)
+        } else {
+            1
         };
+        let (sequences, account) =
+            match encode_transport(options, &spec, &rgba, image_id, &mut medium_paths) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("encode failed: {error}");
+                    drop(cleanup);
+                    term.leave_raw();
+                    return 5;
+                }
+            };
         let encode_done = Instant::now();
 
         let wrapped: Vec<Vec<u8>> = match mux.as_str() {
@@ -485,6 +511,7 @@ fn command_run(options: &Options) -> i32 {
             pty: outbound.len() as u64,
             ..account
         };
+        raw_sent += account.raw;
         accounts.push(account);
 
         if options.fps > 0.0 {
@@ -527,6 +554,8 @@ fn command_run(options: &Options) -> i32 {
         "command": "run",
         "scene": spec.name,
         "transport": options.transport,
+        "lifecycle": options.lifecycle,
+        "cursor": options.cursor,
         "mux": mux,
         "frames": frames,
         "is_tty": term.is_tty,
@@ -605,49 +634,60 @@ fn resize_target(spec: &scene::SceneSpec, size: &term::Size) -> Option<(u32, u32
 }
 
 /// Build the escape sequences for one frame and account for their bytes.
+///
+/// `lifecycle` selects how the image and its placement are managed, because
+/// that is the part of the protocol with the sharpest failure modes:
+///
+/// - `pair` (recommended): transmit-only `a=t`, then place with a stable
+///   placement id `a=p,i=..,p=1`. Re-transmitting the same id must replace the
+///   data and drop its placements; the stable placement id then replaces
+///   rather than stacks. This is the spec's flicker-free path.
+/// - `reuse`: transmit-and-display `a=T` with one id every frame, relying on
+///   the terminal to replace the image and its placements.
+/// - `rotate`: alternate two ids and delete the id before reusing it, so at
+///   most two images are live even if replacement is buggy.
+///
+/// `C=1` keeps the cursor still after placing so the placement is never pushed
+/// into scrollback by the terminal's own cursor advance. Frames use `q=2` so
+/// no reply traffic accumulates in the pty input buffer.
 fn encode_transport(
     options: &Options,
     spec: &scene::SceneSpec,
     rgba: &[u8],
+    image_id: u32,
     media: &mut Vec<String>,
 ) -> io::Result<(Vec<Vec<u8>>, ByteAccount)> {
-    let account = ByteAccount {
-        raw: rgba.len() as u64,
-        ..ByteAccount::default()
-    };
     let width = spec.width;
     let height = spec.height;
+    let pair = options.lifecycle == "pair";
+    let cursor = if options.cursor == "stay" { ",C=1" } else { "" };
+    // On the transmit-only path the cursor policy belongs to the placement.
+    let display_cursor = if pair { "" } else { cursor };
+    let action = if pair { "t" } else { "T" };
+
+    let mut sequences = Vec::new();
+    let data_bytes;
+    let base64_bytes;
+    let mut file_write_ms = 0.0;
+
     match options.transport.as_str() {
         "raw" => {
-            let control = format!("a=T,f=32,s={width},v={height},i=1");
+            let control =
+                format!("a={action},f=32,s={width},v={height},i={image_id},q=2{display_cursor}");
             let frame = kitty::encode(&control, rgba);
-            let sequences = frame.sequences.len() as u64;
-            Ok((
-                frame.sequences,
-                ByteAccount {
-                    data: frame.data_bytes as u64,
-                    base64: frame.base64_bytes as u64,
-                    escaped: frame.escaped_bytes as u64,
-                    sequences,
-                    ..account
-                },
-            ))
+            sequences = frame.sequences;
+            data_bytes = frame.data_bytes;
+            base64_bytes = frame.base64_bytes;
         }
         "zlib" => {
             let compressed = kitty::zlib(rgba);
-            let control = format!("a=T,f=32,s={width},v={height},i=1,o=z");
+            let control = format!(
+                "a={action},f=32,s={width},v={height},i={image_id},o=z,q=2{display_cursor}"
+            );
             let frame = kitty::encode(&control, &compressed);
-            let sequences = frame.sequences.len() as u64;
-            Ok((
-                frame.sequences,
-                ByteAccount {
-                    data: frame.data_bytes as u64,
-                    base64: frame.base64_bytes as u64,
-                    escaped: frame.escaped_bytes as u64,
-                    sequences,
-                    ..account
-                },
-            ))
+            sequences = frame.sequences;
+            data_bytes = frame.data_bytes;
+            base64_bytes = frame.base64_bytes;
         }
         "file" => {
             let path = std::env::temp_dir().join(format!(
@@ -657,48 +697,64 @@ fn encode_transport(
             ));
             let start = Instant::now();
             std::fs::write(&path, rgba)?;
-            let write_ms = ms(start.elapsed());
+            file_write_ms = ms(start.elapsed());
             let name = path.to_string_lossy().into_owned();
             media.push(name.clone());
-            let control = format!("a=T,f=32,s={width},v={height},i=1,t=f");
-            let seq = kitty::apc(&control, &kitty::medium_payload(&name));
-            let escaped = seq.len() as u64;
-            Ok((
-                vec![seq],
-                ByteAccount {
-                    data: rgba.len() as u64,
-                    escaped,
-                    sequences: 1,
-                    file_write_ms: write_ms,
-                    ..account
-                },
-            ))
+            let control = format!(
+                "a={action},f=32,s={width},v={height},i={image_id},t=f,q=2{display_cursor}"
+            );
+            sequences.push(kitty::apc(&control, &kitty::medium_payload(&name)));
+            data_bytes = rgba.len();
+            base64_bytes = 0;
         }
         "shm" => {
             let name = format!("/tangle-kitty-poc-{}-{}", std::process::id(), media.len());
             let start = Instant::now();
             write_shm(&name, rgba)?;
-            let write_ms = ms(start.elapsed());
+            file_write_ms = ms(start.elapsed());
             media.push(name.clone());
-            let control = format!("a=T,f=32,s={width},v={height},i=1,t=s");
-            let seq = kitty::apc(&control, &kitty::medium_payload(&name));
-            let escaped = seq.len() as u64;
-            Ok((
-                vec![seq],
-                ByteAccount {
-                    data: rgba.len() as u64,
-                    escaped,
-                    sequences: 1,
-                    file_write_ms: write_ms,
-                    ..account
-                },
-            ))
+            let control = format!(
+                "a={action},f=32,s={width},v={height},i={image_id},t=s,q=2{display_cursor}"
+            );
+            sequences.push(kitty::apc(&control, &kitty::medium_payload(&name)));
+            data_bytes = rgba.len();
+            base64_bytes = 0;
         }
-        other => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unknown transport: {other}"),
-        )),
+        other => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown transport: {other}"),
+            ));
+        }
     }
+
+    if pair {
+        // Stable placement id: re-placing replaces the previous placement at
+        // the same position instead of stacking a new one.
+        sequences.push(kitty::apc(
+            &format!("a=p,i={image_id},p=1{cursor},q=2"),
+            b"",
+        ));
+    }
+    if options.lifecycle == "rotate" {
+        // Free this slot before reuse so at most two images are ever live.
+        sequences.insert(0, kitty::delete_image(image_id));
+    }
+
+    let escaped_bytes: u64 = sequences.iter().map(|seq| seq.len() as u64).sum();
+    let count = sequences.len() as u64;
+    Ok((
+        sequences,
+        ByteAccount {
+            raw: rgba.len() as u64,
+            data: data_bytes as u64,
+            base64: base64_bytes as u64,
+            escaped: escaped_bytes,
+            sequences: count,
+            file_write_ms,
+            pty: 0,
+        },
+    ))
 }
 
 fn print_summary(report: &Value) {
@@ -706,10 +762,11 @@ fn print_summary(report: &Value) {
     let scene = report["scene"].as_str().unwrap_or("?");
     let transport = report["transport"].as_str().unwrap_or("?");
     let mux = report["mux"].as_str().unwrap_or("?");
+    let lifecycle = report["lifecycle"].as_str().unwrap_or("?");
     let probe = &report["probe"];
     println!(
-        "kitty spike: scene={scene} transport={transport} mux={mux} frames={frames} \
-         probe={} ({})",
+        "kitty spike: scene={scene} transport={transport} lifecycle={lifecycle} mux={mux} \
+         frames={frames} probe={} ({})",
         probe["supported"],
         probe["verdict"].as_str().unwrap_or("?")
     );

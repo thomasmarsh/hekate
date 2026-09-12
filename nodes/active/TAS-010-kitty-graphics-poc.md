@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T12:54:54Z
-summary: Spike built and benchmarked on a pty sink; real-terminal verification and the go/no-go remain.
-next: Run the spike in a supporting terminal and under tmux, then record the go/no-go.
+updated: 2026-09-12T13:03:54Z
+summary: Spike runs on Ghostty and two SSH clients; one WezTerm crash reframes the decision as explicit-opt-in only.
+next: Run probe in a non-supporting terminal and the tmux demo, then record the go/no-go.
 ---
 
 # Outcome
@@ -78,15 +78,53 @@ no device-attributes answer at all. That is distinct from a real terminal that
 answers device attributes but not the graphics query, which must classify as
 `unsupported`. Both are treated as unsupported by the spike.
 
+## Real supporting terminals
+
+`probe` on two real terminals over SSH returned `supported` with graphics reply
+`i=31;OK` and device attributes `?62;22;52`. A 600-frame walking zlib run at
+30 fps completed on both:
+
+| terminal | cells | pixels | cell px | encode ms | write ms | total ms | write fps |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| Ghostty (direct SSH) | 209x57 | 3352x1968 | 16x34 | 1.14 | 0.085 | 1.29 | 777 |
+| WezTerm client (SSH client) | 98x59 | 1470x1888 | 15x32 | 1.23 | 0.072 | 1.35 | 738 |
+
+Ghostty was confirmed to draw and animate the scene correctly by the operator.
+The walking scene stays far inside a 60 Hz frame budget, so throughput is not
+the limiting factor for a debug view.
+
+## A nominally supporting terminal crashed
+
+A **local WezTerm 0.1.0 (1) instance on macOS 26.6.2 aborted (SIGABRT)** roughly
+two minutes into this test series, while the SSH client instance had just
+completed 600 frames. The crash log shows the process inside
+`wezterm_term::terminalstate::kitty::kitty_remove_placement`, queued from
+`termwiz::cell::CellAttributes::detach_image_with_placement` -> `Vec::retain`
+-> `_nanov2_free`, with a heap-corrupting data abort on one thread and a
+thread-local destructor abort at exit. The VM summary reports 3.7 GB written in
+`VM_ALLOCATE` and repeated `mach_vm_allocate_kernel failed` triage entries.
+
+This was not a malformed sequence: the same bytes were accepted by Ghostty and
+by the SSH-terminal WezTerm instance. It is a memory-safety failure in WezTerm's
+placement-removal path, reached by the ordinary re-transmit/placement lifecycle
+that any animating client must use. The operator believes the local session may
+have involved a multiplexer, so the precise trigger is not isolated; the
+observation stands as recorded.
+
+Consequence for the decision: a terminal can answer the support probe `OK` and
+still be unsafe. Detection proves protocol support, not stability, so a
+runtime "support is proven" rule is not sufficient to auto-select the backend.
+The spike now defaults to a bounded `pair` lifecycle (transmit-only plus a
+stable placement id), keeps `C=1` so the cursor does not push placements into
+scrollback, and stops after a 256 MiB raw transmit budget.
+
 ## Still to verify on real terminals
 
-- A supporting terminal (Ghostty is installed on this host) must report
-  `supported` and draw the moving scene; record encode/transmit/frame rate.
+- A non-supporting terminal (for example macOS Terminal.app) must report
+  `unsupported` and draw nothing; the only negative evidence so far is a pty
+  with no emulator, which reports `no-reply`.
 - tmux with `allow-passthrough on` and `--mux tmux`; passthrough off must not
   silently corrupt.
-- A non-supporting terminal must report `unsupported` and draw nothing, and
-  `--force` must not produce garbage.
 - Resize, scroll, and alternate-screen transitions must not leak images.
-
-The visual and multiplexer checks need a person at a real terminal, so the
-spike is handed off for that run before the go/no-go is recorded here.
+- A real-terminal dense-scene number, since the dense scene is the one that
+  exceeds a frame budget under zlib.

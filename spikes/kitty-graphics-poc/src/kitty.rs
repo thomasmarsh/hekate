@@ -45,6 +45,11 @@ pub fn delete_all() -> Vec<u8> {
     apc("a=d,d=A", b"")
 }
 
+/// Delete one image and all of its placements by id.
+pub fn delete_image(id: u32) -> Vec<u8> {
+    apc(&format!("a=d,d=i,i={id}"), b"")
+}
+
 /// zlib (RFC 1950) compress, matching the protocol's `o=z`.
 pub fn zlib(data: &[u8]) -> Vec<u8> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(6));
@@ -62,8 +67,6 @@ pub struct EncodedFrame {
     pub data_bytes: usize,
     /// Base64 text bytes carried across all chunks.
     pub base64_bytes: usize,
-    /// Total bytes that will cross the pty before mux wrapping.
-    pub escaped_bytes: usize,
 }
 
 /// Encode `data` for `control`, chunked at [`MAX_CHUNK`] base64 bytes.
@@ -75,10 +78,8 @@ pub struct EncodedFrame {
 pub fn encode(control: &str, data: &[u8]) -> EncodedFrame {
     let encoded = B64.encode(data);
     let mut sequences = Vec::new();
-    let mut escaped_bytes = 0;
     if encoded.is_empty() {
         let seq = apc(&format!("{control},m=0"), b"");
-        escaped_bytes += seq.len();
         sequences.push(seq);
     } else {
         let mut start = 0;
@@ -91,7 +92,6 @@ pub fn encode(control: &str, data: &[u8]) -> EncodedFrame {
                 format!("m={}", u8::from(!last))
             };
             let seq = apc(&chunk_control, &encoded.as_bytes()[start..end]);
-            escaped_bytes += seq.len();
             sequences.push(seq);
             start = end;
         }
@@ -100,7 +100,6 @@ pub fn encode(control: &str, data: &[u8]) -> EncodedFrame {
         sequences,
         data_bytes: data.len(),
         base64_bytes: encoded.len(),
-        escaped_bytes,
     }
 }
 

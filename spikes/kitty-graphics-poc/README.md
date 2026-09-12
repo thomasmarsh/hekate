@@ -64,16 +64,45 @@ done
 ```
 
 Options: `--transport raw|zlib|file|shm`, `--scene walking|dense`, `--frames N`,
-`--fps N` (`0` is uncapped), `--mux auto|none|tmux|screen`, `--fence`,
+`--fps N` (`0` is uncapped), `--lifecycle pair|reuse|rotate`, `--cursor stay|move`,
+`--budget-mb N` (`0` disables), `--mux auto|none|tmux|screen`, `--fence`,
 `--force`, `--no-alt`, `--timeout-ms N`, `--report PATH`.
 
-`--fence` round-trips a query after every frame and reports a
-terminal-processing rate in addition to the raw write rate. It only works where
-the terminal answers the query (not under a multiplexer that swallows replies).
+### Lifecycle is the dangerous part
+
+The protocol's image/placement lifecycle has the sharpest failure modes, so the
+spike makes it explicit and bounded:
+
+- `pair` (default): transmit-only `a=t` then place with a stable placement id
+  `a=p,i=..,p=1`. This is the spec's flicker-free path; re-transmitting the id
+  replaces the data and the stable placement id replaces rather than stacks.
+- `reuse`: transmit-and-display `a=T` with one id every frame, trusting the
+  terminal to replace the image and all its placements (the spec says it must).
+- `rotate`: alternate two ids and delete the id before reuse, so at most two
+  images are live even if replacement is buggy.
+
+`--cursor stay` (default) adds `C=1` so the terminal does not advance the
+cursor past the placement and push it into scrollback. `--budget-mb` (default
+256) stops a run after that much raw frame data so a run cannot drive a
+terminal into unbounded memory growth.
 
 The program deletes all images, leaves the alternate screen, and restores the
 old termios settings on a normal exit, on `Ctrl-C`/panic, and after a write
 error.
+
+## Known terminal failure: WezTerm 0.1.0 on macOS
+
+A local WezTerm 0.1.0 (1) instance aborted (SIGABRT) under this spike on macOS
+26.6.2, after the same SSH client had completed 600 frames successfully. The
+crash log shows the terminal in
+`wezterm_term::terminalstate::kitty::kitty_remove_placement` queued from
+`CellAttributes::detach_image_with_placement` -> `Vec::retain` -> `_nanov2_free`,
+with a heap-corrupting data abort on one thread and a thread-local destructor
+abort on exit, and a VM region summary of 3.7 GB written in `VM_ALLOCATE`. That
+is a memory-safety failure inside WezTerm's placement-removal path, not a
+malformed escape sequence; the same bytes were accepted by Ghostty and by the
+SSH client over the same session. Treat WezTerm 0.1.0 as unsafe for this
+protocol until it is retested, and never run an unbounded frame count there.
 
 ## Under tmux
 
@@ -108,8 +137,9 @@ With the demo running in a supporting terminal:
 
 Values below are from a pty sink with no terminal emulator behind it
 (`script -q /dev/null`), so they isolate raster, encode, and write cost; they
-exclude the terminal's own parse/blit cost. Real-terminal numbers come from
-running the demo in a supporting terminal.
+exclude the terminal's own parse/blit cost. The `reuse` rows are the original
+lifecycle; the hardened `pair` default sends one extra placement sequence per
+frame.
 
 | scene | transport | frame | bytes/frame (data) | bytes/frame (pty) | seq/frame | raster ms | encode ms | write ms | total ms | write fps |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -123,3 +153,17 @@ running the demo in a supporting terminal.
 The dense scene carries deterministic per-pixel sensor noise, so zlib reaches
 only a 0.133 ratio and then costs ~98 ms/frame of CPU; a flat debug scene
 compresses ~370x. This is the central trade-off the decision turns on.
+
+## Real supporting terminals
+
+Both runs were over SSH with `--scene walking --transport zlib --frames 600
+--fps 30`; the probe reported `i=31;OK` with device attributes `?62;22;52`.
+
+| terminal | cells | pixels | cell px | encode ms | write ms | total ms | write fps |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| Ghostty (direct SSH) | 209x57 | 3352x1968 | 16x34 | 1.14 | 0.085 | 1.29 | 777 |
+| WezTerm client (SSH client) | 98x59 | 1470x1888 | 15x32 | 1.23 | 0.072 | 1.35 | 738 |
+
+In both, the walking scene stayed far inside a 60 Hz frame budget; the image
+rendered and animated correctly, and Ghostty was reported working visually.
+Real-terminal dense-scene and tmux numbers are not yet recorded.
