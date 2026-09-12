@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T22:39:42Z
+updated: 2026-09-12T22:57:47Z
 summary: Phase 1 Increment 4 adds a deterministic uniform-grid broad phase, exact and swept geometry queries, typed safety events with a versioned union, online TTC/minimum-separation and PET occupancy, and viewer event overlays and inspector links.
-next: Add viewer overlays and inspector links from an event to its participants, and carry the agent mode through SceneBody::project (F5).
+next: Independent read-only verification of every Increment 4 Done-when criterion against the integrated tree.
 ---
 
 # Outcome
@@ -587,6 +587,163 @@ from about 7 s to about 23 s).
   two bodies occupy together reports occupancy but no PET.
 - Throughput/level-of-service metrics, metric definition versions, and
   disaggregation by movement are Increment 5 and 6 work, not this slice.
+
+## Slice E — viewer overlays, inspector links, and F5 mode projection
+
+Slice E closes the increment's presentation work: the typed safety records the
+kernel already emits become the overlays a renderer draws, and the agent mode
+reaches the projected body (F5). It adds no simulation behavior and does not
+rewire the tick, so the canonical trace, its hash, the Phase 1 baseline, and the
+renderer cell and Kitty goldens are unchanged.
+
+### F5: the mode in the projected body
+
+`SceneBody::project` now carries `mode: AgentMode` from the sample's
+`MotionSample::mode` (the same seam the body dimensions come from), so a backend
+styles a vehicle and a pedestrian distinctly from one frame. The previous
+`kind: BodyKind` field was a hard-coded `Vehicle`, so every pedestrian projected
+as a car; `BodyKind` is removed rather than kept as a second spelling of the
+same concept, and a snapshot at `SnapshotDetail::Position` carries no mode and
+keeps the vehicle fallback its dimensions use. Consumers updated: the Bevy
+viewer spawns a shared disc mesh and pedestrian material for a pedestrian body
+and a shared box and vehicle material for a vehicle (an agent's mode is fixed
+for its slot, so an entity never changes either), the terminal inspector names
+the mode, and the terminal rasterizers colour emphasized bodies.
+
+### Overlay projection
+
+`crates/tangle-present/src/safety.rs` folds the typed safety records into the
+data a renderer draws. `PresentationController::observe_events(tick, events)` is
+called once per completed step by every host; the fold keeps
+`MARKER_LIFETIME_SECONDS` (2.0 s) of records converted to whole ticks at the
+run's step, plus the open states the edges open and close: region occupancy
+(`Entry`/`Exit`, and a despawn, which the safety pass closes without an exit
+record), standstill (`Queue`), and controller state (`ControlTransition`).
+`project` windows that state to the frame's own tick, so a frame carries
+exactly the records inside its window and a backend reads nothing else.
+
+Derived per frame, all from the frame alone:
+
+- `safety_markers()` — one marker per retained record, in record order, anchored
+  on its region's ring centre or on the midpoint of the participants alive in
+  the frame; a record whose bodies have all left and which names no region draws
+  no marker.
+- `body_emphasis()` — one style per emphasized body, ascending by agent id, with
+  precedence collision, near miss, violation, queue, control transition, so a
+  body in contact is not also reported as queued. Contact, near-miss, and
+  violation emphasis fade with the marker window; queue and controller emphasis
+  last exactly as long as their state.
+- `occupied_regions()` — regions bodies currently occupy, ascending by
+  `RegionKey`, occupants ascending.
+- `events_involving(agent)` and `EventParticipants::of(event)` — the inspector
+  link: the records a body took part in, in window order, each with its
+  ascending participant agent ids and its `RegionKey` (a yield carries
+  `RegionKey::Crossing`, so one key spelling covers every region-bearing
+  record). `event_summary(record)` is the shared wording both inspectors print.
+- `SceneGeometry::region_points` / `region_center(RegionKey)` — the authored ring
+  and its vertex mean, so an occupancy overlay covers the region the safety
+  layer crossed and keeps the crossing and conflict-region id spaces apart.
+
+Every derivation is pure and deterministic: no time, randomness, or hidden
+state, no hash-map iteration, and ascending order with the kernel's own record
+order as the tie-breaker, so replaying a run projects byte-identical overlays.
+`Overlays` gains `safety` (default on) and `Overlay::Safety`; the Bevy viewer
+binds `B`, the terminal binds `b`.
+
+### Viewer wiring
+
+The Bevy viewer draws the occupied-region ring, a ring per emphasized body in
+the style's colour, a link ring on the other participants of the selected
+body's records, and a marker per record, and its inspector names the mode and
+lists the selected body's records with their participants. The terminal backend
+rasterizes the same overlays: an emphasis colour per body, the occupied ring,
+and one glyph per marker kind (in both the cell and Kitty pixel paths), and the
+one-line footer names the mode and the body's most recent record.
+
+### Public surface
+
+`tangle_present::{FrameEvent, EventParticipants, BodyEmphasis, OccupiedRegion,
+SafetyMarker, SafetyOverlay, event_summary, is_safety_record,
+MARKER_LIFETIME_SECONDS}`, `SceneBody::mode`, `SceneBody::project` (unchanged
+signature), `SceneFrame::safety` with `safety_markers`, `body_emphasis`,
+`occupied_regions`, `events_involving`, `region_points`,
+`SceneGeometry::{region_points, region_center}`, `Overlay::Safety`,
+`Overlays::safety`, and `PresentationController::{observe_events, safety}`.
+`BodyKind` is removed. No dependency changed: `tangle-present` already depended
+on `tangle-model` and `tangle-sim`, no Bevy type entered the kernel or the
+presentation layer, and `f64`/`glam::DVec2` are unchanged.
+
+### Golden impact (deliberate)
+
+`tests/golden/present/walking_guide_v1.seed0.tick20.scene.txt` is regenerated
+because the projected frame's shape changed; the whole diff is:
+
+- each of the six bodies: `kind: Vehicle` → `mode: Vehicle`;
+- `overlays` gains `safety: true`;
+- the frame gains `safety: SafetyOverlay { events: [], marker_lifetime_ticks:
+  40, occupied: [], queued: [], controlling: [] }` (40 ticks is 2.0 s at the
+  0.05 s standard step).
+
+No other golden changed: the trace golden and hash, the Phase 1 baseline, the
+cell grid, and the Kitty byte fixtures all pass without regeneration, and the
+view-command golden is unchanged because it prints named view fields rather than
+the frame.
+
+### Evidence
+
+- `crates/tangle-present/src/scene.rs`: `SceneBody::project` projects
+  `AgentMode::Vehicle` and `AgentMode::Pedestrian` from a sampled `MotionSample`
+  and the vehicle fallback without motion detail; a `RegionKey` resolves to its
+  own ring in its own id space and `region_center` is the ring's vertex mean;
+  `Overlay::Safety` toggles independently.
+- `crates/tangle-present/src/safety.rs`: the participants of every record kind
+  (spawned, despawned, yield, contact, near miss, violation, entry, exit, queue,
+  control transition), including a yield's crossing key and a conflict-region
+  key; `others` as the jump targets; the fold opening and closing occupancy,
+  queue, and controller states, including a despawn clearing every state without
+  a closing record; the marker window dropping records older than the lifetime
+  and `windowed_at` filtering without a newer observation; markers anchored on a
+  region centre, on a live participant, and on the survivor of a departed pair,
+  with a departed body drawing none; one precedence-ordered emphasis per body;
+  and `event_summary` wording for every record kind.
+- `crates/tangle-present/src/controller.rs`: observed records reach the projected
+  frame, projection is a pure read, a record past the window stops drawing a
+  marker while its open queue state persists, and a restart clears the run's
+  records.
+- `crates/tangle-present/tests/safety_overlays.rs` over the checked-in
+  `mixed_interaction_v1` benchmark at seed 3 for 800 ticks: two runs project
+  byte-identical overlays per tick; every marker is backed by a record the frame
+  carries and anchored on its region centre or inside its live participants;
+  emphasis names live bodies, ascending, at most once each; occupancy names
+  geometry regions and live occupants, ascending; every inspector link resolves
+  to a record and to bodies the frame draws or records; both modes project
+  through the same frames.
+- Real-stream evidence over that run: 7 yield, 15 near-miss, 14 entry, 11 exit,
+  115 queue, and 13 control-transition records fold into 6180 markers across 589
+  frames, occupancy in 545 frames, and 2986 body-emphasis entries (2054 control
+  transition, 849 near miss, 83 queue) with both modes present; the largest
+  retained window is 37 records, inside the 40-tick lifetime.
+- All five gates pass on the final tree: `cargo test --workspace --all-features`
+  (all 40 test binaries, including the regenerated scene golden, the trace
+  golden and hash, the Phase 1 baseline, and the renderer goldens),
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+  `braintree check nodes`.
+
+### Deferred
+
+- Event selection is a body-first UI: an inspector picks a record through a body
+  that participates in it (or through a marker, which exposes the same
+  `EventParticipants`). A pointer-picks-an-event interaction is not implemented;
+  the projection it would consume is.
+- Overlays show the event and occupancy side of the online metrics; the numeric
+  TTC, minimum-separation, and PET values slice D records are not yet drawn in a
+  viewer panel.
+- A marker is drawn at full strength for its lifetime and then disappears; a
+  fade or a per-kind lifetime is a presentation nicety with no consumer yet.
+- The Bevy viewer draws markers as circles and the terminal as one glyph per
+  kind, so the two backends agree on position, colour family, and kind but not
+  on the exact silhouette; a character cell affords only a glyph.
 
 # Limitations
 
