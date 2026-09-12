@@ -182,8 +182,13 @@ impl PixelRasterizer {
         if frame.overlays.geometry {
             self.draw_geometry(&mut image, frame);
         }
-        // One emphasis per emphasized body, so a body is styled once.
-        let emphasis: BTreeMap<usize, BodyEmphasis> = frame.body_emphasis().into_iter().collect();
+        // One emphasis per emphasized body, so a body is styled once. Emphasis
+        // is part of the safety overlay, so the overlay switch governs it too.
+        let emphasis: BTreeMap<usize, BodyEmphasis> = if frame.overlays.safety {
+            frame.body_emphasis().into_iter().collect()
+        } else {
+            BTreeMap::new()
+        };
         self.draw_bodies(&mut image, frame, &emphasis);
         if frame.overlays.safety {
             self.draw_safety(&mut image, frame);
@@ -429,9 +434,11 @@ mod tests {
 
     use std::sync::Arc;
 
-    use tangle_model::{CompiledScenario, parse_scenario_source};
+    use tangle_model::{CompiledScenario, CrossingId, parse_scenario_source};
     use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed};
-    use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
+    use tangle_sim::{AgentId, AgentMode, Event, RegionKey, RunConfig, Simulation, SnapshotDetail};
+
+    use crate::raster::{COLLISION_COLOR, QUEUE_COLOR};
 
     fn scenario() -> CompiledScenario {
         let source = parse_scenario_source(
@@ -523,6 +530,76 @@ mod tests {
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
         }
+    }
+
+    /// One still vehicle body, for a frame the simulation does not need to
+    /// produce.
+    fn vehicle(id: usize, position: DVec2) -> tangle_present::SceneBody {
+        tangle_present::SceneBody {
+            id,
+            position,
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            mode: AgentMode::Vehicle,
+            speed_mps: Some(0.0),
+            path: None,
+            path_distance_m: None,
+            route: None,
+            profile: None,
+            decision: None,
+        }
+    }
+
+    /// A frame over the general-primitive scenario, carrying a region entry, a
+    /// contact, and a standstill: every family the safety overlay draws.
+    fn safety_frame() -> SceneFrame {
+        let mut frame = general_frame(Viewport::new(DVec2::ZERO, 0.4));
+        frame.bodies = vec![vehicle(0, DVec2::ZERO), vehicle(1, DVec2::new(6.0, 0.0))];
+        frame.status.agents = frame.bodies.len();
+        let mut safety = SafetyOverlay::new(40);
+        safety.observe(
+            0,
+            &[
+                Event::Entry {
+                    agent: AgentId::from_index(0),
+                    region: RegionKey::Crossing(CrossingId::from_index(0)),
+                },
+                Event::Collision {
+                    agent: AgentId::from_index(0),
+                    other: AgentId::from_index(1),
+                    clearance_m: -0.4,
+                    contacting: true,
+                },
+                Event::Queue {
+                    agent: AgentId::from_index(1),
+                    joined: true,
+                },
+            ],
+        );
+        frame.safety = safety;
+        frame
+    }
+
+    #[test]
+    fn safety_occupancy_emphasis_and_markers_are_drawn() {
+        let raster = PixelRasterizer::new(160, 80);
+        let image = raster.rasterize(&safety_frame());
+        assert!(contains_color(&image, OCCUPIED_COLOR));
+        assert!(contains_color(&image, COLLISION_COLOR));
+        assert!(contains_color(&image, QUEUE_COLOR));
+    }
+
+    #[test]
+    fn the_safety_overlay_can_be_disabled() {
+        let raster = PixelRasterizer::new(160, 80);
+        let mut frame = safety_frame();
+        frame.overlays.safety = false;
+        let image = raster.rasterize(&frame);
+        assert!(!contains_color(&image, OCCUPIED_COLOR));
+        assert!(!contains_color(&image, COLLISION_COLOR));
+        assert!(!contains_color(&image, QUEUE_COLOR));
+        assert!(contains_color(&image, BODY_COLOR));
     }
 
     #[test]

@@ -169,8 +169,13 @@ impl Rasterizer {
         if frame.overlays.geometry {
             self.draw_geometry(&mut grid, frame);
         }
-        // One emphasis per emphasized body, so a body is styled once.
-        let emphasis: BTreeMap<usize, BodyEmphasis> = frame.body_emphasis().into_iter().collect();
+        // One emphasis per emphasized body, so a body is styled once. Emphasis
+        // is part of the safety overlay, so the overlay switch governs it too.
+        let emphasis: BTreeMap<usize, BodyEmphasis> = if frame.overlays.safety {
+            frame.body_emphasis().into_iter().collect()
+        } else {
+            BTreeMap::new()
+        };
         self.draw_bodies(&mut grid, frame, &emphasis);
         if frame.overlays.safety {
             self.draw_safety(&mut grid, frame);
@@ -450,9 +455,9 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use tangle_model::{CompiledScenario, parse_scenario_source};
+    use tangle_model::{CompiledScenario, CrossingId, parse_scenario_source};
     use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport};
-    use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
+    use tangle_sim::{AgentId, Event, RegionKey, RunConfig, Simulation, SnapshotDetail};
 
     fn scenario() -> CompiledScenario {
         let source = parse_scenario_source(
@@ -561,6 +566,108 @@ mod tests {
         let world = raster.world_at(viewport, col, row);
         assert!((world.x - 15.0).abs() < 1e-9);
         assert!((world.y - 1.0).abs() < 1e-9);
+    }
+
+    /// A frame over two vehicles and one crossing region, carrying a contact,
+    /// a standstill, and a region entry at tick 0: every family the safety
+    /// overlay draws.
+    fn safety_frame() -> SceneFrame {
+        let source = parse_scenario_source(
+            "{ schema_version: 1, id: 'cross', \
+             coordinate_system: { x: 'east_m', y: 'north_m' }, \
+             paths: [ { id: 'ew', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] } ], \
+             portals: [ { id: 'west', path: 'ew', end: 'start', width_m: 3.5 }, \
+             { id: 'east', path: 'ew', end: 'end', width_m: 3.5 } ], \
+             regions: [ { id: 'area', points: [ { x: -2, y: -4 }, { x: 2, y: -4 }, \
+             { x: 2, y: 4 }, { x: -2, y: 4 } ] } ], \
+             movements: [ { id: 'ew_through', from: 'west', to: 'east', path: 'ew', \
+             priority: 0 } ], \
+             crossings: [ { id: 'cross', region: 'area', movements: [ 'ew_through' ] } ], \
+             population: { vehicle_count: 2, vehicle_speed_mps: 12.0, vehicle_spacing_m: 20.0, \
+             vehicle_length_m: 4.5, vehicle_width_m: 1.8 } }",
+        )
+        .expect("scenario parses");
+        let compiled = CompiledScenario::compile(source).expect("scenario compiles");
+        let sim = Simulation::new(compiled.clone(), RunConfig::new(0)).expect("builds");
+        let snapshot = sim.snapshot(SnapshotDetail::Full);
+        let mut safety = SafetyOverlay::new(40);
+        safety.observe(
+            0,
+            &[
+                Event::Entry {
+                    agent: AgentId::from_index(0),
+                    region: RegionKey::Crossing(CrossingId::from_index(0)),
+                },
+                Event::Collision {
+                    agent: AgentId::from_index(0),
+                    other: AgentId::from_index(1),
+                    clearance_m: -0.4,
+                    contacting: true,
+                },
+                Event::Queue {
+                    agent: AgentId::from_index(1),
+                    joined: true,
+                },
+            ],
+        );
+        SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: snapshot.agents().len(),
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport: Viewport::new(DVec2::ZERO, 0.5),
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies: snapshot
+                .agents()
+                .iter()
+                .map(|sample| tangle_present::SceneBody::project(&[], sample, 0.0))
+                .collect(),
+            overlays: Overlays::default(),
+            safety,
+        }
+    }
+
+    /// Every cell the rasterizer drew, as `(glyph, foreground color)`.
+    fn raster_cells(frame: &SceneFrame) -> Vec<(char, Rgb)> {
+        let raster = Rasterizer::new(120, 40);
+        let grid = raster.rasterize(frame);
+        (0..grid.height())
+            .flat_map(|row| (0..grid.width()).map(move |col| (col, row)))
+            .filter_map(|(col, row)| grid.get(i64::from(col), i64::from(row)))
+            .map(|cell| (cell.ch, cell.fg))
+            .collect()
+    }
+
+    #[test]
+    fn safety_occupancy_emphasis_and_markers_are_rasterized() {
+        let cells = raster_cells(&safety_frame());
+        for (name, cell) in [
+            ("occupied region ring", (OCCUPIED_GLYPH, OCCUPIED_COLOR)),
+            ("contact marker", ('X', COLLISION_COLOR)),
+            ("standstill marker", ('q', QUEUE_COLOR)),
+            ("emphasized body", (BODY_GLYPH, COLLISION_COLOR)),
+        ] {
+            assert!(cells.contains(&cell), "the {name} was not rasterized");
+        }
+    }
+
+    #[test]
+    fn the_safety_overlay_can_be_disabled() {
+        let mut frame = safety_frame();
+        frame.overlays.safety = false;
+        let cells = raster_cells(&frame);
+        assert!(!cells.contains(&(OCCUPIED_GLYPH, OCCUPIED_COLOR)));
+        assert!(!cells.contains(&('X', COLLISION_COLOR)));
+        assert!(!cells.contains(&('q', QUEUE_COLOR)));
+        assert!(
+            cells.contains(&(BODY_GLYPH, BODY_COLOR)),
+            "a body must still draw unemphasized"
+        );
     }
 
     #[test]
