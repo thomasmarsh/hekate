@@ -39,6 +39,7 @@ mod config;
 mod control;
 mod demand;
 mod event;
+mod index;
 pub mod pedestrian;
 mod pedestrian_compliance;
 mod profile;

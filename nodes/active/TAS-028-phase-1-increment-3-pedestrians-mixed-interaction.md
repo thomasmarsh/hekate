@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T17:57:04Z
+updated: 2026-09-12T18:10:21Z
 summary: Phase 1 Increment 3 adds pedestrian bodies, demand, and waypoint/collision-avoidance control, contextual crossing-against-signal noncompliance, vehicle yielding to occupied crossings, and explicit controller interfaces so cars and pedestrians share one world, rule and event representation, and mixed benchmark.
-next: Add vehicle yielding and stopping response to an occupied crossing in the shared rule, spatial-index, and event representation.
+next: Add explicit, replaceable controller interfaces and model cards for the initial vehicle and pedestrian models over a minimum-separated mixed benchmark.
 ---
 
 # Outcome
@@ -439,3 +439,133 @@ a compliant wait and a noncompliant crossing.
   still draws every body as a vehicle (slice A's deferral, unchanged); the
   pedestrian decision is not yet projected into the presentation inspector.
 
+## Slice D — vehicle yielding to an occupied crossing
+
+A vehicle whose movement is obliged by an authored `yield` rule now brakes for
+the crossing it crosses while a pedestrian body occupies the crossing region,
+and resumes when the crossing clears. The occupancy test, the rule, and the
+transition all come from the shared representation, so vehicles and pedestrians
+share one spatial index, one rule, and one event stream. No schema change was
+needed: the schema already carries movement `rules` with `RuleKind::Yield` and
+crossings that name the movements they cross. No new random draw was added, so
+every named stream is untouched.
+
+### Shared spatial index
+
+`crates/tangle-sim/src/index.rs` is the new, documented foundation for
+Increment 4's deterministic uniform-grid broad phase: a uniform grid over the
+live agents of both modes, built once at the start of each tick from the
+shared, stable-order `AgentStore`, plus the exact spatial predicates a candidate
+query feeds. Cells are stored in a `Vec` sorted by integer cell coordinate and
+binary-searched, so nothing iterates a hash map; a query fills a reused buffer
+with candidates in ascending `AgentId` order, so ties break by agent id, and
+each agent occupies exactly one cell, so a candidate is never returned twice.
+`Simulation` rebuilds the index before any body moves, so every
+crossing-occupancy query in a tick sees one consistent candidate view
+independent of agent iteration order. The crossing occupancy query widens the
+region's bounding box by a fixed margin (covering the largest pedestrian
+radius), then applies an exact circle-versus-ring test, so the candidate set is
+independent of any sampled body size.
+
+### Shared rule and event
+
+- The shared rule is the crossing the vehicle's movement crosses
+  (`CompiledCrossing::movements`) plus the movement's authored
+  `RuleKind::Yield` rule; a movement without the rule is unaffected, so
+  yielding is scenario data rather than a simulator branch. The crossing's
+  shared authored region supplies the geometry, and its region ring projected
+  onto the movement path gives the entry progress used for the stop point.
+- `Event::Yielded { agent, crossing, yielding }` is emitted once per transition
+  (begin and end) through the shared typed event system. This is a new variant,
+  not a change to an existing event's meaning or fields, so `EVENT_VERSION`
+  stays `1` and no golden event stream changed; the canonical trace gains a
+  `crossing`/`yielding` field only on the new variant.
+
+### Yielding, bounded and physically possible
+
+An occupied crossing is modeled exactly like a stop line: a stationary IDM
+constraint with a zero standstill gap, plus the kernel's front-bumper position
+cap. The yield stop point sits 0.5 m short of the crossing entry, so the whole
+vehicle body stays clear of the region, a waiting pedestrian's waypoint is never
+blocked, and the gap stays strictly positive at rest so a stopped vehicle keeps
+yielding instead of creeping across the entry and coasting through a crossing
+pedestrian. IDM's commanded braking stays within the profile's comfortable
+bound; the position cap is the documented emergency backstop and is counted in
+`emergency_cap_steps`. The vehicle never teleports and never uses the cap as its
+normal braking regime: in the mixed benchmark the cap is the exception (a few
+steps per 4000-tick run).
+
+Geometry: a vehicle yields while the crossing is occupied and its front bumper
+is upstream of the entry; once the bumper reaches the entry the vehicle is
+committed and continues under ordinary IDM. Occupancy counts only pedestrians,
+so a vehicle in the region does not itself block another vehicle. The occupancy
+query returns the next crossing the front bumper has not cleared, preferring
+the nearest.
+
+### Scenario
+
+`scenarios/benchmarks/pedestrian_crossing_v1.json5` now authors
+`rules: [ { movement: 'ew_through', kind: 'yield' } ]`, so the checked-in mixed
+benchmark exercises an occupied crossing and vehicles yield to it.
+
+### Evidence
+
+- `crates/tangle-sim/src/index.rs` unit tests: both modes are indexed and a
+  query returns whichever is inside the box, candidate order is ascending
+  across cells, dead slots are skipped and an agent is never returned twice, an
+  empty query clears a reused buffer, the circle-versus-ring overlap boundaries,
+  and the invalid-cell-size fallback.
+- `crates/tangle-sim/tests/vehicle_yielding.rs` (new, 7 tests): a vehicle holds
+  its front bumper clear of an occupied crossing entry and resumes; yield
+  transitions alternate begin/end per agent and match the observable
+  `agent_yield_crossing` state; a deceleration beyond the sampled comfortable
+  braking is always a counted cap step and the cap stays the exception; the
+  checked-in mixed benchmark runs six seeds with **0 vehicle–pedestrian
+  overlaps, 0 vehicle-initiated overlaps, 0 non-finite state, and 0 route
+  deadlock**; the same benchmark with only the `yield` rule removed reproduces
+  the slice-B residual (nonzero vehicle-pedestrian and vehicle-initiated
+  overlaps over the six-seed sweep) while the rule-bearing benchmark has 0;
+  same-seed
+  reproducibility of the mixed trace; and a movement without the rule never
+  yields.
+- Before/after on `pedestrian_crossing_v1` (4000 ticks/seed): without the rule
+  seeds 0–15 show 9–286 vehicle–pedestrian overlaps (1–30 vehicle-initiated)
+  per seed; with the rule every measured seed shows 0 overlaps and 0
+  vehicle-initiated overlaps, with no route deadlock and the pedestrian spacing
+  cap never near its bound.
+- The slice-B `pedestrian_control.rs` benchmark test still passes; only its
+  stale "no vehicle reacts to a pedestrian" comment was updated, since the
+  vehicle-side assertion now lives in `vehicle_yielding.rs`.
+- The five gates pass on the final tree: `cargo test --workspace --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`, and
+  `braintree check nodes`. The walking trace golden, the scene golden, and the
+  Phase 1 baseline are unchanged.
+
+### New public surface
+
+`Simulation::agent_yield_crossing(AgentId) -> Option<CrossingId>`,
+`MotionSample::yield_crossing`, and the re-exported `Event::Yielded` variant.
+The shared spatial index is crate-internal, as befits an Increment 4
+foundation.
+
+### Deferred to later slices
+
+- Explicit, replaceable controller interfaces and the consolidated model-card
+  pair for the initial vehicle and pedestrian models (slice E), plus a
+  minimum-separated mixed benchmark.
+- Increment 4 formalizes the index into the broad phase and adds exact
+  box/box, circle/circle, and box/circle queries plus swept bounds; the
+  crossing yield still uses only the candidate query and an exact
+  circle-versus-ring test.
+- The yield stop point is the crossing region entry projected onto the
+  movement path, so an oblique crossing's stop point is the least ring-vertex
+  progress; a stop point derived from the path/region intersection is later
+  work.
+- The position cap still engages for a pedestrian that enters the occupied
+  region inside the vehicle's braking distance, which a TTC/lookahead rule
+  (Increment 4) could largely avoid.
+- A committed vehicle inside the crossing does not reserve it against a
+  following vehicle, so a closely following vehicle that enters while clear can
+  still meet a pedestrian that arrives afterwards; minimum-separation work
+  (Increment 4) owns that gap.

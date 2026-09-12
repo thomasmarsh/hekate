@@ -176,6 +176,7 @@ fn spawns(sim: &mut Simulation) -> Vec<(AgentId, PathId, f64)> {
                 distance_m,
             } => Some((*agent, *path, *distance_m)),
             Event::Despawned { .. } => None,
+            Event::Yielded { .. } => None,
         })
         .collect()
 }

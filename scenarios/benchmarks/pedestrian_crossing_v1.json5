@@ -5,8 +5,9 @@
 // a waiting area on the south kerb, one pedestrian route through both, and
 // demand for each mode. The layout is expressed entirely from general
 // primitives, so no field names a scenario kind. A full pedestrian compliance
-// range makes some pedestrians cross against the signal; vehicle yielding to an
-// occupied crossing is a later slice. See PHASE_1_PLAN.md Increment 3.
+// range makes some pedestrians cross against the signal, and a `yield` rule on
+// the road movement makes vehicles yield to the crossing while a pedestrian
+// occupies it. See PHASE_1_PLAN.md Increment 3.
 {
   schema_version: 1,
   id: 'pedestrian_crossing_v1',
@@ -67,6 +68,9 @@
         ],
       },
     },
+  ],
+  rules: [
+    { id: 'yield_to_road_crossing', movement: 'ew_through', kind: 'yield' },
   ],
   waiting_areas: [ { id: 'south_wait', region: 'south_kerb' } ],
   pedestrian_routes: [

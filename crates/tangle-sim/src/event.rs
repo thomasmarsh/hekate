@@ -1,6 +1,6 @@
 //! Typed state transitions observed during a step.
 
-use tangle_model::PathId;
+use tangle_model::{CrossingId, PathId};
 
 use crate::agent::AgentId;
 
@@ -44,13 +44,29 @@ pub enum Event {
         /// Why it left.
         reason: DespawnReason,
     },
+    /// A vehicle began or ended yielding to an occupied crossing.
+    ///
+    /// Emitted once per transition, so a consumer sees exactly the two edges
+    /// of the yield. The vehicle yields while a pedestrian body overlaps the
+    /// crossing region and its front bumper is still upstream of the crossing
+    /// entry; see [`crate::Simulation`] for the yielding rule.
+    Yielded {
+        /// The yielding vehicle.
+        agent: AgentId,
+        /// The crossing it yields to.
+        crossing: CrossingId,
+        /// `true` when the yield began, `false` when it ended.
+        yielding: bool,
+    },
 }
 
 impl Event {
     /// The agent this event is about.
     pub const fn agent(self) -> AgentId {
         match self {
-            Self::Spawned { agent, .. } | Self::Despawned { agent, .. } => agent,
+            Self::Spawned { agent, .. }
+            | Self::Despawned { agent, .. }
+            | Self::Yielded { agent, .. } => agent,
         }
     }
 }

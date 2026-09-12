@@ -178,6 +178,7 @@ fn every_admitted_vehicle_receives_its_assigned_route() {
             .filter_map(|event| match event {
                 Event::Spawned { agent, .. } => Some(*agent),
                 Event::Despawned { .. } => None,
+                Event::Yielded { .. } => None,
             })
             .collect();
         for agent in spawned {
@@ -248,6 +249,7 @@ fn profile_sampling_stays_within_the_configured_ranges() {
             .filter_map(|event| match event {
                 Event::Spawned { agent, .. } => Some(*agent),
                 Event::Despawned { .. } => None,
+                Event::Yielded { .. } => None,
             })
             .collect();
         for agent in spawned {
@@ -342,6 +344,7 @@ fn same_seed_reproduces_demand_and_profiles() {
                 .filter_map(|event| match event {
                     Event::Spawned { agent, .. } => Some(*agent),
                     Event::Despawned { .. } => None,
+                    Event::Yielded { .. } => None,
                 })
                 .collect();
             for agent in spawned {

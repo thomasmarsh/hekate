@@ -6,7 +6,7 @@
 //! shift; state-affecting logic therefore never iterates a hash map.
 
 use glam::DVec2;
-use tangle_model::{MovementId, PathId, PedestrianRouteId};
+use tangle_model::{CrossingId, MovementId, PathId, PedestrianRouteId};
 
 use crate::compliance::ComplianceDecision;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
@@ -107,6 +107,11 @@ pub(crate) struct AgentStore {
     /// Most recent pedestrian signal-compliance decision, present for a
     /// pedestrian approaching a signal-controlled crossing.
     pub(crate) pedestrian_decision: Vec<Option<PedestrianComplianceDecision>>,
+    /// Crossing a vehicle is currently yielding to, present for a vehicle
+    /// obliged by a `yield` rule and stopped for an occupied crossing. `None`
+    /// for every other agent, and for a yielding vehicle once the crossing
+    /// clears.
+    pub(crate) yield_crossing: Vec<Option<CrossingId>>,
 }
 
 impl AgentStore {
@@ -130,6 +135,7 @@ impl AgentStore {
         self.pedestrian_waypoint_index.push(0);
         self.decision.push(None);
         self.pedestrian_decision.push(None);
+        self.yield_crossing.push(None);
         id
     }
 

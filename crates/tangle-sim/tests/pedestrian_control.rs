@@ -6,12 +6,12 @@
 //! their own small scenarios, so a checked-in benchmark change cannot silently
 //! move the kernel contract they assert.
 //!
-//! Pedestrian signal compliance and vehicle yielding to an occupied crossing
-//! are later slices; nothing here asserts a signal rule, and a vehicle is not
-//! expected to react to a pedestrian. A pedestrian can therefore still be
-//! overlapped by a vehicle that is already committed to crossing its path, so
-//! the benchmark test below asserts only what this slice guarantees: a
-//! pedestrian's own step never initiates contact with a body.
+//! Nothing here asserts a pedestrian signal rule. Vehicle yielding to an
+//! occupied crossing is slice D and is asserted in `vehicle_yielding.rs`; the
+//! benchmark test below still asserts only what this slice guarantees: a
+//! pedestrian's own step never initiates contact with a body. The checked-in
+//! benchmark now authors a `yield` rule, so its isolated scenarios here keep
+//! their own small layouts and this file's contract is unchanged by yielding.
 
 use glam::DVec2;
 use tangle_model::{
@@ -717,9 +717,9 @@ fn the_pedestrian_crossing_benchmark_completes_without_tunnelling_or_nan() {
                     }
                     // A pedestrian's own step must never make first contact
                     // with a body that is not itself already moving onto the
-                    // pedestrian. Vehicle yielding to an occupied crossing is
-                    // a later slice, so a vehicle-initiated overlap is measured
-                    // by this classification but not asserted here.
+                    // pedestrian. A vehicle-initiated overlap is measured by
+                    // this classification but asserted in `vehicle_yielding.rs`,
+                    // which owns the vehicle-yielding slice.
                     let clearance_m = circle_box_clearance(
                         sample.position,
                         radius_m,

@@ -20,13 +20,17 @@
 //! of a crossing ([`crate::signal`]) and the contextual pedestrian
 //! signal-compliance decision ([`crate::PedestrianComplianceDecision`]) that gates a
 //! compliant pedestrian's stopping profile and records a traceable reason.
-//! Mixed interaction beyond avoidance and pedestrian signal compliance is a
-//! later slice.
+//! Increment 3 slice D adds vehicle yielding to an occupied crossing: a
+//! vehicle obliged by an authored `yield` rule brakes for the crossing it
+//! crosses while a pedestrian body overlaps the crossing region, using the
+//! shared spatial index ([`crate::index`]) and the shared typed event system
+//! ([`Event::Yielded`]).
 
 use glam::DVec2;
 use tangle_model::{
-    CompiledMovement, CompiledPedestrianRoute, CompiledScenario, CrossingId, DemandId, MovementId,
-    PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PortalId, SignalColor, SignalId,
+    CompiledMovement, CompiledPath, CompiledPedestrianRoute, CompiledScenario, CrossingId,
+    DemandId, MovementId, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PortalId,
+    RuleKind, SignalColor, SignalId,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore};
@@ -35,6 +39,7 @@ use crate::config::RunConfig;
 use crate::control::{self, Constraint, IDM_STANDSTILL_GAP_M};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
 use crate::event::{DespawnReason, Event};
+use crate::index::{self, SpatialIndex};
 use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
 use crate::profile::{
@@ -56,6 +61,23 @@ use crate::units::Seconds;
 /// every live body on the same path. This is a portal rule, not a collision
 /// check; exact box queries spanning crossing paths are Increment 4 work.
 const MIN_SPAWN_CLEARANCE_M: f64 = 1.0;
+
+/// Extra metres added around a crossing region's bounding box when querying the
+/// shared spatial index for candidate bodies.
+///
+/// It only widens the candidate query: the query covers the largest pedestrian
+/// radius (0.30 m) plus a buffer, and the exact circle-versus-ring test then
+/// decides whether a body actually occupies the region. A margin keeps the
+/// candidate set independent of any one sampled body's size.
+const CROSSING_QUERY_MARGIN_M: f64 = 0.5;
+
+/// Metres short of a crossing entry a yielding vehicle comes to rest.
+///
+/// The stop point sits behind the crossing region, so the vehicle's whole body
+/// stays clear of it and a waiting pedestrian's waypoint is never blocked. The
+/// positive margin also keeps the front-bumper gap strictly positive at rest,
+/// so a stopped vehicle keeps yielding instead of creeping across the entry.
+const YIELD_STOP_MARGIN_M: f64 = 0.5;
 
 /// Failure to build a [`Simulation`] from a compiled scenario and run config.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -184,6 +206,12 @@ pub struct Simulation {
     /// Reused per-pedestrian neighbour buffer, so the avoidance scan does not
     /// allocate inside the tick loop.
     conflicts: Vec<Conflict>,
+    /// Shared uniform-grid spatial index over live agents of both modes,
+    /// rebuilt once at the start of each tick.
+    spatial: SpatialIndex,
+    /// Reused candidate buffer for a crossing-occupancy query, so the query
+    /// does not allocate inside the tick loop.
+    candidates: Vec<AgentId>,
     events: Vec<Event>,
     population_announced: bool,
     spawned_total: u64,
@@ -315,6 +343,8 @@ impl Simulation {
             pedestrian_signals,
             waypoints,
             conflicts: Vec::new(),
+            spatial: SpatialIndex::default(),
+            candidates: Vec::new(),
             events: Vec::new(),
             population_announced: false,
             spawned_total,
@@ -370,6 +400,7 @@ impl Simulation {
                         pedestrian_profile: self.agents.pedestrian_profile[index],
                         decision: self.agents.decision[index],
                         pedestrian_decision: self.agents.pedestrian_decision[index],
+                        yield_crossing: self.agents.yield_crossing[index],
                     }),
                 },
             })
@@ -544,6 +575,20 @@ impl Simulation {
             .flatten()
     }
 
+    /// Crossing a live vehicle is currently yielding to.
+    ///
+    /// Present only while the vehicle is yielding: its movement is obliged by a
+    /// `yield` rule, the crossing it crosses is occupied by a pedestrian, and
+    /// its front bumper is still upstream of the crossing entry. `None`
+    /// otherwise, including once the crossing clears.
+    pub fn agent_yield_crossing(&self, agent: AgentId) -> Option<CrossingId> {
+        self.agents
+            .yield_crossing
+            .get(agent.index())
+            .copied()
+            .flatten()
+    }
+
     /// Current pedestrian signal state of a crossing.
     ///
     /// `None` when the crossing is uncontrolled (carries no pedestrian signal).
@@ -605,6 +650,11 @@ impl Simulation {
             runtime.advance(dt);
         }
 
+        // Rebuild the shared spatial index once, before any body moves, so
+        // every crossing-occupancy query this tick sees one consistent
+        // candidate view that does not depend on agent iteration order.
+        self.spatial.rebuild(&self.agents);
+
         for index in 0..self.agents.len() {
             if !self.agents.alive[index] {
                 continue;
@@ -626,6 +676,10 @@ impl Simulation {
         // speed, so the stop-line constraint the controller sees is exactly
         // the recorded decision.
         self.update_signal_decision(index);
+        // Recompute the crossing-yield state from the shared index before
+        // integrating the speed, so the yield constraint the controller sees
+        // is exactly the recorded state and the transition is emitted once.
+        self.update_yield_state(index);
         let direction = self.agents.direction[index];
         // Profile vehicles drive under IDM; the walking skeleton's static
         // population keeps its constant speed and is byte-identical.
@@ -897,23 +951,25 @@ impl Simulation {
 
     /// Speed for one profile vehicle after IDM, its bounds, and safety caps.
     ///
-    /// The controller is the documented IDM in [`crate::control`]. Two hard
+    /// The controller is the documented IDM in [`crate::control`]. Three hard
     /// caps keep the bounded model collision-free without an extra collision
-    /// resolver: the next speed may not pass the nearest leader's rear, and it
-    /// may not pass a stop line whose control requires a stop. Each cap can
-    /// force a deceleration beyond the profile's comfortable value, so a step
-    /// where it does is counted in [`Self::emergency_cap_steps`].
+    /// resolver: the next speed may not pass the nearest leader's rear, a stop
+    /// line whose control requires a stop, or an occupied crossing the vehicle
+    /// is obliged to yield to. Each cap can force a deceleration beyond the
+    /// profile's comfortable value, so a step where it does is counted in
+    /// [`Self::emergency_cap_steps`].
     fn controlled_speed(&mut self, index: usize, profile: &VehicleProfile, dt: f64) -> f64 {
         let leader = self.nearest_leader(index);
         let stop_line = self.stop_line_constraint(index);
+        let crossing_yield = self.crossing_yield_constraint(index);
 
         let mut constraints = [Constraint {
             gap_m: f64::INFINITY,
             speed_mps: 0.0,
             standstill_m: 0.0,
-        }; 2];
+        }; 3];
         let mut count = 0;
-        for constraint in [leader, stop_line].into_iter().flatten() {
+        for constraint in [leader, stop_line, crossing_yield].into_iter().flatten() {
             constraints[count] = constraint;
             count += 1;
         }
@@ -934,6 +990,15 @@ impl Simulation {
             // A required stop holds the front bumper at the authored line.
             new_speed = new_speed.min(stop_line.gap_m / dt);
         }
+        if let Some(crossing_yield) = crossing_yield {
+            // Yielding holds the front bumper at the yield stop point short of
+            // the crossing entry, so a vehicle never drives onto a
+            // pedestrian-occupied crossing. The occupancy appears while the
+            // vehicle is still far enough away for IDM's bounded braking in
+            // the normal regime, so this cap is a backstop rather than the
+            // usual way a vehicle stops.
+            new_speed = new_speed.min(crossing_yield.gap_m / dt);
+        }
         let new_speed = new_speed.max(0.0);
 
         // Comfortable braking alone would leave the vehicle at this speed, so
@@ -943,6 +1008,177 @@ impl Simulation {
             self.emergency_cap_steps += 1;
         }
         new_speed
+    }
+
+    /// Whether an authored `yield` rule obliges a movement to yield to the
+    /// crossings it crosses.
+    ///
+    /// This is the shared rule representation: a crossing names the movements
+    /// it crosses ([`tangle_model::CompiledCrossing::movements`]) and a
+    /// movement's [`RuleKind::Yield`] rule is the obligation to yield to them.
+    /// A movement with no yield rule is unaffected, so yielding is authored
+    /// scenario data rather than a simulator branch, and adding this rule never
+    /// changes a scenario that omits it.
+    fn movement_yields(&self, movement: MovementId) -> bool {
+        self.scenario
+            .rules()
+            .iter()
+            .any(|rule| rule.movement() == movement && rule.kind() == RuleKind::Yield)
+    }
+
+    /// Recompute the crossing a vehicle yields to and emit any transition.
+    ///
+    /// A vehicle yields to the next crossing its movement crosses, only while
+    /// that crossing is occupied by a pedestrian and its front bumper is still
+    /// upstream of the crossing entry. The recorded state is the crossing
+    /// currently yielded to; a change emits [`Event::Yielded`] for the crossing
+    /// the yield ended on and then the one it began on, so every consumer sees
+    /// the transition through the shared event stream.
+    fn update_yield_state(&mut self, index: usize) {
+        let previous = self.agents.yield_crossing[index];
+        let mut desired = None;
+        if let Some(movement) = self.agents.movement[index]
+            && self.movement_yields(movement)
+            && let Some(crossing) = self.next_crossing(index, movement)
+            && self.crossing_occupied(crossing)
+        {
+            desired = Some(crossing);
+        }
+        if desired == previous {
+            return;
+        }
+        let agent = AgentId::from_index(index);
+        if let Some(previous) = previous {
+            self.events.push(Event::Yielded {
+                agent,
+                crossing: previous,
+                yielding: false,
+            });
+        }
+        if let Some(desired) = desired {
+            self.events.push(Event::Yielded {
+                agent,
+                crossing: desired,
+                yielding: true,
+            });
+        }
+        self.agents.yield_crossing[index] = desired;
+    }
+
+    /// The next crossing across a movement's path whose entry the vehicle's
+    /// front bumper has not reached, preferring the one it reaches first.
+    ///
+    /// A crossing whose entry the front bumper has reached is behind the
+    /// vehicle's yield point, so the vehicle is committed to it and continues
+    /// under ordinary IDM control rather than stopping in the crossing. The
+    /// stop point sits [`YIELD_STOP_MARGIN_M`] short of the entry, so a stopped
+    /// vehicle holds clear of the region and keeps its yield while the crossing
+    /// stays occupied.
+    fn next_crossing(&self, index: usize, movement: MovementId) -> Option<CrossingId> {
+        let path = self.scenario.path(self.agents.path[index])?;
+        let direction = self.agents.direction[index];
+        let own_front =
+            direction * self.agents.distance_m[index] + self.agents.body_length_m[index] * 0.5;
+        let mut best: Option<(CrossingId, f64)> = None;
+        for crossing in self.scenario.crossings() {
+            if !crossing.movements().contains(&movement) {
+                continue;
+            }
+            let Some(entry) = self.crossing_entry_progress(crossing.id(), path, direction) else {
+                continue;
+            };
+            if own_front >= entry {
+                continue;
+            }
+            match best {
+                Some((_, best_entry)) if best_entry <= entry => {}
+                _ => best = Some((crossing.id(), entry)),
+            }
+        }
+        best.map(|(crossing, _)| crossing)
+    }
+
+    /// Travel progress of a crossing region's entry along a vehicle path: the
+    /// least progress among the region's ring vertices projected onto the path.
+    ///
+    /// That is the first point of the region the vehicle reaches. Using the
+    /// crossing's shared authored region keeps its geometry and its vehicle
+    /// rule in one representation.
+    fn crossing_entry_progress(
+        &self,
+        crossing: CrossingId,
+        path: &CompiledPath,
+        direction: f64,
+    ) -> Option<f64> {
+        let region = self.scenario.crossing(crossing)?.region();
+        let ring = self.scenario.region(region)?.polygon().ring();
+        let length = path.length();
+        let mut entry: Option<f64> = None;
+        for &vertex in ring {
+            let arc_m = pedestrian::closest_arc(path, vertex);
+            let progress = pedestrian::route_progress_m(arc_m, direction, length);
+            entry = Some(entry.map_or(progress, |current| current.min(progress)));
+        }
+        entry
+    }
+
+    /// Stop constraint for a vehicle yielding to an occupied crossing.
+    ///
+    /// The constraint holds the front bumper at [`YIELD_STOP_MARGIN_M`] short
+    /// of the crossing entry, exactly as a stop line holds the bumper at the
+    /// authored line: IDM sees a stationary constraint with a zero standstill
+    /// gap, and the kernel adds a position cap. `None` when the vehicle is not
+    /// yielding.
+    fn crossing_yield_constraint(&self, index: usize) -> Option<Constraint> {
+        let crossing = self.agents.yield_crossing[index]?;
+        let path = self.scenario.path(self.agents.path[index])?;
+        let direction = self.agents.direction[index];
+        let own_front =
+            direction * self.agents.distance_m[index] + self.agents.body_length_m[index] * 0.5;
+        let entry = self.crossing_entry_progress(crossing, path, direction)?;
+        Some(Constraint {
+            gap_m: (entry - YIELD_STOP_MARGIN_M - own_front).max(0.0),
+            speed_mps: 0.0,
+            standstill_m: 0.0,
+        })
+    }
+
+    /// Whether any live pedestrian body overlaps a crossing region.
+    ///
+    /// Candidates come from the shared spatial index, so both modes share one
+    /// candidate query; the exact circle-versus-ring test then decides overlap.
+    /// Candidates are visited in ascending agent id order, the documented
+    /// tie-break, and the scan stops at the first overlap.
+    fn crossing_occupied(&mut self, crossing: CrossingId) -> bool {
+        let Some(region) = self
+            .scenario
+            .crossing(crossing)
+            .map(|crossing| crossing.region())
+        else {
+            return false;
+        };
+        let Some(ring) = self
+            .scenario
+            .region(region)
+            .map(|region| region.polygon().ring())
+        else {
+            return false;
+        };
+        let bounds = bounding_box(ring);
+        let margin = DVec2::splat(CROSSING_QUERY_MARGIN_M);
+        self.spatial
+            .candidates_in_aabb(bounds.0 - margin, bounds.1 + margin, &mut self.candidates);
+        for candidate in &self.candidates {
+            let index = candidate.index();
+            if self.agents.mode[index] != AgentMode::Pedestrian {
+                continue;
+            }
+            let radius_m = self.agents.body_length_m[index] * 0.5;
+            if index::circle_overlaps_ring(ring, self.agents.position[index], radius_m) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Nearest live leader ahead on the same path travelling the same way.
@@ -1330,6 +1566,23 @@ impl Simulation {
         }
         speed_mps.max(0.0)
     }
+}
+
+/// Axis-aligned bounding box of a polygon ring, as `(min, max)`.
+///
+/// An empty ring falls back to the origin, so a caller can always pass the box
+/// to a query without a special case.
+fn bounding_box(ring: &[DVec2]) -> (DVec2, DVec2) {
+    let mut min = DVec2::splat(f64::INFINITY);
+    let mut max = DVec2::splat(f64::NEG_INFINITY);
+    for &vertex in ring {
+        min = min.min(vertex);
+        max = max.max(vertex);
+    }
+    if ring.is_empty() {
+        return (DVec2::ZERO, DVec2::ZERO);
+    }
+    (min, max)
 }
 
 /// Vehicles that fit along a path at the configured centre-to-centre spacing.

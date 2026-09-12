@@ -101,8 +101,9 @@
 //! body's own worst-case translation this bounds the closure per step: a
 //! pedestrian never tunnels through a body, never teleports, and never makes the
 //! first contact with a body ahead — a pedestrian steps into another body only
-//! when that body is itself already moving onto the pedestrian, which is what a
-//! non-yielding vehicle does until the increment's vehicle-yielding slice lands.
+//! when that body is itself already moving onto the pedestrian, which a vehicle
+//! can still do when its movement carries no `yield` rule or it is already
+//! committed to the crossing (see [`crate::Simulation`]).
 //! The cap only ever *reduces* the step, and it never applies to motion away
 //! from a body, so a squeezed pedestrian can always turn out and step clear, and
 //! cannot deadlock on a body. When the cap demands a deceleration beyond
@@ -135,14 +136,15 @@
 //!
 //! ## Deferred
 //!
-//! Vehicle yielding to an occupied crossing is the next Increment 3 slice: this
-//! controller slows and steers around other bodies but encodes no signal rule,
-//! and no vehicle reacts to a pedestrian. A pedestrian can therefore be
-//! overlapped by a vehicle that is already committed to the crossing; closing
-//! that gap is exactly the vehicle-yielding work the next slice owns. Whether a
-//! pedestrian waits for a forbidding crossing signal is
-//! [`crate::PedestrianComplianceDecision`], which only reduces the commanded speed and
-//! never bypasses this controller's bounds.
+//! This controller slows and steers around other bodies but encodes no signal
+//! rule of its own. Whether a pedestrian waits for a forbidding crossing signal
+//! is [`crate::PedestrianComplianceDecision`], which only reduces the commanded
+//! speed and never bypasses this controller's bounds. Vehicle yielding to an
+//! occupied crossing is Increment 3 slice D and lives with the vehicle rule in
+//! [`crate::Simulation`]: a vehicle whose movement carries a `yield` rule
+//! brakes for the crossing it crosses while a pedestrian occupies it, so a
+//! pedestrian is overlapped only by a vehicle that is not obliged or is already
+//! committed.
 
 use glam::DVec2;
 use tangle_model::{

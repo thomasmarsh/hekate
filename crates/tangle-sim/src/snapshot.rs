@@ -5,7 +5,7 @@
 //! kernel.
 
 use glam::DVec2;
-use tangle_model::{MovementId, PathId, PedestrianRouteId};
+use tangle_model::{CrossingId, MovementId, PathId, PedestrianRouteId};
 
 use crate::agent::{AgentId, AgentMode};
 use crate::compliance::ComplianceDecision;
@@ -62,6 +62,9 @@ pub struct MotionSample {
     /// pedestrian on a route that reaches a signal-controlled crossing. As with
     /// `decision`, only the small record is carried, not internal state.
     pub pedestrian_decision: Option<PedestrianComplianceDecision>,
+    /// Crossing a vehicle is currently yielding to, present for a vehicle
+    /// stopped for an occupied crossing. `None` when it is not yielding.
+    pub yield_crossing: Option<CrossingId>,
 }
 
 /// One agent as observed at a single instant.

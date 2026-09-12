@@ -353,6 +353,7 @@ fn advance_simulation(time: Res<Time>, mut state: ResMut<ViewerState>) {
                 match event {
                     Event::Spawned { .. } => spawned += 1,
                     Event::Despawned { .. } => despawned += 1,
+                    Event::Yielded { .. } => {}
                 }
             }
         }

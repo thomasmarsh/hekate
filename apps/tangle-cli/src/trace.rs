@@ -144,17 +144,26 @@ struct RunHeader<'a> {
 }
 
 /// One typed event, optionally carrying the fields that variant owns.
+///
+/// Field order is the serialization order, so variant-specific fields are
+/// appended after the fields every event carries; a `None` field is omitted and
+/// leaves the bytes of the other variants untouched.
 #[derive(Serialize)]
 struct EventRecord {
     kind: &'static str,
     tick: u64,
     event: &'static str,
     agent: u32,
-    path: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     distance_m: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crossing: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    yielding: Option<bool>,
 }
 
 impl EventRecord {
@@ -169,9 +178,11 @@ impl EventRecord {
                 tick,
                 event: "spawned",
                 agent: agent.get(),
-                path: path.get(),
+                path: Some(path.get()),
                 distance_m: Some(distance_m),
                 reason: None,
+                crossing: None,
+                yielding: None,
             },
             Event::Despawned {
                 agent,
@@ -182,11 +193,28 @@ impl EventRecord {
                 tick,
                 event: "despawned",
                 agent: agent.get(),
-                path: path.get(),
+                path: Some(path.get()),
                 distance_m: None,
                 reason: Some(match reason {
                     DespawnReason::ExitedPath => "exited_path",
                 }),
+                crossing: None,
+                yielding: None,
+            },
+            Event::Yielded {
+                agent,
+                crossing,
+                yielding,
+            } => Self {
+                kind: "event",
+                tick,
+                event: "yielded",
+                agent: agent.get(),
+                path: None,
+                distance_m: None,
+                reason: None,
+                crossing: Some(crossing.get()),
+                yielding: Some(yielding),
             },
         }
     }

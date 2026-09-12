@@ -290,6 +290,7 @@ impl<B: SessionBackend> TuiSession<B> {
             match event {
                 Event::Spawned { .. } => self.spawned += 1,
                 Event::Despawned { .. } => self.despawned += 1,
+                Event::Yielded { .. } => {}
             }
         }
         self.curr = self.sim.snapshot(SnapshotDetail::Full);

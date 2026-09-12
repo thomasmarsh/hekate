@@ -70,6 +70,21 @@
 //! position is therefore the combination of IDM braking and the cap, not IDM
 //! alone.
 //!
+//! ## Crossing yields
+//!
+//! A vehicle obliged by an authored `yield` rule yields to the crossing its
+//! movement crosses while a pedestrian body occupies the crossing region. The
+//! occupied crossing is modeled exactly like a stop line: a stationary
+//! constraint with `v_i = 0` and a zero standstill gap, plus the kernel's
+//! position cap that holds the front bumper at the crossing entry. Yielding
+//! therefore reuses IDM's bounded braking rather than an emergency stop: in the
+//! normal regime the occupancy appears while the vehicle is still far enough
+//! away for the comfortable deceleration to bring it to rest at the entry, and
+//! the position cap binds only when a body enters the region inside the
+//! vehicle's braking distance. The crossing entry, its region, and the movement
+//! it crosses all come from the shared scenario representation, so the rule is
+//! scenario data rather than a controller branch.
+//!
 //! ## Leader selection
 //!
 //! The kernel passes at most one leader constraint: the nearest live vehicle
