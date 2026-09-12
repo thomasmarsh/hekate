@@ -54,3 +54,28 @@ jobs:
 
       - name: Enforce dependency direction
         run: ./scripts/check-dependency-direction.sh
+
+  commits:
+    name: conventional commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            range="$BASE..$HEAD_SHA"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            range="$BEFORE..$HEAD_SHA"
+          else
+            range="$HEAD_SHA"
+          fi
+          echo "Checking commit messages in $range"
+          ./scripts/check-commit-message.sh --range "$range"

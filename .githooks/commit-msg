@@ -1,0 +1,5 @@
+#!/bin/sh
+# Reject commit messages that are not Conventional Commits.
+# Enable with: git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel)
+exec "$root/scripts/check-commit-message.sh" "$1"
