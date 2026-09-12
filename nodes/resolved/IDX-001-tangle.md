@@ -1,6 +1,6 @@
 ---
 context_rev: 1
-updated: 2026-09-12T01:30:53Z
+updated: 2026-09-12T12:29:14Z
 summary: Root hub for the Tangle microscopic intersection simulator.
 ---
 
@@ -16,5 +16,5 @@ Source of intent:
 
 # Current area
 
-Phase 1 Increment 0, the workspace and visible walking skeleton, is the active
-slice. Later increments are peeled out of `PHASE_1_PLAN.md` on demand.
+Phase 1 is decomposed into increments in `PHASE_1_PLAN.md`. Peel the next
+increment out of that plan on demand.

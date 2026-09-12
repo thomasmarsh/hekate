@@ -11,6 +11,8 @@ description = "Bevy top-down viewer for Tangle."
 tangle-model.workspace = true
 tangle-sim.workspace = true
 bevy.workspace = true
+glam.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

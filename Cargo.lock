@@ -5221,8 +5221,10 @@ name = "tangle-viewer"
 version = "0.0.0"
 dependencies = [
  "bevy",
+ "glam 0.33.7",
  "tangle-model",
  "tangle-sim",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
