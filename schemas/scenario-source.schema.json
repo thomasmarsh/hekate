@@ -85,6 +85,10 @@
           "max": 3.5,
           "min": 2.0
         },
+        "compliance": {
+          "max": 1.0,
+          "min": 1.0
+        },
         "length_m": {
           "max": 5.2,
           "min": 4.0
@@ -470,12 +474,20 @@
       ]
     },
     "ProfileSource": {
-      "description": "Passenger-car physical and behavior profile distributions.\n\nEvery generated vehicle samples one value from each range from the `profile`\nrandom stream, so its body and longitudinal behavior are stable for the run.\nPedestrian profiles are Increment 3 work.",
+      "description": "Passenger-car physical and behavior profile distributions.\n\nEvery generated vehicle samples one value from each physical/longitudinal\nrange from the `profile` random stream, so its body and longitudinal\nbehavior are stable for the run. The `compliance` propensity is sampled\nfrom the separate `compliance` stream. Pedestrian profiles are Increment 3\nwork.",
       "type": "object",
       "properties": {
         "comfortable_brake_mps2": {
           "description": "Comfortable deceleration in metres per second squared.",
           "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "compliance": {
+          "description": "Signal-compliance propensity, a fraction of the driver's comfortable\nbraking they are willing to use to obey a stop-required head.\n\n`1.0` obeys whenever a comfortable stop is possible and `0.0` never\nyields to the head. One value per vehicle is drawn from the `compliance`\nrandom stream. Additive schema version 1 field: omitted means the fully\ncompliant default.",
+          "$ref": "#/$defs/ProfileRangeSource",
+          "default": {
+            "max": 1.0,
+            "min": 1.0
+          }
         },
         "length_m": {
           "description": "Body length in metres.",

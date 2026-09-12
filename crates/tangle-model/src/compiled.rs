@@ -939,6 +939,7 @@ pub struct CompiledProfile {
     time_gap_s: ProfileRange,
     max_accel_mps2: ProfileRange,
     comfortable_brake_mps2: ProfileRange,
+    compliance: ProfileRange,
 }
 
 impl CompiledProfile {
@@ -950,6 +951,7 @@ impl CompiledProfile {
             time_gap_s: ProfileRange::from_source(source.time_gap_s),
             max_accel_mps2: ProfileRange::from_source(source.max_accel_mps2),
             comfortable_brake_mps2: ProfileRange::from_source(source.comfortable_brake_mps2),
+            compliance: ProfileRange::from_source(source.compliance),
         }
     }
 
@@ -981,6 +983,11 @@ impl CompiledProfile {
     /// Comfortable deceleration distribution in metres per second squared.
     pub fn comfortable_brake_mps2(&self) -> ProfileRange {
         self.comfortable_brake_mps2
+    }
+
+    /// Signal-compliance propensity distribution, a fraction in `[0, 1]`.
+    pub fn compliance(&self) -> ProfileRange {
+        self.compliance
     }
 }
 

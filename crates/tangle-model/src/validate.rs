@@ -102,6 +102,8 @@ pub enum DiagnosticCode {
     DemandDuplicateRoute,
     /// A profile range is non-finite, non-positive, or inverted.
     ProfileRangeInvalid,
+    /// A compliance propensity range is non-finite or outside `[0, 1]`.
+    ProfileComplianceInvalid,
 }
 
 impl DiagnosticCode {
@@ -148,6 +150,7 @@ impl DiagnosticCode {
             Self::DemandRoutePortalMismatch => "E_DEMAND_ROUTE_PORTAL_MISMATCH",
             Self::DemandDuplicateRoute => "E_DEMAND_DUPLICATE_ROUTE",
             Self::ProfileRangeInvalid => "E_PROFILE_RANGE",
+            Self::ProfileComplianceInvalid => "E_PROFILE_COMPLIANCE",
         }
     }
 }
@@ -525,6 +528,27 @@ fn validate_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>)
     ];
     for (field, range) in ranges {
         validate_profile_range(source, field, range, diagnostics);
+    }
+    validate_compliance_range(source, source.profiles.compliance, diagnostics);
+}
+
+/// A compliance propensity is a fraction, so unlike the physical ranges it is
+/// allowed to be zero but must stay within `[0, 1]`.
+fn validate_compliance_range(
+    source: &ScenarioSource,
+    range: ProfileRangeSource,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let finite = range.min.is_finite() && range.max.is_finite();
+    if !finite || range.min < 0.0 || range.max > 1.0 || range.min > range.max {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::ProfileComplianceInvalid,
+            Some(source.id.clone()),
+            format!(
+                "profiles.compliance must be finite, within [0, 1], and non-inverted, got [{}, {}]",
+                range.min, range.max
+            ),
+        ));
     }
 }
 
@@ -1347,6 +1371,34 @@ mod tests {
              max_accel_mps2: {{ min: 1.2, max: 2.5 }}, comfortable_brake_mps2: {{ min: 2.0, max: 3.5 }} }}"
         ));
         assert!(codes(&non_positive).contains(&"E_PROFILE_RANGE"));
+    }
+
+    #[test]
+    fn flags_a_compliance_range_outside_the_unit_interval() {
+        let negative = base(&format!(
+            "{FLOW}, profiles: {{ speed_mps: {{ min: 9.0, max: 12.0 }}, length_m: {{ min: 4.0, max: 5.0 }}, \
+             width_m: {{ min: 1.8, max: 2.0 }}, time_gap_s: {{ min: 1.0, max: 2.0 }}, \
+             max_accel_mps2: {{ min: 1.2, max: 2.5 }}, comfortable_brake_mps2: {{ min: 2.0, max: 3.5 }}, \
+             compliance: {{ min: -0.1, max: 0.5 }} }}"
+        ));
+        assert!(codes(&negative).contains(&"E_PROFILE_COMPLIANCE"));
+
+        let above_one = base(&format!(
+            "{FLOW}, profiles: {{ speed_mps: {{ min: 9.0, max: 12.0 }}, length_m: {{ min: 4.0, max: 5.0 }}, \
+             width_m: {{ min: 1.8, max: 2.0 }}, time_gap_s: {{ min: 1.0, max: 2.0 }}, \
+             max_accel_mps2: {{ min: 1.2, max: 2.5 }}, comfortable_brake_mps2: {{ min: 2.0, max: 3.5 }}, \
+             compliance: {{ min: 0.5, max: 1.1 }} }}"
+        ));
+        assert!(codes(&above_one).contains(&"E_PROFILE_COMPLIANCE"));
+
+        // A fully compliant range and the omitted default both validate.
+        let valid = base(&format!(
+            "{FLOW}, profiles: {{ speed_mps: {{ min: 9.0, max: 12.0 }}, length_m: {{ min: 4.0, max: 5.0 }}, \
+             width_m: {{ min: 1.8, max: 2.0 }}, time_gap_s: {{ min: 1.0, max: 2.0 }}, \
+             max_accel_mps2: {{ min: 1.2, max: 2.5 }}, comfortable_brake_mps2: {{ min: 2.0, max: 3.5 }}, \
+             compliance: {{ min: 0.0, max: 1.0 }} }}"
+        ));
+        assert_eq!(validate(&valid), Vec::new());
     }
 
     #[test]

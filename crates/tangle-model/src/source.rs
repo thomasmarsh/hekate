@@ -221,6 +221,17 @@ pub enum SignalColor {
     Green,
 }
 
+impl SignalColor {
+    /// Short stable label for inspectors and traces.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Red => "red",
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+        }
+    }
+}
+
 /// One signal head controlling a movement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -308,9 +319,11 @@ pub struct ProfileRangeSource {
 
 /// Passenger-car physical and behavior profile distributions.
 ///
-/// Every generated vehicle samples one value from each range from the `profile`
-/// random stream, so its body and longitudinal behavior are stable for the run.
-/// Pedestrian profiles are Increment 3 work.
+/// Every generated vehicle samples one value from each physical/longitudinal
+/// range from the `profile` random stream, so its body and longitudinal
+/// behavior are stable for the run. The `compliance` propensity is sampled
+/// from the separate `compliance` stream. Pedestrian profiles are Increment 3
+/// work.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSource {
@@ -326,6 +339,21 @@ pub struct ProfileSource {
     pub max_accel_mps2: ProfileRangeSource,
     /// Comfortable deceleration in metres per second squared.
     pub comfortable_brake_mps2: ProfileRangeSource,
+    /// Signal-compliance propensity, a fraction of the driver's comfortable
+    /// braking they are willing to use to obey a stop-required head.
+    ///
+    /// `1.0` obeys whenever a comfortable stop is possible and `0.0` never
+    /// yields to the head. One value per vehicle is drawn from the `compliance`
+    /// random stream. Additive schema version 1 field: omitted means the fully
+    /// compliant default.
+    #[serde(default = "default_compliance")]
+    pub compliance: ProfileRangeSource,
+}
+
+/// Default compliance range: every driver obeys whenever a comfortable stop is
+/// possible. Noncompliance is opted into by an authored range.
+fn default_compliance() -> ProfileRangeSource {
+    ProfileRangeSource { min: 1.0, max: 1.0 }
 }
 
 impl Default for ProfileSource {
@@ -341,6 +369,7 @@ impl Default for ProfileSource {
             time_gap_s: ProfileRangeSource { min: 1.0, max: 2.0 },
             max_accel_mps2: ProfileRangeSource { min: 1.2, max: 2.5 },
             comfortable_brake_mps2: ProfileRangeSource { min: 2.0, max: 3.5 },
+            compliance: default_compliance(),
         }
     }
 }
@@ -474,5 +503,32 @@ mod tests {
         assert_eq!(source.demand[0].routes[0].movement, "through");
         assert_eq!(source.profiles.speed_mps.min, 10.0);
         assert_eq!(source.profiles.time_gap_s.max, 1.8);
+        // The additive compliance field defaults to fully compliant.
+        assert_eq!(source.profiles.compliance, default_compliance());
+    }
+
+    #[test]
+    fn parses_an_authored_compliance_range() {
+        let input = r#"{
+            schema_version: 1, id: 'x', coordinate_system: { x: 'a', y: 'b' },
+            paths: [ { id: 'guide', points: [ { x: 0, y: 0 }, { x: 50, y: 0 } ] } ],
+            portals: [ { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+                       { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 } ],
+            movements: [ { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0 } ],
+            demand: [ { id: 'inflow', portal: 'entry', rate_vph: 720.0,
+                routes: [ { movement: 'through', weight: 1.0 } ] } ],
+            profiles: {
+                speed_mps: { min: 10.0, max: 14.0 },
+                length_m: { min: 4.0, max: 5.0 },
+                width_m: { min: 1.8, max: 2.0 },
+                time_gap_s: { min: 1.2, max: 1.8 },
+                max_accel_mps2: { min: 1.5, max: 2.5 },
+                comfortable_brake_mps2: { min: 2.0, max: 3.0 },
+                compliance: { min: 0.2, max: 0.9 },
+            },
+        }"#;
+        let source = parse_scenario_source(input).expect("parses");
+        assert_eq!(source.profiles.compliance.min, 0.2);
+        assert_eq!(source.profiles.compliance.max, 0.9);
     }
 }

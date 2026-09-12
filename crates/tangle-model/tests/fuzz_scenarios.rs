@@ -252,6 +252,7 @@ fn random_source(rng: &mut Rng) -> ScenarioSource {
             time_gap_s: rng.range(),
             max_accel_mps2: rng.range(),
             comfortable_brake_mps2: rng.range(),
+            compliance: rng.range(),
         },
         population: PopulationSource {
             vehicle_count: rng.below(8),
