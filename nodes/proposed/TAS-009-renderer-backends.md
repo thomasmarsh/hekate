@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T12:34:01Z
+updated: 2026-09-12T12:40:50Z
 summary: Render one simulation through interchangeable GUI and terminal renderer backends.
-next: Survey terminal rendering techniques and constraints for the shared scene ([[THO-002-terminal-rendering-landscape]]).
+next: Execute the Kitty graphics go/no-go spike scoped by the survey ([[TAS-010-kitty-graphics-poc]]).
 ---
 
 # Outcome

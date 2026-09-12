@@ -1,12 +1,12 @@
 ---
 context_rev: 1
-updated: 2026-09-12T12:34:01Z
+updated: 2026-09-12T12:40:50Z
 summary: Default terminal backend is character cells; Kitty graphics is opts in only when support is proven.
 ---
 
 # Context
 
-Depends on [[THO-002-terminal-rendering-landscape]] at context_rev 1.
+Depends on [[THO-002-terminal-rendering-landscape]] at context_rev 2.
 Depends on [[TAS-010-kitty-graphics-poc]] at context_rev 1.
 
 # Decision
