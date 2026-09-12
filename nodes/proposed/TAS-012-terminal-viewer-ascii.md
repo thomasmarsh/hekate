@@ -29,6 +29,6 @@ inspection controls as the Bevy viewer.
 
 Depends on [[DEF-002-renderer-backend-contract]] at context_rev 1.
 Depends on [[TAS-011-shared-render-layer]] at context_rev 1.
-Depends on [[DEC-002-terminal-backend-strategy]] at context_rev 1.
+Depends on [[DEC-002-terminal-backend-strategy]] at context_rev 2.
 
 Parent [[TAS-009-renderer-backends]].

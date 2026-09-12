@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T12:40:50Z
+updated: 2026-09-12T13:10:41Z
 summary: Render one simulation through interchangeable GUI and terminal renderer backends.
-next: Execute the Kitty graphics go/no-go spike scoped by the survey ([[TAS-010-kitty-graphics-poc]]).
+next: Extract the shared presentation layer and contract ([[TAS-011-shared-render-layer]]).
 ---
 
 # Outcome
