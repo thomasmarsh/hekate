@@ -624,6 +624,113 @@ fn draw_agent_overlays(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
     }
 }
 
+/// World margin the emphasis ring clears a body's longer axis by, in metres.
+const EMPHASIS_RING_MARGIN_M: f64 = 0.6;
+/// World margin the inspector's link ring clears a body by, in metres; wider
+/// than [`EMPHASIS_RING_MARGIN_M`] so both rings are visible at once.
+const LINK_RING_MARGIN_M: f64 = 1.2;
+/// Color of an occupied region's overlay ring.
+const OCCUPIED_REGION_COLOR: Color = Color::srgb(0.98, 0.62, 0.18);
+/// Color of the inspector's link ring on a record's other participants.
+const LINK_COLOR: Color = Color::srgb(1.0, 1.0, 1.0);
+
+/// One shape the safety overlay draws, in world metres.
+///
+/// The draw system turns these into `Gizmos` calls. Keeping the derivation a
+/// pure function of the frame is what lets the overlay be tested without a Bevy
+/// context and keeps every backend on the same shapes.
+#[derive(Debug, Clone, PartialEq)]
+enum SafetyOverlayShape {
+    /// A closed ring: consecutive points joined, the last back to the first.
+    Ring { points: Vec<DVec2>, color: Color },
+    /// A circle at `centre` of `radius_m` world metres.
+    Circle {
+        centre: DVec2,
+        radius_m: f32,
+        color: Color,
+    },
+}
+
+/// The shapes the frame's safety overlay draws, in draw order.
+///
+/// Occupied regions first, then emphasized bodies, then the selected body's
+/// record participants, and markers last so a conflict sits above the bodies
+/// that caused it. Empty when the safety overlay is off, and a record or body
+/// the frame does not carry contributes nothing.
+fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
+    let mut shapes = Vec::new();
+    if !frame.overlays.safety {
+        return shapes;
+    }
+
+    // A region somebody is in is redrawn over the authored ring.
+    for region in frame.occupied_regions() {
+        let Some(points) = frame.region_points(region.region()) else {
+            continue;
+        };
+        shapes.push(SafetyOverlayShape::Ring {
+            points: points.to_vec(),
+            color: OCCUPIED_REGION_COLOR,
+        });
+    }
+
+    // An emphasized body gets a ring in the color of its strongest style.
+    for (agent, emphasis) in frame.body_emphasis() {
+        let Some(body) = frame.body(agent) else {
+            continue;
+        };
+        shapes.push(SafetyOverlayShape::Circle {
+            centre: body.position,
+            radius_m: emphasis_ring_radius(body.length_m.max(body.width_m)),
+            color: emphasis_color(emphasis),
+        });
+    }
+
+    // The inspector's link: the other participants of the selected body's
+    // records are ringed so a reader sees who it interacted with.
+    if let Some(selected) = frame.selected_body() {
+        for record in frame.events_involving(selected.id) {
+            for other in EventParticipants::of(record.event()).others(selected.id) {
+                if let Some(body) = frame.body(other) {
+                    shapes.push(SafetyOverlayShape::Circle {
+                        centre: body.position,
+                        radius_m: link_ring_radius(body.length_m.max(body.width_m)),
+                        color: LINK_COLOR,
+                    });
+                }
+            }
+        }
+    }
+
+    // Markers last, so a conflict sits above the bodies that caused it.
+    for marker in frame.safety_markers() {
+        shapes.push(SafetyOverlayShape::Circle {
+            centre: marker.position(),
+            radius_m: marker_radius(marker),
+            color: marker_color(marker),
+        });
+    }
+
+    shapes
+}
+
+/// World radius of the emphasis ring around a body of longest extent
+/// `longest_extent_m`.
+fn emphasis_ring_radius(longest_extent_m: f64) -> f32 {
+    (longest_extent_m * 0.5 + EMPHASIS_RING_MARGIN_M) as f32
+}
+
+/// World radius of the inspector's link ring around a body of longest extent
+/// `longest_extent_m`.
+fn link_ring_radius(longest_extent_m: f64) -> f32 {
+    (longest_extent_m * 0.5 + LINK_RING_MARGIN_M) as f32
+}
+
+/// Cast a world-metre position into the Bevy boundary's `f32` vector.
+fn to_vec(point: DVec2) -> Vec2 {
+    Vec2::new(point.x as f32, point.y as f32)
+}
+
 /// Draw the frame's safety overlays: occupied regions, emphasized bodies, the
 /// participants of the selected body's records, and event markers.
 ///
@@ -633,57 +740,26 @@ fn draw_safety_overlays(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
     let Some(frame) = frame.get() else {
         return;
     };
-    if !frame.overlays.safety {
-        return;
-    }
 
-    let to_vec = |point: DVec2| Vec2::new(point.x as f32, point.y as f32);
-
-    // A region somebody is in is redrawn over the authored ring.
-    let occupied_color = Color::srgb(0.98, 0.62, 0.18);
-    for region in frame.occupied_regions() {
-        let Some(points) = frame.region_points(region.region()) else {
-            continue;
-        };
-        for index in 0..points.len() {
-            gizmos.line_2d(
-                to_vec(points[index]),
-                to_vec(points[(index + 1) % points.len()]),
-                occupied_color,
-            );
-        }
-    }
-
-    // An emphasized body gets a ring in the color of its strongest style.
-    for (agent, emphasis) in frame.body_emphasis() {
-        let Some(body) = frame.body(agent) else {
-            continue;
-        };
-        let radius = (body.length_m.max(body.width_m) * 0.5 + 0.6) as f32;
-        gizmos.circle_2d(to_vec(body.position), radius, emphasis_color(emphasis));
-    }
-
-    // The inspector's link: the other participants of the selected body's
-    // records are ringed so a reader sees who it interacted with.
-    let link_color = Color::srgb(1.0, 1.0, 1.0);
-    if let Some(selected) = frame.selected_body() {
-        for record in frame.events_involving(selected.id) {
-            for other in EventParticipants::of(record.event()).others(selected.id) {
-                if let Some(body) = frame.body(other) {
-                    let radius = (body.length_m.max(body.width_m) * 0.5 + 1.2) as f32;
-                    gizmos.circle_2d(to_vec(body.position), radius, link_color);
+    for shape in safety_overlay_shapes(frame) {
+        match shape {
+            SafetyOverlayShape::Ring { points, color } => {
+                for index in 0..points.len() {
+                    gizmos.line_2d(
+                        to_vec(points[index]),
+                        to_vec(points[(index + 1) % points.len()]),
+                        color,
+                    );
                 }
             }
+            SafetyOverlayShape::Circle {
+                centre,
+                radius_m,
+                color,
+            } => {
+                gizmos.circle_2d(to_vec(centre), radius_m, color);
+            }
         }
-    }
-
-    // Markers last, so a conflict sits above the bodies that caused it.
-    for marker in frame.safety_markers() {
-        gizmos.circle_2d(
-            to_vec(marker.position()),
-            marker_radius(marker),
-            marker_color(marker),
-        );
     }
 }
 
@@ -833,4 +909,186 @@ fn describe_agent(scenario: &CompiledScenario, body: &SceneBody, frame: &SceneFr
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    use tangle_model::{CrossingId, parse_scenario_source};
+    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, Viewport};
+    use tangle_sim::{AgentId, RegionKey};
+
+    /// Two vehicles on one path through one crossing region, so a pair record
+    /// and a region record both have live participants to anchor on.
+    fn scenario() -> Arc<CompiledScenario> {
+        let source = parse_scenario_source(
+            "{ schema_version: 1, id: 'cross', \
+             coordinate_system: { x: 'east_m', y: 'north_m' }, \
+             paths: [ { id: 'ew', points: [ { x: -20, y: 0 }, { x: 20, y: 0 } ] } ], \
+             portals: [ { id: 'west', path: 'ew', end: 'start', width_m: 3.5 }, \
+             { id: 'east', path: 'ew', end: 'end', width_m: 3.5 } ], \
+             regions: [ { id: 'area', points: [ { x: -2, y: -4 }, { x: 2, y: -4 }, \
+             { x: 2, y: 4 }, { x: -2, y: 4 } ] } ], \
+             movements: [ { id: 'ew_through', from: 'west', to: 'east', path: 'ew', \
+             priority: 0 } ], \
+             crossings: [ { id: 'cross', region: 'area', movements: [ 'ew_through' ] } ], \
+             population: { vehicle_count: 2, vehicle_speed_mps: 12.0, vehicle_spacing_m: 20.0, \
+             vehicle_length_m: 4.5, vehicle_width_m: 1.8 } }",
+        )
+        .expect("scenario parses");
+        Arc::new(CompiledScenario::compile(source).expect("scenario compiles"))
+    }
+
+    /// The one crossing region of [`scenario`].
+    fn crossing() -> RegionKey {
+        RegionKey::Crossing(CrossingId::from_index(0))
+    }
+
+    /// A frame carrying one record of each family a backend draws, at tick 0.
+    fn frame(selection: Option<usize>) -> SceneFrame {
+        let compiled = scenario();
+        let sim = Simulation::new((*compiled).clone(), RunConfig::new(0)).expect("builds");
+        let snapshot = sim.snapshot(SnapshotDetail::Full);
+        let mut safety = SafetyOverlay::new(40);
+        safety.observe(
+            0,
+            &[
+                Event::Entry {
+                    agent: AgentId::from_index(0),
+                    region: crossing(),
+                },
+                Event::Collision {
+                    agent: AgentId::from_index(0),
+                    other: AgentId::from_index(1),
+                    clearance_m: -0.4,
+                    contacting: true,
+                },
+                Event::NearMiss {
+                    agent: AgentId::from_index(0),
+                    other: AgentId::from_index(1),
+                    clearance_m: 0.6,
+                    entering: true,
+                },
+                Event::Queue {
+                    agent: AgentId::from_index(1),
+                    joined: true,
+                },
+            ],
+        );
+        SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: snapshot.agents().len(),
+                speed: Speed::Real,
+                paused: true,
+                selection,
+            },
+            viewport: Viewport::new(DVec2::ZERO, 1.0),
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies: snapshot
+                .agents()
+                .iter()
+                .map(|sample| SceneBody::project(&[], sample, 0.0))
+                .collect(),
+            overlays: Overlays::default(),
+            safety,
+        }
+    }
+
+    /// World position of one live body.
+    fn body_at(frame: &SceneFrame, id: usize) -> DVec2 {
+        frame.body(id).expect("body is alive").position
+    }
+
+    /// A circle shape, for a readable expectation.
+    fn circle(centre: DVec2, radius_m: f32, color: Color) -> SafetyOverlayShape {
+        SafetyOverlayShape::Circle {
+            centre,
+            radius_m,
+            color,
+        }
+    }
+
+    #[test]
+    fn the_plan_draws_occupancy_emphasis_links_and_markers_from_the_frame() {
+        let frame = frame(Some(0));
+        let ring = frame
+            .region_points(crossing())
+            .expect("the crossing has a ring")
+            .to_vec();
+        let region_centre = frame
+            .geometry
+            .region_center(crossing())
+            .expect("the crossing has a centre");
+        let selected = body_at(&frame, 0);
+        let other = body_at(&frame, 1);
+        let midpoint = (selected + other) / 2.0;
+
+        // The occupied ring, then an emphasis ring per body (contact wins over
+        // the standstill of body 1), then one link ring per record the selected
+        // body took part in, and markers last in record order.
+        let expected = vec![
+            SafetyOverlayShape::Ring {
+                points: ring,
+                color: Color::srgb(0.98, 0.62, 0.18),
+            },
+            circle(selected, 2.85, Color::srgb(0.95, 0.25, 0.25)),
+            circle(other, 2.85, Color::srgb(0.95, 0.25, 0.25)),
+            circle(other, 3.45, Color::srgb(1.0, 1.0, 1.0)),
+            circle(other, 3.45, Color::srgb(1.0, 1.0, 1.0)),
+            circle(region_centre, 0.8, Color::srgb(0.98, 0.62, 0.18)),
+            circle(midpoint, 1.6, Color::srgb(0.95, 0.25, 0.25)),
+            circle(midpoint, 1.2, Color::srgb(0.98, 0.73, 0.15)),
+            circle(other, 0.8, Color::srgb(0.35, 0.75, 0.95)),
+        ];
+        assert_eq!(safety_overlay_shapes(&frame), expected);
+    }
+
+    #[test]
+    fn the_plan_is_empty_while_the_safety_overlay_is_off() {
+        let mut frame = frame(None);
+        frame.overlays.safety = false;
+        let shapes = safety_overlay_shapes(&frame);
+        assert!(shapes.is_empty(), "{shapes:?}");
+
+        frame.overlays.safety = true;
+        assert!(!safety_overlay_shapes(&frame).is_empty());
+    }
+
+    #[test]
+    fn the_link_ring_names_the_other_participants_of_the_selected_body() {
+        let link_ring = |frame: &SceneFrame| {
+            safety_overlay_shapes(frame)
+                .into_iter()
+                .filter(|shape| {
+                    matches!(shape, SafetyOverlayShape::Circle { color, .. } if *color == LINK_COLOR)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Nobody selected: no link rings, only the markers.
+        assert!(link_ring(&frame(None)).is_empty());
+
+        // Body 0 selected: each of its two pair records rings body 1, the other
+        // participant.
+        let selected = frame(Some(0));
+        let other = body_at(&selected, 1);
+        assert_eq!(
+            link_ring(&selected),
+            vec![circle(other, 3.45, LINK_COLOR); 2]
+        );
+
+        // Body 1 selected: the same records ring body 0.
+        let selected = frame(Some(1));
+        let first = body_at(&selected, 0);
+        assert_eq!(
+            link_ring(&selected),
+            vec![circle(first, 3.45, LINK_COLOR); 2]
+        );
+    }
 }
