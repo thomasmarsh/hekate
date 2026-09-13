@@ -23,7 +23,7 @@ use tangle_cli::{
     RUN_MANIFEST_VERSION, RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest,
     RunMetrics, RunSummary, SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy,
     ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryRetention, TrajectorySample,
-    canonical_run, canonical_run_captured, load_scenario_hashed, write_run_directory,
+    canonical_run, canonical_run_captured, load_scenario_provenance, write_run_directory,
 };
 use tangle_sim::{EVENT_VERSION, RunConfig};
 
@@ -112,18 +112,13 @@ fn golden(extension: &str) -> String {
         .unwrap_or_else(|error| panic!("cannot read golden file '{}': {error}", path.display()))
 }
 
-/// Load the checked-in walking scenario and its source content hash.
-fn walking() -> (tangle_model::CompiledScenario, String) {
-    load_scenario_hashed(&repo_path(WALKING)).expect("walking scenario loads")
-}
-
-fn provenance(content_sha256: &str) -> ScenarioProvenance {
-    ScenarioProvenance {
-        id: "walking_guide_v1".to_owned(),
-        source_path: WALKING.to_owned(),
-        schema_version: 1,
-        content_sha256: content_sha256.to_owned(),
-    }
+/// Load the checked-in walking scenario and its provenance, recorded at the
+/// repository-relative path the checked-in artifacts name.
+fn walking() -> (tangle_model::CompiledScenario, ScenarioProvenance) {
+    let (scenario, mut provenance) =
+        load_scenario_provenance(&repo_path(WALKING)).expect("walking scenario loads");
+    provenance.source_path = WALKING.to_owned();
+    (scenario, provenance)
 }
 
 fn request<'a>(
@@ -153,8 +148,7 @@ fn golden_run() -> (
     Vec<TrajectorySample>,
     RunMetrics,
 ) {
-    let (scenario, content_sha256) = walking();
-    let provenance = provenance(&content_sha256);
+    let (scenario, provenance) = walking();
     let (trace, summary, trajectories, metrics) = canonical_run_captured(
         scenario,
         RunConfig::new(GOLDEN_SEED),
@@ -232,7 +226,7 @@ fn run_writes_the_manifest_summary_stream_and_sampled_trajectories() {
 fn manifest_records_the_provenance_a_rerun_needs() {
     let scratch = Scratch::new("manifest");
     let run_dir = scratch.path("run");
-    let (_, content_sha256) = walking();
+    let (_, provenance) = walking();
 
     write_golden_run(&run_dir);
     let manifest = read_manifest(&run_dir);
@@ -243,8 +237,19 @@ fn manifest_records_the_provenance_a_rerun_needs() {
     assert_eq!(manifest.scenario.schema_version, 1);
     // The recorded hash is the loader's own content hash of the authored bytes,
     // so a consumer can verify the exact source it must rerun.
-    assert_eq!(manifest.scenario.content_sha256, content_sha256);
+    assert_eq!(manifest.scenario.content_sha256, provenance.content_sha256);
     assert_eq!(manifest.scenario.content_sha256.len(), 64);
+    // The normalized hash covers the migrated version-2 document and names the
+    // transform that produced it, so a later trace change is attributable.
+    assert_eq!(
+        manifest.scenario.normalized_sha256,
+        provenance.normalized_sha256
+    );
+    assert_eq!(manifest.scenario.normalized_sha256.len(), 64);
+    assert_eq!(
+        manifest.scenario.migration_version,
+        tangle_model::MIGRATION_VERSION
+    );
 
     assert_eq!(manifest.seed, GOLDEN_SEED);
     assert_eq!(manifest.ticks, GOLDEN_TICKS);

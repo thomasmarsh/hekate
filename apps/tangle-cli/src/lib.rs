@@ -26,8 +26,8 @@ mod validate;
 use std::path::{Path, PathBuf};
 
 use tangle_model::{
-    CompiledScenario, Diagnostic, DocumentReadError, ParseError, ScenarioDocument,
-    migrate_v1_to_v2, parse_scenario_document, parse_scenario_source, to_canonical_v2_json,
+    CompiledScenario, Diagnostic, DocumentReadError, MIGRATION_VERSION, ParseError,
+    ScenarioDocument, migrate_v1_to_v2, parse_scenario_document, to_canonical_v2_json,
 };
 
 pub use aggregate::{
@@ -172,6 +172,14 @@ pub enum LoadError {
         #[source]
         source: ParseError,
     },
+    /// The document declares a schema version this build cannot read.
+    #[error("scenario '{path}' declares schema_version {version}, which this build cannot read")]
+    UnsupportedSchemaVersion {
+        /// The path that was read.
+        path: PathBuf,
+        /// The schema version the document declared.
+        version: u32,
+    },
     /// The scenario parsed but failed semantic validation.
     #[error(
         "scenario '{path}' failed validation: {}",
@@ -193,27 +201,78 @@ pub fn load_scenario(path: &Path) -> Result<CompiledScenario, LoadError> {
     load_scenario_hashed(path).map(|(scenario, _)| scenario)
 }
 
-/// Read, parse, validate, and compile a scenario, also returning the SHA-256 of
-/// its raw source bytes.
+/// Read, parse, negotiate the schema version, validate, and compile a scenario,
+/// also returning the SHA-256 of its raw source bytes.
 ///
 /// The content hash is provenance, not a parse product: it covers the authored
 /// bytes exactly as written, including comments and whitespace, so a run
 /// manifest can name the artifact it ran.
 pub fn load_scenario_hashed(path: &Path) -> Result<(CompiledScenario, String), LoadError> {
+    load_scenario_provenance(path)
+        .map(|(scenario, provenance)| (scenario, provenance.content_sha256))
+}
+
+/// Read, parse, negotiate the schema version, validate, and compile a scenario,
+/// also returning the provenance that identifies exactly the bytes it consumed.
+///
+/// The provenance carries all four inputs of a run: the source schema version,
+/// the SHA-256 of the raw source bytes as read, the SHA-256 of the canonical
+/// normalized version-2 document the kernel consumed, and the migration applied.
+/// A version-1 document is migrated before compilation and records
+/// [`MIGRATION_VERSION`]; a native version-2 document is compiled as authored and
+/// records migration version zero. Computing the normalized hash is a pure
+/// function of the document, so it does not change what the kernel runs.
+pub fn load_scenario_provenance(
+    path: &Path,
+) -> Result<(CompiledScenario, ScenarioProvenance), LoadError> {
     let text = std::fs::read_to_string(path).map_err(|source| LoadError::Read {
         path: path.to_path_buf(),
         source,
     })?;
     let content_sha256 = trace::sha256_hex(text.as_bytes());
-    let source = parse_scenario_source(&text).map_err(|source| LoadError::Parse {
-        path: path.to_path_buf(),
-        source,
+    let document = parse_scenario_document(&text).map_err(|source| match source {
+        DocumentReadError::Parse(source) => LoadError::Parse {
+            path: path.to_path_buf(),
+            source,
+        },
+        DocumentReadError::UnsupportedVersion { version } => LoadError::UnsupportedSchemaVersion {
+            path: path.to_path_buf(),
+            version,
+        },
     })?;
-    let scenario = CompiledScenario::compile(source).map_err(|diagnostics| LoadError::Invalid {
-        path: path.to_path_buf(),
-        diagnostics,
-    })?;
-    Ok((scenario, content_sha256))
+    let (scenario, normalized_sha256, migration_version) = match document {
+        ScenarioDocument::V1(source) => {
+            let normalized = to_canonical_v2_json(&migrate_v1_to_v2(&source));
+            let scenario =
+                CompiledScenario::compile(source).map_err(|diagnostics| LoadError::Invalid {
+                    path: path.to_path_buf(),
+                    diagnostics,
+                })?;
+            (
+                scenario,
+                trace::sha256_hex(normalized.as_bytes()),
+                MIGRATION_VERSION,
+            )
+        }
+        ScenarioDocument::V2(source) => {
+            let normalized = to_canonical_v2_json(&source);
+            let scenario =
+                CompiledScenario::compile_v2(source).map_err(|diagnostics| LoadError::Invalid {
+                    path: path.to_path_buf(),
+                    diagnostics,
+                })?;
+            (scenario, trace::sha256_hex(normalized.as_bytes()), 0)
+        }
+    };
+    let provenance = ScenarioProvenance {
+        id: scenario.id().to_owned(),
+        source_path: path.to_string_lossy().into_owned(),
+        schema_version: scenario.schema_version(),
+        content_sha256,
+        normalized_sha256,
+        migration_version,
+    };
+    Ok((scenario, provenance))
 }
 
 fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {

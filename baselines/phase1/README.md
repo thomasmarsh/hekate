@@ -7,14 +7,34 @@ satisfied. It is the first deliverable of Phase 2 Increment 0
 
 ## Files
 
-- `baseline.json` — deterministic manifest: scenario content hash, model and
-  event versions, and the canonical trace hash and run counts at the Fast,
-  Standard, and Fine fidelity presets. A test compares it byte for byte against a
-  fresh capture, so an unexplained diff is a regression.
+- `baseline.json` — deterministic manifest: scenario content hash, normalized
+  version-2 hash, migration version, model and event versions, and the canonical
+  trace hash and run counts at the Fast, Standard, and Fine fidelity presets. A
+  test compares it byte for byte against a fresh capture, so an unexplained diff
+  is a regression.
 - `performance.json` — non-normative wall-clock measurement on one machine at one
   time. It is evidence, not a gate, and differs between hosts and builds.
 - `entry-gate.md` — the Phase 1 definition-of-done checklist with evidence and a
   verdict on whether Phase 2 may begin.
+
+## Manifest versions
+
+`baseline.json` is `baseline_version` 2 as of the migration-provenance leaf
+([[TAS-064-migration-provenance]]). Version 2 adds two fields to the shared
+`scenario` provenance so a later trace change is attributable to a source edit,
+a migration change, or the kernel:
+
+- `normalized_sha256` — SHA-256 of the canonical normalized version-2 document
+  the run consumed: the migration output for a version-1 source, the canonical
+  re-serialization for a native version-2 source.
+- `migration_version` — the version-1 to version-2 transform applied, `1` for
+  the current transform and `0` when the source was already version 2.
+
+The `baseline_version` 1 → 2 bump is a format-version change only: the three
+preset `trace_sha256` values, the run counts, and the model and event versions
+are unchanged. The same two fields and the corresponding `manifest_version` 1 →
+2 bump apply to the run directory's `manifest.json`. The trace hashes did not
+change between the two versions.
 
 ## Capture contract
 

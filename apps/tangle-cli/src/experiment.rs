@@ -86,7 +86,7 @@ use crate::run_dir::SamplingPolicy;
 use crate::run_metrics::{EVENT_FAMILY_LABELS, METRIC_DEFINITION_VERSION};
 use crate::seed_bank::{SeedBankError, SeedBankReference, read_seed_bank};
 use crate::trace::sha256_hex;
-use crate::{LoadError, load_scenario_hashed};
+use crate::{LoadError, load_scenario_provenance};
 
 /// Version of the experiment spec format this command reads.
 pub const EXPERIMENT_VERSION: u32 = 1;
@@ -677,18 +677,12 @@ pub fn run_experiment(
 
     let mut variants = Vec::with_capacity(spec.variants.len());
     for variant in &spec.variants {
-        let (scenario, content_sha256) = load_scenario_hashed(Path::new(&variant.scenario))
+        let (scenario, provenance) = load_scenario_provenance(Path::new(&variant.scenario))
             .map_err(|source| ExperimentError::Scenario {
                 variant: variant.variant.clone(),
                 path: spec_path.to_path_buf(),
                 source,
             })?;
-        let provenance = ScenarioProvenance {
-            id: scenario.id().to_owned(),
-            source_path: variant.scenario.clone(),
-            schema_version: scenario.schema_version(),
-            content_sha256,
-        };
         let root = run_root.join(&variant.variant);
         run_batch(BatchRequest {
             root: root.clone(),
@@ -958,18 +952,12 @@ pub fn run_experiment_convergence(
 
     let mut variants = Vec::with_capacity(spec.variants.len());
     for variant in &spec.variants {
-        let (scenario, content_sha256) = load_scenario_hashed(Path::new(&variant.scenario))
+        let (scenario, provenance) = load_scenario_provenance(Path::new(&variant.scenario))
             .map_err(|source| ExperimentError::Scenario {
                 variant: variant.variant.clone(),
                 path: spec_path.to_path_buf(),
                 source,
             })?;
-        let provenance = ScenarioProvenance {
-            id: scenario.id().to_owned(),
-            source_path: variant.scenario.clone(),
-            schema_version: scenario.schema_version(),
-            content_sha256,
-        };
         let mut roots: Vec<PathBuf> = Vec::with_capacity(PRESETS.len());
         for preset in PRESETS {
             let root = match preset.name == standard.name {

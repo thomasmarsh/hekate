@@ -24,7 +24,7 @@ use tangle_cli::{
     EventCounts, LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MANIFEST_FILE,
     METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus, MetricValue,
     MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues, RunMetricsArtifact,
-    SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch, load_scenario_hashed,
+    SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch, load_scenario_provenance,
     run_batch,
 };
 use tangle_sim::RunConfig;
@@ -356,6 +356,8 @@ fn write_synthetic_batch(root: &Path, seeds: &[(u64, SyntheticSeed)]) {
                     source_path: "synthetic.json5".to_owned(),
                     schema_version: 1,
                     content_sha256: "0".repeat(64),
+                    normalized_sha256: "0".repeat(64),
+                    migration_version: 1,
                 },
                 ticks: 1,
                 fidelity: "standard".to_owned(),
@@ -1167,14 +1169,8 @@ fn every_aggregated_metric_links_to_its_manifests_and_definition_version() {
 #[test]
 fn a_real_batch_aggregates_its_mode_and_movement_slices() {
     let scratch = Scratch::new("mixed");
-    let (scenario, content_sha256) =
-        load_scenario_hashed(&repo_path(MIXED)).expect("the mixed benchmark loads");
-    let provenance = ScenarioProvenance {
-        id: scenario.id().to_owned(),
-        source_path: MIXED.to_owned(),
-        schema_version: scenario.schema_version(),
-        content_sha256,
-    };
+    let (scenario, provenance) =
+        load_scenario_provenance(&repo_path(MIXED)).expect("the mixed benchmark loads");
     let root = scratch.path("batch");
     run_batch(BatchRequest {
         root: root.clone(),
@@ -1566,14 +1562,8 @@ fn aggregate_command(scratch: &Scratch, root: &str, output: Option<&str>) -> Out
 #[test]
 fn the_aggregate_command_writes_the_aggregation_and_mutates_no_run_artifact() {
     let scratch = Scratch::new("command");
-    let (scenario, content_sha256) =
-        load_scenario_hashed(&repo_path(WALKING)).expect("the walking scenario loads");
-    let provenance = ScenarioProvenance {
-        id: scenario.id().to_owned(),
-        source_path: WALKING.to_owned(),
-        schema_version: scenario.schema_version(),
-        content_sha256,
-    };
+    let (scenario, provenance) =
+        load_scenario_provenance(&repo_path(WALKING)).expect("the walking scenario loads");
     let root = scratch.path("batch");
     run_batch(BatchRequest {
         root: root.clone(),

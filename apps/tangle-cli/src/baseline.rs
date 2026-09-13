@@ -19,7 +19,12 @@ use tangle_sim::{EVENT_VERSION, InitError, RunConfig, Seconds, Simulation};
 use crate::trace::TraceRecorder;
 
 /// Version of the deterministic baseline manifest format.
-pub const BASELINE_VERSION: u32 = 1;
+///
+/// Version 2 adds the normalized version-2 hash and the migration version to
+/// the scenario provenance ([`ScenarioProvenance`]), so a baseline attributes a
+/// trace to a source, a migration, or the kernel. Version 1 baselines omit both
+/// fields.
+pub const BASELINE_VERSION: u32 = 2;
 
 /// Version of the wall-clock performance report format.
 pub const PERFORMANCE_REPORT_VERSION: u32 = 1;
@@ -71,7 +76,14 @@ pub const PRESETS: [Preset; 3] = [
     },
 ];
 
-/// Provenance of the authored scenario bytes a baseline was captured from.
+/// Provenance of the authored scenario bytes a run or baseline consumed.
+///
+/// Four fields identify the inputs of a run: the source schema version, the
+/// SHA-256 of the raw source bytes, the SHA-256 of the canonical normalized
+/// version-2 document the kernel consumed, and the version-1 to version-2
+/// migration applied (zero when the source was already version 2). Recorded
+/// together they let a later trace change be attributed to a source edit, a
+/// migration change, or the kernel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScenarioProvenance {
     /// Authored scenario identifier.
@@ -82,6 +94,25 @@ pub struct ScenarioProvenance {
     pub schema_version: u32,
     /// SHA-256 of the raw source bytes, including comments and whitespace.
     pub content_sha256: String,
+    /// SHA-256 of the canonical normalized version-2 bytes the run consumed:
+    /// the migration output for a version-1 source, the canonical
+    /// re-serialization for a native version-2 source.
+    ///
+    /// Evidence written before this field existed (manifest format 1) omits it,
+    /// so it reads back as the empty string; every manifest this build writes
+    /// records it from the bytes it consumed.
+    #[serde(default)]
+    pub normalized_sha256: String,
+    /// Version-1 to version-2 migration applied: [`tangle_model::MIGRATION_VERSION`]
+    /// for a migrated version-1 source, zero when the source was already
+    /// version 2, so no migration ran.
+    ///
+    /// Evidence written before this field existed (manifest format 1) omits it,
+    /// so it reads back as zero — the transform that produced such a run, whose
+    /// version-1 source the kernel consumed directly; every manifest this build
+    /// writes records it from the transform it actually applied.
+    #[serde(default)]
+    pub migration_version: u32,
 }
 
 /// The canonical trace and run counts for one fidelity preset.
@@ -160,8 +191,13 @@ pub struct CaptureRequest<'a> {
     pub scenario: &'a CompiledScenario,
     /// Repository-relative source path to record.
     pub source_path: &'a str,
-    /// SHA-256 of the source bytes to record.
+    /// SHA-256 of the raw source bytes to record.
     pub content_sha256: &'a str,
+    /// SHA-256 of the canonical normalized version-2 bytes the run consumed.
+    pub normalized_sha256: &'a str,
+    /// Version-1 to version-2 migration the run applied, zero when the source
+    /// was already version 2.
+    pub migration_version: u32,
     /// Root seed for every preset.
     pub seed: u64,
     /// Simulated duration every preset must cover, in seconds.
@@ -291,6 +327,8 @@ pub fn capture(request: CaptureRequest<'_>) -> Result<(Baseline, PerformanceRepo
             source_path: request.source_path.to_owned(),
             schema_version: request.scenario.schema_version(),
             content_sha256: request.content_sha256.to_owned(),
+            normalized_sha256: request.normalized_sha256.to_owned(),
+            migration_version: request.migration_version,
         },
         model_version: MODEL_VERSION.to_owned(),
         event_version: EVENT_VERSION,
@@ -389,6 +427,8 @@ mod tests {
             scenario,
             source_path: "scenarios/walking/walking_guide_v1.json5",
             content_sha256: "test-content-hash",
+            normalized_sha256: "test-normalized-hash",
+            migration_version: 1,
             seed: 0,
             duration_s: 12.5,
         }
@@ -417,6 +457,9 @@ mod tests {
         assert_eq!(baseline.phase, "phase1");
         assert_eq!(baseline.scenario.id, "walking_guide_v1");
         assert_eq!(baseline.scenario.schema_version, 1);
+        assert_eq!(baseline.scenario.content_sha256, "test-content-hash");
+        assert_eq!(baseline.scenario.normalized_sha256, "test-normalized-hash");
+        assert_eq!(baseline.scenario.migration_version, 1);
         assert_eq!(baseline.event_version, EVENT_VERSION);
         assert_eq!(baseline.model_version, MODEL_VERSION);
         assert_eq!(baseline.presets.len(), PRESETS.len());

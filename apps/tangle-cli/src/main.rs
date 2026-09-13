@@ -93,11 +93,11 @@ use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
     AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, COMPARISON_FILE, CONVERGENCE_FILE,
     CONVERGENCE_TOLERANCE, CaptureRequest, PRESETS, REPORT_FILE, RunDirectoryRequest,
-    SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch,
-    canonical_run, canonical_run_captured, capture, compare_batches, converge_batches,
-    fidelity_ticks, load_scenario_hashed, migrate_scenario, read_seed_bank,
-    render_convergence_summary, render_validation_failure, replay_run_directory, run_batch,
-    run_experiment, run_experiment_convergence, validate_scenario, write_run_directory,
+    SamplingPolicy, SeedBank, SeedBankReference, aggregate_batch, canonical_run,
+    canonical_run_captured, capture, compare_batches, converge_batches, fidelity_ticks,
+    load_scenario_provenance, migrate_scenario, read_seed_bank, render_convergence_summary,
+    render_validation_failure, replay_run_directory, run_batch, run_experiment,
+    run_experiment_convergence, validate_scenario, write_run_directory,
 };
 use tangle_model::MIGRATION_VERSION;
 use tangle_sim::RunConfig;
@@ -536,16 +536,9 @@ fn main() -> ExitCode {
 }
 
 fn run(args: RunArgs) -> ExitCode {
-    let (scenario, content_sha256) = match load_scenario_hashed(&args.scenario) {
+    let (scenario, provenance) = match load_scenario_provenance(&args.scenario) {
         Ok(loaded) => loaded,
         Err(error) => return fail(error),
-    };
-
-    let provenance = ScenarioProvenance {
-        id: scenario.id().to_owned(),
-        source_path: args.scenario.to_string_lossy().into_owned(),
-        schema_version: scenario.schema_version(),
-        content_sha256,
     };
 
     let config = RunConfig::new(args.seed);
@@ -660,7 +653,7 @@ struct BatchArgs {
 }
 
 fn batch(args: BatchArgs) -> ExitCode {
-    let (scenario, content_sha256) = match load_scenario_hashed(&args.scenario) {
+    let (scenario, provenance) = match load_scenario_provenance(&args.scenario) {
         Ok(loaded) => loaded,
         Err(error) => return fail(error),
     };
@@ -682,12 +675,6 @@ fn batch(args: BatchArgs) -> ExitCode {
         None => (args.seeds, None),
     };
 
-    let provenance = ScenarioProvenance {
-        id: scenario.id().to_owned(),
-        source_path: args.scenario.to_string_lossy().into_owned(),
-        schema_version: scenario.schema_version(),
-        content_sha256,
-    };
     let out_root = args.out_root;
     let manifest = match run_batch(BatchRequest {
         root: out_root.clone(),
@@ -904,7 +891,7 @@ struct ConvergeArgs {
 /// disk. `PRESETS` is the declared Fast, Standard, Fine order the report records
 /// and reads back.
 fn converge(args: ConvergeArgs) -> ExitCode {
-    let (scenario, content_sha256) = match load_scenario_hashed(&args.scenario) {
+    let (scenario, provenance) = match load_scenario_provenance(&args.scenario) {
         Ok(loaded) => loaded,
         Err(error) => return fail(error),
     };
@@ -915,12 +902,6 @@ fn converge(args: ConvergeArgs) -> ExitCode {
     let seed_bank = SeedBankReference {
         path: args.seed_bank.display().to_string(),
         content_sha256: bank.content_sha256,
-    };
-    let provenance = ScenarioProvenance {
-        id: scenario.id().to_owned(),
-        source_path: args.scenario.to_string_lossy().into_owned(),
-        schema_version: scenario.schema_version(),
-        content_sha256,
     };
 
     let mut roots: Vec<PathBuf> = Vec::with_capacity(PRESETS.len());
@@ -1256,16 +1237,17 @@ struct BaselineArgs {
 }
 
 fn baseline(args: BaselineArgs) -> ExitCode {
-    let (scenario, content_sha256) = match load_scenario_hashed(&args.scenario) {
+    let (scenario, provenance) = match load_scenario_provenance(&args.scenario) {
         Ok(loaded) => loaded,
         Err(error) => return fail(error),
     };
 
-    let source_path = args.scenario.to_string_lossy().into_owned();
     let (manifest, performance) = match capture(CaptureRequest {
         scenario: &scenario,
-        source_path: &source_path,
-        content_sha256: &content_sha256,
+        source_path: &provenance.source_path,
+        content_sha256: &provenance.content_sha256,
+        normalized_sha256: &provenance.normalized_sha256,
+        migration_version: provenance.migration_version,
         seed: args.seed,
         duration_s: args.duration_s,
     }) {

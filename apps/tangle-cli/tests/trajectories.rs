@@ -21,7 +21,7 @@ use tangle_cli::{
     MANIFEST_FILE, METRICS_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest, RunMetrics,
     SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT,
     TrajectoryRetention, TrajectorySample, TrajectorySampling, canonical_run_captured,
-    load_scenario_hashed, read_trajectories, write_run_directory,
+    load_scenario_provenance, read_trajectories, write_run_directory,
 };
 use tangle_model::CompiledScenario;
 use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
@@ -66,18 +66,9 @@ fn repo_path(relative: &str) -> PathBuf {
         .join(relative)
 }
 
-/// Load the checked-in walking scenario and its source content hash.
-fn walking() -> (CompiledScenario, String) {
-    load_scenario_hashed(&repo_path(WALKING)).expect("walking scenario loads")
-}
-
-fn provenance(content_sha256: &str) -> ScenarioProvenance {
-    ScenarioProvenance {
-        id: "walking_guide_v1".to_owned(),
-        source_path: WALKING.to_owned(),
-        schema_version: 1,
-        content_sha256: content_sha256.to_owned(),
-    }
+/// Load the checked-in walking scenario and the provenance of its bytes.
+fn walking() -> (CompiledScenario, ScenarioProvenance) {
+    load_scenario_provenance(&repo_path(WALKING)).expect("walking scenario loads")
 }
 
 /// Run the golden walking run under `policy` and capture its kept rows.
@@ -90,8 +81,7 @@ fn golden_run(
     Vec<TrajectorySample>,
     RunMetrics,
 ) {
-    let (scenario, content_sha256) = walking();
-    let provenance = provenance(&content_sha256);
+    let (scenario, provenance) = walking();
     let (trace, summary, trajectories, metrics) =
         canonical_run_captured(scenario, RunConfig::new(GOLDEN_SEED), GOLDEN_TICKS, policy)
             .expect("run completes");
@@ -478,8 +468,7 @@ fn a_policy_that_retains_no_trajectories_writes_no_artifact() {
 fn a_run_shorter_than_the_stride_writes_an_empty_artifact() {
     let scratch = Scratch::new("short");
     let run_dir = scratch.path("run");
-    let (scenario, content_sha256) = walking();
-    let provenance = provenance(&content_sha256);
+    let (scenario, provenance) = walking();
     let policy = SamplingPolicy::default();
     let (trace, summary, trajectories, metrics) = canonical_run_captured(
         scenario,

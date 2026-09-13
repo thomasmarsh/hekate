@@ -25,8 +25,8 @@ use sha2::{Digest, Sha256};
 use tangle_cli::{
     EVENT_STREAM_FILE, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
     MetricValue, OperationalValues, RunDirectoryRequest, RunMetrics, RunMetricsArtifact,
-    SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, canonical_run_captured, load_scenario_hashed,
-    write_run_directory,
+    SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, canonical_run_captured,
+    load_scenario_provenance, write_run_directory,
 };
 use tangle_model::CompiledScenario;
 use tangle_sim::{
@@ -131,27 +131,13 @@ fn content_hashes(directory: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-fn load(relative: &str) -> (CompiledScenario, String) {
-    load_scenario_hashed(&repo_path(relative)).expect("scenario loads")
-}
-
-fn provenance(
-    relative: &str,
-    scenario: &CompiledScenario,
-    content_sha256: &str,
-) -> ScenarioProvenance {
-    ScenarioProvenance {
-        id: scenario.id().to_owned(),
-        source_path: relative.to_owned(),
-        schema_version: scenario.schema_version(),
-        content_sha256: content_sha256.to_owned(),
-    }
+fn load(relative: &str) -> (CompiledScenario, ScenarioProvenance) {
+    load_scenario_provenance(&repo_path(relative)).expect("scenario loads")
 }
 
 /// Run one scenario through the capturing loop and write its run directory.
 fn write_run(directory: &Path, relative: &str, seed: u64, ticks: u64) -> RunMetrics {
-    let (scenario, content_sha256) = load(relative);
-    let provenance = provenance(relative, &scenario, &content_sha256);
+    let (scenario, provenance) = load(relative);
     let sampling = SamplingPolicy::default();
     let (trace, summary, trajectories, metrics) = canonical_run_captured(
         scenario,

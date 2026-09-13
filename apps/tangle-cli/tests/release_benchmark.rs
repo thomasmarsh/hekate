@@ -27,8 +27,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tangle_cli::{
-    RunDirectoryRequest, SamplingPolicy, ScenarioProvenance, canonical_run_captured,
-    load_scenario_hashed, write_run_directory,
+    RunDirectoryRequest, SamplingPolicy, canonical_run_captured, load_scenario_provenance,
+    write_run_directory,
 };
 use tangle_sim::{RunConfig, Simulation};
 
@@ -250,7 +250,7 @@ fn release_benchmark_writes_the_checked_in_artifact() {
 /// Measure one scenario: three timed passes plus one artifact pass.
 fn measure(scenario: &BenchScenario) -> ScenarioBenchmark {
     let path = repo_path(scenario.path);
-    let (compiled, content_sha256) = load_scenario_hashed(&path)
+    let (compiled, provenance) = load_scenario_provenance(&path)
         .unwrap_or_else(|error| panic!("{} loads: {error}", scenario.path));
     let config = RunConfig::new(SEED);
     let step_s = config.step().as_secs();
@@ -281,12 +281,6 @@ fn measure(scenario: &BenchScenario) -> ScenarioBenchmark {
     // The artifact pass runs the recording path the `run` command uses, so the
     // trace and the run directory are the artifacts a run directory holds and
     // not a second implementation of them.
-    let provenance = ScenarioProvenance {
-        id: compiled.id().to_owned(),
-        source_path: scenario.path.to_owned(),
-        schema_version: compiled.schema_version(),
-        content_sha256,
-    };
     let sampling = SamplingPolicy::default();
     let (trace, summary, trajectories, metrics) =
         canonical_run_captured(compiled, config, ticks, &sampling.trajectories)

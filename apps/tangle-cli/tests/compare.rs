@@ -461,6 +461,8 @@ fn write_side(
                     source_path: "synthetic.json5".to_owned(),
                     schema_version: 1,
                     content_sha256: "0".repeat(64),
+                    normalized_sha256: "0".repeat(64),
+                    migration_version: 1,
                 },
                 ticks: 1,
                 fidelity: "standard".to_owned(),

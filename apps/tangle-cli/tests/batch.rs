@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use tangle_cli::{
     BATCH_MANIFEST_FILE, BATCH_MANIFEST_VERSION, BatchError, BatchManifest, BatchRequest,
     EVENT_STREAM_FILE, MANIFEST_FILE, MANIFEST_TEMP_FILE, METRICS_FILE, RunManifest, SUMMARY_FILE,
-    SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, load_scenario_hashed, run_batch,
+    SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, load_scenario_provenance, run_batch,
 };
 use tangle_model::CompiledScenario;
 use tangle_sim::{EVENT_VERSION, RunConfig};
@@ -67,27 +67,18 @@ fn repo_path(relative: &str) -> PathBuf {
         .join(relative)
 }
 
-/// Load the checked-in walking scenario and its source content hash.
-fn walking() -> (CompiledScenario, String) {
-    load_scenario_hashed(&repo_path(WALKING)).expect("walking scenario loads")
-}
-
-fn provenance(content_sha256: &str) -> ScenarioProvenance {
-    ScenarioProvenance {
-        id: "walking_guide_v1".to_owned(),
-        source_path: WALKING.to_owned(),
-        schema_version: 1,
-        content_sha256: content_sha256.to_owned(),
-    }
+/// Load the checked-in walking scenario and the provenance of its bytes.
+fn walking() -> (CompiledScenario, ScenarioProvenance) {
+    load_scenario_provenance(&repo_path(WALKING)).expect("walking scenario loads")
 }
 
 /// The request a test hands to [`run_batch`].
 fn request(root: &Path, seeds: &[u64], ticks: u64, jobs: u64) -> BatchRequest {
-    let (scenario, content_sha256) = walking();
+    let (scenario, provenance) = walking();
     BatchRequest {
         root: root.to_path_buf(),
         scenario,
-        provenance: provenance(&content_sha256),
+        provenance,
         ticks,
         step_s: RunConfig::new(0).step().as_secs(),
         sampling: SamplingPolicy::default(),
@@ -202,11 +193,14 @@ fn batch_writes_a_run_directory_per_seed_and_an_ascending_manifest() {
         stderr(&output)
     );
 
-    let (_, content_sha256) = walking();
+    let (_, provenance) = walking();
     let manifest = read_batch_manifest(&out_root);
     assert_eq!(manifest.batch_manifest_version, BATCH_MANIFEST_VERSION);
     assert_eq!(manifest.spec.scenario.id, "walking_guide_v1");
-    assert_eq!(manifest.spec.scenario.content_sha256, content_sha256);
+    assert_eq!(
+        manifest.spec.scenario.content_sha256,
+        provenance.content_sha256
+    );
     assert_eq!(manifest.spec.ticks, TICKS);
     assert_eq!(manifest.spec.fidelity, "standard");
     assert_eq!(manifest.spec.step_s, 0.05);

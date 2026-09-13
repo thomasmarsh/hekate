@@ -409,6 +409,8 @@ fn write_side(
                         .scenario_sha256
                         .clone()
                         .unwrap_or_else(shared_scenario_sha256),
+                    normalized_sha256: "0".repeat(64),
+                    migration_version: 1,
                 },
                 ticks: deviation
                     .ticks

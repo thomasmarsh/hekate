@@ -1,11 +1,13 @@
 {
-  "baseline_version": 1,
+  "baseline_version": 2,
   "phase": "phase1",
   "scenario": {
     "id": "walking_guide_v1",
     "source_path": "scenarios/walking/walking_guide_v1.json5",
     "schema_version": 1,
-    "content_sha256": "668c4bdc575c648133b93f3a406390579c27f3e56567d500298dbfa7c681ff21"
+    "content_sha256": "668c4bdc575c648133b93f3a406390579c27f3e56567d500298dbfa7c681ff21",
+    "normalized_sha256": "a8d6de85bf24713fa2e2530514770a3c968bdc3a3e87e3b61f5dfdacec9bc522",
+    "migration_version": 1
   },
   "model_version": "0.0.0",
   "event_version": 2,
