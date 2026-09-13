@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T00:35:43Z
+updated: 2026-09-13T00:47:33Z
 summary: Slice A2b of Phase 1 Increment 5 adds a `replay` CLI command that reproduces a recorded run's canonical event stream from its immutable manifest, verifies it against the recorded artifact on request, and fails non-zero on a reproducibility mismatch.
 next: Read the B1 run-directory manifest API and implement `replay <RUN_DIR> [--verify]`, then test reproduction, recorded-stream mismatch, and a stale scenario-hash failure.
 ---
@@ -60,4 +60,7 @@ No new dependency is expected; `flate2` (B1) already decodes the event stream.
 
 # Result
 
-Pending.
+In progress. Base hash `85f095cd2dee598b1d12dd73d69d57b2001e76bf8e808dfdde6a6ea6f981548d`
+from `braintree hash TAS-036`, claimed by `worker` for 14400 s. Write set:
+`apps/tangle-cli/src/**`, `apps/tangle-cli/tests/**`, and this node's own frontier
+transition (`nodes/proposed/` to `nodes/active/`, then to `nodes/resolved/`).

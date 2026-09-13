@@ -22,6 +22,13 @@
 //! marker is re-run — and `--jobs` runs whole independent single-threaded runs
 //! concurrently without changing any per-run trace hash.
 //!
+//! `replay` reproduces a completed run directory from its manifest: it re-loads
+//! the recorded scenario source, checks the recorded content hash, and re-runs
+//! the kernel with the recorded seed, step, and tick count, emitting the
+//! reproduced canonical event stream to stdout. `--verify` additionally checks
+//! the reproduction against the recorded `events.jsonl.gz` and its trace hash.
+//! Replay writes no artifact and never mutates a run directory.
+//!
 //! `baseline` captures the deterministic Phase 1 baseline manifest at every
 //! fidelity preset and optionally a non-normative wall-clock report.
 
@@ -35,7 +42,8 @@ use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
     BATCH_MANIFEST_FILE, BatchRequest, CaptureRequest, RunDirectoryRequest, SamplingPolicy,
     ScenarioProvenance, canonical_run, canonical_run_sampled, capture, load_scenario_hashed,
-    render_validation_failure, run_batch, validate_scenario, write_run_directory,
+    render_validation_failure, replay_run_directory, run_batch, validate_scenario,
+    write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -69,6 +77,9 @@ enum Command {
     /// Run a scenario once per seed into an output root and write a batch manifest.
     #[command(long_about = BATCH_LONG_ABOUT)]
     Batch(BatchArgs),
+    /// Reproduce a completed run directory's canonical event stream.
+    #[command(long_about = REPLAY_LONG_ABOUT)]
+    Replay(ReplayArgs),
     /// Check a scenario source and report diagnostics without running it.
     #[command(long_about = VALIDATE_LONG_ABOUT)]
     Validate(ValidateArgs),
@@ -106,6 +117,32 @@ Exit codes:
   0  every run in the batch is complete
   1  a run failed, a run directory did not match the batch, or an artifact could
      not be written
+  2  command-line usage error";
+
+/// The `replay` contract shown by `--help`: usage, inputs, output, exit codes.
+const REPLAY_LONG_ABOUT: &str = "\
+Reproduce a completed run directory's canonical event stream. The manifest
+records the scenario source and content hash, the seed, the fixed step, and the
+tick count, and replay re-runs the kernel with exactly those, writing the
+reproduced stream to stdout. Replay reads the run directory and the recorded
+scenario source only: it writes no artifact and mutates nothing.
+
+Usage:
+  tangle-cli replay <RUN_DIR> [--verify]
+
+Inputs:
+  <RUN_DIR>  A completed run directory holding manifest.json and events.jsonl.gz.
+  --verify   Also check the reproduction against the recorded stream and hash.
+
+Output:
+  The reproduced canonical event stream on stdout, decompressed to canonical
+  record order, and the reproduced trace hash on stderr.
+
+Exit codes:
+  0  the run was reproduced, and verified when --verify was given
+  1  the run directory is missing or incomplete, the scenario source no longer
+     matches the recorded content hash, a recorded artifact cannot be read, or
+     the reproduction disagrees with the recorded run
   2  command-line usage error";
 
 /// The `validate` contract shown by `--help`: usage, inputs, and exit codes.
@@ -171,6 +208,7 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Run(args) => run(args),
         Command::Batch(args) => batch(args),
+        Command::Replay(args) => replay(args),
         Command::Validate(args) => validate(args),
         Command::Baseline(args) => baseline(args),
     }
@@ -320,6 +358,41 @@ fn batch(args: BatchArgs) -> ExitCode {
         out_root.join(BATCH_MANIFEST_FILE).display(),
         manifest.runs.len()
     );
+    ExitCode::SUCCESS
+}
+
+/// Arguments for `replay`.
+#[derive(Args)]
+struct ReplayArgs {
+    /// Completed run directory holding manifest.json and events.jsonl.gz.
+    run_dir: PathBuf,
+
+    /// Also verify the reproduction against the recorded stream and trace hash.
+    #[arg(long)]
+    verify: bool,
+}
+
+/// Reproduce a completed run directory and write its canonical event stream to
+/// stdout.
+///
+/// Reproduction and verification both succeed before any stream is written, so
+/// a verified replay's stdout is exactly the bytes a `run` with the same
+/// parameters produced, and a failed verification emits no stream at all.
+fn replay(args: ReplayArgs) -> ExitCode {
+    let trace = match replay_run_directory(&args.run_dir, args.verify) {
+        Ok(trace) => trace,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = io::stdout().write_all(trace.bytes()) {
+        return fail(format_args!(
+            "cannot write replay stream to stdout: {error}"
+        ));
+    }
+    eprintln!("replay trace hash: {}", trace.hash());
+    if args.verify {
+        eprintln!("replay verified: {}", args.run_dir.display());
+    }
     ExitCode::SUCCESS
 }
 

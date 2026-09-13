@@ -11,6 +11,7 @@
 
 mod baseline;
 mod batch;
+mod replay;
 mod run_dir;
 mod trace;
 mod trajectories;
@@ -29,6 +30,7 @@ pub use batch::{
     BATCH_MANIFEST_FILE, BATCH_MANIFEST_VERSION, BatchError, BatchManifest, BatchRequest, BatchRun,
     BatchSpec, run_batch,
 };
+pub use replay::{ReplayError, replay_run_directory};
 pub use run_dir::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_COMPRESSION,
     EVENT_STREAM_FILE, EventRetention, EventStream, MANIFEST_FILE, RUN_MANIFEST_VERSION,
