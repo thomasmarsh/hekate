@@ -1,42 +1,45 @@
 # Phase 2 entry gate: Phase 1 definition of done
 
-**Verdict: NOT SATISFIED.** Phase 1 is implemented only through Increment 0 (a
-walking skeleton) plus the terminal-rendering epic. Most of the Phase 1
-definition of done in `PHASE_1_PLAN.md` has no implementation, so Phase 2
-Increment 0 may capture the current baseline but no behavior-changing Phase 2
-increment may begin.
+**Verdict: SATISFIED.** All seven items of the Phase 1 definition of done in
+`PHASE_1_PLAN.md` are met by the committed tree. Phase 1 Increments 1 through 6
+are tracked and resolved as
+[[TAS-026-phase-1-increment-1-general-scenario-foundation]] through
+[[TAS-050-increment-6-replay-and-live-view]], with the Increment 6 closeout and
+per-criterion evidence in
+[[TAS-045-phase-1-increment-6-first-useful-release-demonstration]].
 
-Date: 2026-09-12. Baseline: `baseline.json` against scenario content hash
-`668c4bdc575c648133b93f3a406390579c27f3e56567d500298dbfa7c681ff21`.
+Date: 2026-09-13. Baseline: `baseline.json` against Phase 1 scenario content hash
+`668c4bdc575c648133b93f3a406390579c27f3e56567d500298dbfa7c681ff21`. This file
+was last re-checked after Phase 1 Increments 1-6 landed; the earlier
+2026-09-12 verdict of NOT SATISFIED is superseded.
 
 ## Checklist
 
 | # | Phase 1 definition of done | Evidence | Verdict |
 |---|---|---|---|
-| 1 | A live GPU-backed debug viewer is useful for inspecting geometry, state, decisions, collisions, and conflicts. | `apps/tangle-viewer` (Bevy) renders `tangle-present` scene frames with pause/step/speed controls and overlays. Geometry and constant-speed state render; decisions, collisions, and conflicts do not exist in the kernel to inspect. | Partial |
-| 2 | The exact same kernel runs headless, faster than wall-clock, and in parallel replications. | `tangle-cli run` drives the same `Simulation`. `performance.json` shows 12.5 s of simulated time in under 1 ms per preset. `tangle-cli` exposes only `run` and `baseline`; there is no `batch`/replication command. | Partial |
-| 3 | Cars and pedestrians move in continuous coordinates through scenarios composed from general primitives. | `tangle-sim` has one `AgentStore` of box-shaped constant-speed cars on a polyline guide path. No pedestrian body, demand, route, or controller exists (`rg -i pedestrian crates/tangle-sim` returns nothing). The scenario schema has paths, portals, and population only: no movements, crossings, signals, or pedestrians. | Not met |
-| 4 | The supported determinism contract is exercised by golden traces and viewer/headless equivalence tests. | `apps/tangle-cli/tests/golden_trace.rs` checks the canonical trace bytes and hash; `apps/tangle-tui/tests/walking_parity.rs` checks clock pacing against the same trace. There is no kernel-versus-Bevy-viewer equivalence test. | Partial |
-| 5 | Collision/contact and surrogate metrics have analytic/reference fixtures and fidelity sensitivity results. | No broad phase, distance query, swept check, contact event, TTC, PET, or minimum-separation metric exists in `tangle-sim`. `baseline.json` is the only convergence evidence and covers counts, not safety metrics. | Not met |
-| 6 | Two scenario-only design variants can be reproduced and compared from checked-in manifests and seed banks. | `scenarios/` contains a single `walking/walking_guide_v1.json5`. There is no experiment spec, seed bank, batch runner, summary, or comparison report. | Not met |
-| 7 | Known model limitations and unvalidated claims are explicit. | No model cards exist for the car or pedestrian models. `baselines/phase1/README.md` is a scope note, not a model card with parameter sources and validated ranges. | Not met |
+| 1 | A live GPU-backed debug viewer is useful for inspecting geometry, state, decisions, collisions, and conflicts. | `apps/tangle-viewer` (Bevy) drives the kernel only in whole fixed steps and renders every `tangle-present` `SceneFrame`; `crates/tangle-present/src/safety.rs` projects safety markers, body emphasis, region occupancy, standstill, and controller states, so geometry, decisions, collisions, and conflicts are all inspectable. Pinned by `crates/tangle-present/tests/safety_overlays.rs`. | Satisfied |
+| 2 | The exact same kernel runs headless, faster than wall-clock, and in parallel replications. | `tangle-cli run` and `batch` drive the same `tangle-sim` `Simulation`; a batch at `--jobs 8` produces the same per-run trace hashes and manifest bytes as `--jobs 1`. `baselines/phase1/performance.json` runs 12.5 s of simulated time in under 1 ms per preset and `perf/release-bench.json` measures a full simulated hour. | Satisfied |
+| 3 | Cars and pedestrians move in continuous coordinates through scenarios composed from general primitives. | The `tangle-sim` `AgentStore` holds oriented-box vehicles and circle pedestrians in continuous world coordinates. The schema composes paths, portals, boundaries, regions, movements, crossings, waiting areas, pedestrian routes, conflict regions, rules, signals, and demand, and `scenarios/benchmarks/` builds straight, perpendicular, offset, and four-leg layouts with no scenario-specific simulator branch. | Satisfied |
+| 4 | The supported determinism contract is exercised by golden traces and viewer/headless equivalence tests. | `apps/tangle-cli/tests/golden_trace.rs` checks the canonical trace bytes and hash; `apps/tangle-tui/tests/clock_parity.rs` drives one seed through the Bevy viewer clock, the terminal clock, and direct stepping and asserts identical tick sequences and trace hashes; `backend_parity.rs`, `golden_cells.rs`, and `golden_kitty.rs` pin the renderer backends. | Satisfied |
+| 5 | Collision/contact and surrogate metrics have analytic/reference fixtures and fidelity sensitivity results. | `crates/tangle-sim/tests/` covers swept and geometry queries, contact and safety events, and time-to-collision, post-encroachment time, and minimum separation against an independent reference occupancy (`metrics.rs`). `experiments/increment6_signal_timing_v1/convergence_evidence.json` reports per-metric Fast (100 ms), Standard (50 ms), and Fine (20 ms) sensitivity. | Satisfied |
+| 6 | Two scenario-only design variants can be reproduced and compared from checked-in manifests and seed banks. | `scenarios/experiments/four_leg_pedestrian_{ew,ns}_priority_v1.json5` differ through scenario data alone; `experiments/increment6_signal_timing_v1/{experiment.json,seed_bank.json}` are checked in; `scripts/reproduce-increment6.sh` regenerates the comparison and convergence evidence byte for byte and verifies 60 manifests with `replay --verify`. | Satisfied |
+| 7 | Known model limitations and unvalidated claims are explicit. | `docs/known_limitations.md` states the claims that are and are not made. The vehicle and pedestrian model cards in `crates/tangle-sim/src/control.rs` and `crates/tangle-sim/src/pedestrian.rs` document state, parameters, constants, decision inputs, bounds, tie-breaks, and the emergency backstop, protected by `crates/tangle-sim/tests/model_cards.rs`. | Satisfied |
 
-Additional constraints from the Phase 1 plan:
+## Additional constraints
 
-- The one-way dependency direction is enforced and passing:
-  `scripts/check-dependency-direction.sh` reports OK, and `baseline.rs` adds no
-  kernel dependency (it lives in the `tangle-cli` application crate).
-- Phase 1 Increments 1 through 6 are plan text only. None is tracked as a
-  Braintree node, so the graph does not currently own the work that clears this
-  gate.
+- The one-way dependency direction passes: `scripts/check-dependency-direction.sh`
+  reports OK, and the baseline and other output commands live in the `tangle-cli`
+  application crate and add no kernel dependency.
+- Phase 1 Increments 1 through 6 are now tracked: TAS-026 through TAS-043 and
+  TAS-045 through TAS-050 are all in `.braintree/resolved/`.
 
 ## Consequence
 
-`baseline.json` freezes the behavior that exists today, so a later Phase 2 change
-can still be classified as intentional or a regression. It does not satisfy the
-Phase 2 prerequisite: the Phase 1 definition of done remains open.
-
-The behavior-changing Phase 2 increments ([[TAS-019-phase-2-increment-1-facilities-narrow-modes]]
-through [[TAS-025-phase-2-increment-7-release-demonstration]]) must not start
-until Phase 1 Increments 1 through 6 land and this checklist passes. Clearing the
-gate is Phase 1 work, not Phase 2 work.
+The Phase 2 prerequisite is met, so behavior-changing Phase 2 increments may
+begin. Phase 2 Increment 0
+([[TAS-018-phase-2-increment-0-baseline-extension-contract]]) still owns the
+schema-version-2 design, the deterministic version-1 migration, the compiled
+agent components, the model-card template, the benchmark matrix, and the
+arbitrary-body-kind representation that
+[[TAS-019-phase-2-increment-1-facilities-narrow-modes]] consumes, so Increment 1
+remains gated on it.
