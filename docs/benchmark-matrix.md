@@ -81,7 +81,7 @@ Every tolerance in §6 names the baseline it derives from. Two kinds appear:
 
 No tolerance below is a trace-hash or golden-file comparison. The exact
 determinism/replay checks (a run reproduces its own trace hash) are gates, not
-tolerances, and are deliberately kept out of §6; §7.3 states where they live.
+tolerances, and are deliberately kept out of §6; §7.4 states where they live.
 
 ## 4. Coverage axes
 
@@ -95,8 +95,8 @@ articulated wheeled, `P` pedestrian.
 | --- | --- | --- | --- | --- |
 | `passenger_car` | M | `CC-CAR` | `straight_approach_v1` (existing) | Phase 1 |
 | `pedestrian` | P | `CC-PED` | `pedestrian_crossing_v1` (existing) | Phase 1 |
-| `bicycle` | N | `CC-NARROW` | `narrow_isolated_*` (planned) | Increment 1 |
-| `scooter` | N | `CC-NARROW` | `narrow_isolated_*` (planned) | Increment 1 |
+| `bicycle` | N | `CC-NARROW` | `narrow_isolated_straight_v2`, `narrow_isolated_curve_v2` (checked in) | Increment 1 |
+| `scooter` | N | `CC-NARROW` | `narrow_isolated_straight_v2`, `narrow_isolated_curve_v2` (checked in) | Increment 1 |
 | `bus` | M | `CC-HEAVY`, `CC-TRANSIT` | `heavy_isolated_v2`, `transit_low_demand_v2` (planned) | Increments 3, 4 |
 | `rigid_truck` | M | `CC-HEAVY` | `heavy_isolated_v2` (planned) | Increment 3 |
 | `tractor_semitrailer` | A | `CC-ARTIC` | `articulated_reference_v2` (planned) | Increment 3 |
@@ -213,17 +213,28 @@ baseline it derives from. None is a golden-file or trace-hash comparison.
 | `mixed_interaction_v1` | `scenarios/benchmarks/mixed_interaction_v1.json5` | car-pedestrian crossing, two crosswalks |
 | `four_leg_pedestrian_{ew,ns}_priority_v1` | `scenarios/experiments/four_leg_pedestrian_{ew,ns}_priority_v1.json5` | car-pedestrian mixed release comparison |
 
-### 7.2 Planned fixtures
+### 7.2 Checked-in fixtures
+
+The Increment 1 narrow-mode fixtures. Each path is checked in and loads
+through the CLI; later increments revise this section the same way, moving a
+planned path here when it checks the path in.
+
+| Id | Path | Covers |
+| --- | --- | --- |
+| `narrow_isolated_straight_v2` | `scenarios/phase2/inc1/narrow_isolated_straight_v2.json5` | narrow `CC-NARROW` independent cell, both modes: free-flow straight |
+| `narrow_isolated_curve_v2` | `scenarios/phase2/inc1/narrow_isolated_curve_v2.json5` | narrow `CC-NARROW` independent cell, both modes: free-flow constant-curvature curve |
+| `narrow_isolated_braking_v2` | `scenarios/phase2/inc1/narrow_isolated_braking_v2.json5` | narrow isolated braking, both modes: stop line held by a red head |
+| `narrow_following_v2` | `scenarios/phase2/inc1/narrow_following_v2.json5` | narrow-narrow `following`, both modes |
+| `narrow_signal_v2` | `scenarios/phase2/inc1/narrow_signal_v2.json5` | narrow isolated signal, both modes: yield, hold, and proceed |
+| `narrow_crossing_v2` | `scenarios/phase2/inc1/narrow_crossing_v2.json5` | narrow `crossing`, both modes: traverse an authored conflict region |
+
+### 7.3 Planned fixtures
 
 Each row is the path and owning increment for one class of cell. The pairwise
 convention fixes one file per supported `(pair, family)` coordinate.
 
 | Id / pattern | Path | Owned by |
 | --- | --- | --- |
-| `narrow_isolated_*` | `scenarios/phase2/inc1/narrow_isolated_straight_v2.json5`, `..._curve_v2.json5`, `..._braking_v2.json5` | Increment 1 |
-| `narrow_signal_v2` | `scenarios/phase2/inc1/narrow_signal_v2.json5` | Increment 1 |
-| `narrow_following_v2` | `scenarios/phase2/inc1/narrow_following_v2.json5` | Increment 1 |
-| `narrow_crossing_v2` | `scenarios/phase2/inc1/narrow_crossing_v2.json5` | Increment 1 |
 | `narrow_passing_v2` | `scenarios/phase2/inc2/narrow_passing_v2.json5` | Increment 2 |
 | `motor_passing_narrow_v2` | `scenarios/phase2/inc2/motor_passing_narrow_v2.json5` | Increment 2 |
 | `motor_lane_change_v2` | `scenarios/phase2/inc2/motor_lane_change_v2.json5` | Increment 2 |
@@ -245,7 +256,7 @@ convention fixes one file per supported `(pair, family)` coordinate.
 | `mixed_release_v2` | `scenarios/phase2/inc7/mixed_release_v2.json5` | Increment 7 |
 | `mixed_release_saturated_v2` | `scenarios/phase2/inc7/mixed_release_saturated_v2.json5` | Increment 7 |
 
-### 7.3 Fixture resolution for a supported pairwise cell
+### 7.4 Fixture resolution for a supported pairwise cell
 
 Read top to bottom; the first row that matches names the cell's fixture. The
 `<family>` token is the family slug (`following`, `crossing`, `merging`,
@@ -295,7 +306,7 @@ Rows are the 28 unordered mode pairs (21 cross-mode plus 7 same-mode), in
 `passenger_car, pedestrian, bicycle, scooter, bus, rigid_truck,
 tractor_semitrailer` order. Columns are the eight families. Each cell is
 `S:<class>` (supported), `I:<reason>` (impossible), or `D:<increment>`
-(deferred). Every supported cell resolves through §5 and §7.3.
+(deferred). Every supported cell resolves through §5 and §7.4.
 
 | pair | following | crossing | merging | overtaking | head-on / opposing | shared-space | stop-service | unknown |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

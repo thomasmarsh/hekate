@@ -14,6 +14,11 @@
 //! 2. the **migration path** — parse, [`migrate_v1_to_v2`], validate the
 //!    version-2 document, then [`CompiledScenario::compile_v2`].
 //!
+//! A checked-in version-2 scenario (the Phase 2 increment fixtures under
+//! `scenarios/phase2/`) has no migration to compare, so the gate validates and
+//! compiles it directly instead. Either way every checked-in scenario is
+//! enumerated and must load.
+//!
 //! The two canonical traces must agree on every line after the run header. The
 //! header is provenance, and it carries exactly one declared correction; see
 //! below.
@@ -266,13 +271,44 @@ fn every_checked_in_scenario_is_enumerated() {
     }
 }
 
-/// The gate: every checked-in version-1 scenario migrates and reproduces the
-/// original reader's event body byte-for-byte, differing only in the declared
-/// header `schema_version`.
+/// The gate: every checked-in scenario is covered. A version-1 scenario
+/// migrates and reproduces the original reader's event body byte-for-byte,
+/// differing only in the declared header `schema_version`. A version-2 scenario
+/// has no version-1 original to compare against, so it must validate, compile,
+/// and advance the kernel through the version-2 run path, which keeps it inside
+/// the gate as a checked-in, loadable, runnable scenario rather than an escape
+/// hatch.
 #[test]
-fn every_scenario_migrates_and_preserves_the_original_trace_body() {
+fn every_scenario_migrates_or_is_a_valid_version_2_document() {
     for path in checked_in_scenarios() {
         let text = read(&path);
+        let document = parse_scenario_document(&text)
+            .unwrap_or_else(|error| panic!("'{}' does not parse: {error}", path.display()));
+
+        match document {
+            ScenarioDocument::V2(source) => {
+                let diagnostics = validate_v2(&source);
+                assert!(
+                    diagnostics.is_empty(),
+                    "'{}' is an invalid version-2 document: {diagnostics:?}",
+                    path.display()
+                );
+                let scenario = CompiledScenario::compile_v2(source).unwrap_or_else(|diagnostics| {
+                    panic!(
+                        "'{}' failed to compile from its version-2 form: {diagnostics:?}",
+                        path.display()
+                    )
+                });
+                let trace = run(scenario, DIFFERENTIAL_SEED, DIFFERENTIAL_TICKS);
+                assert!(
+                    !trace.bytes().is_empty(),
+                    "'{}' produced an empty version-2 run",
+                    path.display()
+                );
+                continue;
+            }
+            ScenarioDocument::V1(_) => {}
+        }
 
         let original = run(
             load_scenario(&path).expect("the original reader compiles the scenario"),

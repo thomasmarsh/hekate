@@ -505,14 +505,18 @@
       "scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5",
       "scenarios/experiments/four_leg_pedestrian_ns_priority_v1.json5"
     ],
+    "checked_in_increment_1": {
+      "narrow_isolated_straight_v2": "scenarios/phase2/inc1/narrow_isolated_straight_v2.json5",
+      "narrow_isolated_curve_v2": "scenarios/phase2/inc1/narrow_isolated_curve_v2.json5",
+      "narrow_isolated_braking_v2": "scenarios/phase2/inc1/narrow_isolated_braking_v2.json5",
+      "narrow_following_v2": "scenarios/phase2/inc1/narrow_following_v2.json5",
+      "narrow_signal_v2": "scenarios/phase2/inc1/narrow_signal_v2.json5",
+      "narrow_crossing_v2": "scenarios/phase2/inc1/narrow_crossing_v2.json5"
+    },
     "planned_patterns": {
       "pair": "scenarios/phase2/inc5/pair_<a>__<b>__<family>_v2.json5",
       "shared_space": "scenarios/phase2/inc5/shared_space_<a>__<b>_v2.json5",
       "group": "scenarios/phase2/inc5/group_<name>_v2.json5",
-      "narrow_isolated": "scenarios/phase2/inc1/narrow_isolated_{straight,curve,braking}_v2.json5",
-      "narrow_signal": "scenarios/phase2/inc1/narrow_signal_v2.json5",
-      "narrow_following": "scenarios/phase2/inc1/narrow_following_v2.json5",
-      "narrow_crossing": "scenarios/phase2/inc1/narrow_crossing_v2.json5",
       "narrow_passing": "scenarios/phase2/inc2/narrow_passing_v2.json5",
       "motor_passing_narrow": "scenarios/phase2/inc2/motor_passing_narrow_v2.json5",
       "motor_lane_change": "scenarios/phase2/inc2/motor_lane_change_v2.json5",

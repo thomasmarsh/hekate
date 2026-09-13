@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T20:19:58Z
+updated: 2026-09-13T20:54:12Z
 summary: Increment 1 adds continuous-width facilities and bicycle/scooter modes with longitudinal behavior and isolated fixtures.
-next: [[TAS-078-check-in-narrow-mode-isolated-fixtures-and-tests]]
+next: [[TAS-079-prove-narrow-mode-reproducibility-and-independen]]
 ---
 
 # Outcome

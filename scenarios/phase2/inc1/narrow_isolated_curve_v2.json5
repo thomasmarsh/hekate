@@ -1,0 +1,209 @@
+// TAS-078: the Increment 1 narrow isolated curve fixture.
+//
+// Two constant-curvature bikeways, one per narrow mode, authored as concentric
+// quarter circles of radius 80 m (bicycle) and 86 m (scooter) about the origin,
+// so neither mode constrains the other and both ride a genuinely turning
+// reference path. Each guide path is the chord polyline of its arc — the only
+// reference-path form `paths[].points` authors — and the facility's
+// `reference_path` is that polyline, so the run follows the same curved geometry
+// the compiled facility exposes.
+//
+// The arc each polyline is the chord approximation of is declared here as the
+// facility's analytic constant-curvature reference, one per mode:
+//
+// | path | centre | radius | start angle | sweep |
+// | --- | --- | --- | --- | --- |
+// | `bicycle_arc_r80` | `(0, 0)` | 80 m | `-pi/2` | `+pi/2` (counter-clockwise) |
+// | `scooter_arc_r86` | `(0, 0)` | 86 m | `-pi/2` | `+pi/2` (counter-clockwise) |
+//
+// so a vertex at index `i` of `2 * 24` equals
+// `(r * cos(-pi/2 + (pi/2) * i / 24), r * sin(-pi/2 + (pi/2) * i / 24))`. The
+// fixture test reconstructs that analytic reference with the compiled
+// `CompiledReferencePath::arc` geometry and holds it to `T-RT`; the authored
+// polyline vertices are exactly that arc's chord points, so the compiled
+// facility and the declared analytic reference describe one curve.
+//
+// Both templates author constant (min == max) bodies and desired speeds, so the
+// sampled profile is the authored value (`T-DIM`, `T-SPD`). Demand rates keep
+// successive agents far enough apart that no narrow agent ever follows a
+// leader, so the run is an isolated free-flow curve — the Increment 1 "isolated
+// curve" rung. This is `CC-NARROW` evidence: every cell it feeds stays at the
+// matrix's `F/S/f` presets.
+{
+  schema_version: 2,
+  id: 'narrow_isolated_curve_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'bicycle_arc_r80', points: [
+        { x: 4.898587196589413e-15, y: -80.0 }, { x: 5.232250338411443, y: -79.82871385908828 },
+        { x: 10.442095377604137, y: -79.31558890990483 }, { x: 15.607225761290264, y: -78.46282243225843 },
+        { x: 20.70552360820166, y: -77.27406610312546 }, { x: 25.715157224252934, y: -75.75441035960844 },
+        { x: 30.614674589207187, y: -73.91036260090294 }, { x: 35.3830952175201, y: -71.74981932261507 },
+        { x: 39.99999999999999, y: -69.2820323027551 }, { x: 44.44561864156818, y: -66.51756898420362 },
+        { x: 48.70091432069766, y: -63.4682672232988 }, { x: 52.747665208005515, y: -60.14718459831819 },
+        { x: 56.568542494923804, y: -56.5685424949238 }, { x: 60.1471845983182, y: -52.74766520800551 },
+        { x: 63.46826722329881, y: -48.70091432069765 }, { x: 66.51756898420362, y: -44.44561864156818 },
+        { x: 69.28203230275508, y: -40.0 }, { x: 71.74981932261507, y: -35.38309521752009 },
+        { x: 73.91036260090294, y: -30.614674589207183 }, { x: 75.75441035960846, y: -25.71515722425293 },
+        { x: 77.27406610312546, y: -20.705523608201656 }, { x: 78.46282243225843, y: -15.607225761290259 },
+        { x: 79.31558890990483, y: -10.442095377604133 }, { x: 79.82871385908828, y: -5.232250338411458 },
+        { x: 80.0, y: 0.0 },
+    ] },
+    { id: 'scooter_arc_r86', points: [
+        { x: 5.2659812363336185e-15, y: -86.0 }, { x: 5.624669113792302, y: -85.8158673985199 },
+        { x: 11.225252530924447, y: -85.26425807814769 }, { x: 16.777767693387034, y: -84.34753411467781 },
+        { x: 22.258437878816785, y: -83.06962106085987 }, { x: 27.643794016071904, y: -81.43599113657908 },
+        { x: 32.910775183397725, y: -79.45363979597066 }, { x: 38.03682735883411, y: -77.1310557718112 },
+        { x: 42.99999999999999, y: -74.47818472546173 }, { x: 47.779040039685796, y: -71.5063866580189 },
+        { x: 52.35348289474999, y: -68.22838726504621 }, { x: 56.70374009860593, y: -64.65822344319206 },
+        { x: 60.81118318204309, y: -60.81118318204308 }, { x: 64.65822344319207, y: -56.70374009860592 },
+        { x: 68.22838726504622, y: -52.35348289474997 }, { x: 71.5063866580189, y: -47.779040039685796 },
+        { x: 74.47818472546172, y: -43.0 }, { x: 77.1310557718112, y: -38.0368273588341 },
+        { x: 79.45363979597066, y: -32.910775183397725 }, { x: 81.43599113657909, y: -27.6437940160719 },
+        { x: 83.06962106085987, y: -22.25843787881678 }, { x: 84.34753411467781, y: -16.77776769338703 },
+        { x: 85.26425807814769, y: -11.225252530924443 }, { x: 85.8158673985199, y: -5.624669113792317 },
+        { x: 86.0, y: 0.0 },
+    ] },
+  ],
+  portals: [
+    { id: 'bicycle_entry', path: 'bicycle_arc_r80', end: 'start', width_m: 3.0 },
+    { id: 'bicycle_exit', path: 'bicycle_arc_r80', end: 'end', width_m: 3.0 },
+    { id: 'scooter_entry', path: 'scooter_arc_r86', end: 'start', width_m: 3.0 },
+    { id: 'scooter_exit', path: 'scooter_arc_r86', end: 'end', width_m: 3.0 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -100.0 }, { x: 100.0, y: -100.0 },
+      { x: 100.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'bicycle_band', points: [
+        { x: 4.990435706525464e-15, y: -81.5 }, { x: 5.330355032256659, y: -81.32550224394619 },
+        { x: 10.637884665934214, y: -80.80275620196555 }, { x: 15.899861244314456, y: -79.93400035286328 },
+        { x: 21.09375217585544, y: -78.72295484255906 }, { x: 26.197316422207678, y: -77.1748055538511 },
+        { x: 31.18869973775482, y: -75.29618189966988 }, { x: 36.0465282528486, y: -73.0951284349141 },
+        { x: 40.74999999999999, y: -70.58107040843176 }, { x: 45.27897399109759, y: -67.76477340265744 },
+        { x: 49.61405646421074, y: -64.65829723373565 }, { x: 53.73668393065562, y: -61.27494430953666 },
+        { x: 57.62920266670363, y: -57.62920266670362 }, { x: 61.274944309536664, y: -53.73668393065561 },
+        { x: 64.65829723373567, y: -49.614056464210734 }, { x: 67.76477340265744, y: -45.27897399109759 },
+        { x: 70.58107040843174, y: -40.75 }, { x: 73.0951284349141, y: -36.046528252848596 },
+        { x: 75.29618189966988, y: -31.188699737754817 }, { x: 77.17480555385112, y: -26.197316422207674 },
+        { x: 78.72295484255906, y: -21.093752175855435 }, { x: 79.93400035286328, y: -15.899861244314453 },
+        { x: 80.80275620196555, y: -10.63788466593421 }, { x: 81.32550224394619, y: -5.330355032256672 },
+        { x: 81.5, y: 0.0 }, { x: 78.5, y: 0.0 },
+        { x: 78.33192547423037, y: -5.134145644566242 }, { x: 77.82842161784411, y: -10.246306089274055 },
+        { x: 76.99164451165359, y: -15.314590278266067 }, { x: 75.82517736369186, y: -20.317295040547872 },
+        { x: 74.3340151653658, y: -25.23299802629819 }, { x: 72.52454330213601, y: -30.040649440659546 },
+        { x: 70.40451021031603, y: -34.71966218219159 }, { x: 67.98299419707843, y: -39.25 },
+        { x: 65.2703645657498, y: -43.61226329203878 }, { x: 62.27823721286196, y: -47.78777217718457 },
+        { x: 59.01942488709973, y: -51.758646485355406 }, { x: 55.50788232314398, y: -55.507882323143974 },
+        { x: 51.75864648535541, y: -59.019424887099724 }, { x: 47.78777217718458, y: -62.27823721286195 },
+        { x: 43.61226329203878, y: -65.2703645657498 }, { x: 39.24999999999999, y: -67.98299419707844 },
+        { x: 34.7196621821916, y: -70.40451021031603 }, { x: 30.040649440659553, y: -72.52454330213601 },
+        { x: 25.232998026298194, y: -74.33401516536578 }, { x: 20.31729504054788, y: -75.82517736369186 },
+        { x: 15.314590278266072, y: -76.99164451165359 }, { x: 10.246306089274059, y: -77.82842161784411 },
+        { x: 5.134145644566229, y: -78.33192547423037 }, { x: 4.806738686653362e-15, y: -78.5 },
+    ] },
+    { id: 'scooter_band', points: [
+        { x: 5.357829746269671e-15, y: -87.5 }, { x: 5.722773807637517, y: -87.3126557833778 },
+        { x: 11.421041819254524, y: -86.75142537020841 }, { x: 17.070403176411226, y: -85.81871203528266 },
+        { x: 22.646666446470565, y: -84.51850980029347 }, { x: 28.125953214026648, y: -82.85638633082173 },
+        { x: 33.48480033194536, y: -80.83945909473759 }, { x: 38.70026039416261, y: -78.47636488411023 },
+        { x: 43.74999999999999, y: -75.77722283113839 }, { x: 48.6123953892152, y: -72.7535910764727 },
+        { x: 53.266625038263065, y: -69.41841727548307 }, { x: 57.692758821256035, y: -65.78598315441052 },
+        { x: 61.87184335382291, y: -61.871843353822904 }, { x: 65.78598315441053, y: -57.69275882125602 },
+        { x: 69.41841727548308, y: -53.26662503826306 }, { x: 72.7535910764727, y: -48.6123953892152 },
+        { x: 75.77722283113837, y: -43.75 }, { x: 78.47636488411023, y: -38.700260394162605 },
+        { x: 80.83945909473759, y: -33.48480033194536 }, { x: 82.85638633082175, y: -28.125953214026644 },
+        { x: 84.51850980029347, y: -22.64666644647056 }, { x: 85.81871203528266, y: -17.070403176411222 },
+        { x: 86.75142537020841, y: -11.42104181925452 }, { x: 87.3126557833778, y: -5.722773807637531 },
+        { x: 87.5, y: 0.0 }, { x: 84.5, y: 0.0 },
+        { x: 84.31907901366199, y: -5.526564419947102 }, { x: 83.77709078608697, y: -11.029463242594366 },
+        { x: 82.87635619407297, y: -16.48513221036284 }, { x: 81.62073232142627, y: -21.870209311163 },
+        { x: 80.01559594233643, y: -27.161634818117157 }, { x: 78.06782049720373, y: -32.336750034850084 },
+        { x: 75.78574665951217, y: -37.3733943235056 }, { x: 73.17914661978506, y: -42.25 },
+        { x: 70.25918223956508, y: -46.94568469015639 }, { x: 67.03835725460937, y: -51.440340751236896 },
+        { x: 63.5304637319736, y: -55.71472137595582 }, { x: 59.75052301026327, y: -59.75052301026326 },
+        { x: 55.714721375955826, y: -63.53046373197359 }, { x: 51.4403407512369, y: -67.03835725460937 },
+        { x: 46.94568469015639, y: -70.25918223956508 }, { x: 42.24999999999999, y: -73.17914661978507 },
+        { x: 37.37339432350561, y: -75.78574665951217 }, { x: 32.33675003485009, y: -78.06782049720373 },
+        { x: 27.161634818117165, y: -80.01559594233642 }, { x: 21.870209311163002, y: -81.62073232142627 },
+        { x: 16.485132210362842, y: -82.87635619407297 }, { x: 11.02946324259437, y: -83.77709078608697 },
+        { x: 5.526564419947087, y: -84.31907901366199 }, { x: 5.174132726397567e-15, y: -84.5 },
+    ] },
+  ],
+  facilities: [
+    { id: 'bicycle_curve', region: 'bicycle_band', reference_path: 'bicycle_arc_r80',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'bicycle' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+    { id: 'scooter_curve', region: 'scooter_band', reference_path: 'scooter_arc_r86',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'scooter' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'bicycle_through', from: 'bicycle_entry', to: 'bicycle_exit',
+      path: 'bicycle_arc_r80', priority: 0, direction: 'forward' },
+    { id: 'scooter_through', from: 'scooter_entry', to: 'scooter_exit',
+      path: 'scooter_arc_r86', priority: 0, direction: 'forward' },
+  ],
+  mode_templates: [
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 5.0, max: 5.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'scooter',
+      body: { kind: 'capsule', length_m: { min: 1.1, max: 1.1 },
+        radius_m: { min: 0.3, max: 0.3 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 6.0, max: 6.0 },
+        max_accel_mps2: { min: 1.5, max: 1.5 },
+        comfortable_brake_mps2: { min: 2.5, max: 2.5 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 1.0, max: 1.0 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [],
+  demand: [
+    { id: 'bicycle_inflow', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'bicycle_entry',
+        rate_per_hour: 240.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'bicycle_through', weight: 1.0 } ] },
+      } } },
+    { id: 'scooter_inflow', mode: 'scooter',
+      spawn: { rate: {
+        portal: 'scooter_entry',
+        rate_per_hour: 240.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'scooter_through', weight: 1.0 } ] },
+      } } },
+  ],
+}

@@ -1,0 +1,120 @@
+// TAS-078: the Increment 1 narrow isolated straight fixture.
+//
+// One straight bikeway per narrow mode, authored side by side so neither mode
+// constrains the other: a bicycle facility and a scooter facility, each with
+// its own guide path, entry and exit portal, and demand. Each mode's reference
+// path is a single straight polyline, so the compiled facility geometry is the
+// analytic straight reference `T-RT` bounds and the round trip is exact.
+//
+// Both templates author constant (min == max) bodies and desired speeds, so the
+// sampled profile is the authored value: the test can compare the realized
+// capsule dimensions to the authored template with no sampling slack
+// (`T-DIM`), and the steady-state free speed to the authored constant
+// (`T-SPD`). Demand rates keep successive agents far enough apart that no
+// narrow agent ever follows a leader, so the run is an isolated free-flow
+// straight — the Increment 1 "isolated straight" rung. This is `CC-NARROW`
+// evidence, so every cell it feeds must stay at the matrix's `F/S/f` presets.
+{
+  schema_version: 2,
+  id: 'narrow_isolated_straight_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'bicycle_path', points: [ { x: -20.0, y: 0.0 }, { x: 240.0, y: 0.0 } ] },
+    { id: 'scooter_path', points: [ { x: -20.0, y: -6.0 }, { x: 240.0, y: -6.0 } ] },
+  ],
+  portals: [
+    { id: 'bicycle_entry', path: 'bicycle_path', end: 'start', width_m: 3.0 },
+    { id: 'bicycle_exit', path: 'bicycle_path', end: 'end', width_m: 3.0 },
+    { id: 'scooter_entry', path: 'scooter_path', end: 'start', width_m: 3.0 },
+    { id: 'scooter_exit', path: 'scooter_path', end: 'end', width_m: 3.0 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -40.0, y: -20.0 }, { x: 260.0, y: -20.0 },
+      { x: 260.0, y: 20.0 }, { x: -40.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'bicycle_band', points: [
+      { x: -20.0, y: -1.5 }, { x: 240.0, y: -1.5 },
+      { x: 240.0, y: 1.5 }, { x: -20.0, y: 1.5 },
+    ] },
+    { id: 'scooter_band', points: [
+      { x: -20.0, y: -7.5 }, { x: 240.0, y: -7.5 },
+      { x: 240.0, y: -4.5 }, { x: -20.0, y: -4.5 },
+    ] },
+  ],
+  facilities: [
+    { id: 'bicycle_lane', region: 'bicycle_band', reference_path: 'bicycle_path',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'bicycle' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+    { id: 'scooter_lane', region: 'scooter_band', reference_path: 'scooter_path',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'scooter' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'bicycle_through', from: 'bicycle_entry', to: 'bicycle_exit',
+      path: 'bicycle_path', priority: 0, direction: 'forward' },
+    { id: 'scooter_through', from: 'scooter_entry', to: 'scooter_exit',
+      path: 'scooter_path', priority: 0, direction: 'forward' },
+  ],
+  mode_templates: [
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 5.0, max: 5.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'scooter',
+      body: { kind: 'capsule', length_m: { min: 1.1, max: 1.1 },
+        radius_m: { min: 0.3, max: 0.3 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 6.0, max: 6.0 },
+        max_accel_mps2: { min: 1.5, max: 1.5 },
+        comfortable_brake_mps2: { min: 2.5, max: 2.5 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 1.0, max: 1.0 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [],
+  demand: [
+    { id: 'bicycle_inflow', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'bicycle_entry',
+        rate_per_hour: 240.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'bicycle_through', weight: 1.0 } ] },
+      } } },
+    { id: 'scooter_inflow', mode: 'scooter',
+      spawn: { rate: {
+        portal: 'scooter_entry',
+        rate_per_hour: 240.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'scooter_through', weight: 1.0 } ] },
+      } } },
+  ],
+}
