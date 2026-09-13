@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T01:55:00Z
+updated: 2026-09-13T02:10:05Z
 summary: Phase 1 Increment 5 adds the validate/run/batch/replay CLI surface, immutable run directories with bounded sampled trajectories, multi-seed aggregation with common-random-number seed banks, a Fast/Standard/Fine convergence runner with a machine-readable sensitivity report, and release-mode benchmarks and profiler captures before any optimization.
-next: [[TAS-040-phase-1-increment-5-paired-ab-comparison]]
+next: [[TAS-041-phase-1-increment-5-convergence-runner]]
 ---
 
 # Outcome
