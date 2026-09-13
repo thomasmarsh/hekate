@@ -1984,7 +1984,10 @@ mod tests {
     use crate::config::DEFAULT_STEP;
     use crate::controller::{VehicleController, WaypointController};
     use crate::units::Seconds;
-    use tangle_model::{CompiledScenario, parse_scenario_source};
+    use tangle_model::{
+        AgentBody, CompiledModeTemplate, CompiledScenario, ProfileRange, compile_mode_template,
+        parse_scenario_source, parse_scenario_source_v2,
+    };
 
     const WALKING: &str = r#"
     {
@@ -2668,5 +2671,211 @@ mod tests {
             before + DVec2::from_angle(heading_rad) * (speed_mps * dt)
         );
         assert_eq!(sim.agents.speed_mps[index], speed_mps);
+    }
+
+    /// The checked-in synthetic mode-template fixture (TAS-070), shared with
+    /// `tangle-model`'s compilation test.
+    const SYNTHETIC_TEMPLATE_FIXTURE: &str =
+        include_str!("../../tangle-model/tests/fixtures/synthetic_mode_template_v2.json5");
+
+    /// A 400 m straight guide path carrying one scripted body, so a single
+    /// agent can be driven through the shared stages with no leader and no
+    /// interaction.
+    const SYNTHETIC_GUIDE: &str = r#"
+    {
+      schema_version: 1,
+      id: 'synthetic_guide_v1',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [ { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 400.0, y: 0.0 } ] } ],
+      portals: [
+        { id: 'west_entry', path: 'guide', end: 'start', width_m: 3.5 },
+        { id: 'east_exit', path: 'guide', end: 'end', width_m: 3.5 },
+      ],
+      population: {
+        vehicle_count: 1,
+        vehicle_speed_mps: 12.0,
+        vehicle_spacing_m: 20.0,
+        vehicle_length_m: 4.5,
+        vehicle_width_m: 1.8,
+      },
+    }
+    "#;
+
+    fn synthetic_guide_sim(seed: u64) -> Simulation {
+        let source = parse_scenario_source(SYNTHETIC_GUIDE).expect("scenario parses");
+        let scenario = CompiledScenario::compile(source).expect("scenario compiles");
+        Simulation::new(scenario, RunConfig::new(seed)).expect("simulation builds")
+    }
+
+    /// The checked-in synthetic template, compiled to its components.
+    ///
+    /// The fixture is not named by id here on purpose: the compiled bundle is
+    /// the only handle shared code may take, and the no-branch guard
+    /// (`crates/tangle-sim/tests/synthetic_template_no_branch.rs`) fails if the
+    /// id reaches this module.
+    fn compiled_synthetic_template() -> CompiledModeTemplate {
+        let source = parse_scenario_source_v2(SYNTHETIC_TEMPLATE_FIXTURE)
+            .expect("the synthetic fixture is a version-2 document");
+        assert_eq!(
+            source.mode_templates.len(),
+            1,
+            "the fixture declares exactly one mode template"
+        );
+        let template = source
+            .mode_templates
+            .first()
+            .expect("the fixture declares one mode template");
+        compile_mode_template(template).expect("the synthetic template compiles")
+    }
+
+    /// The shared longitudinal/body profile the kernel's controller reads,
+    /// derived from a compiled mode template's components.
+    ///
+    /// The synthetic fixture authors constant ranges, so each component is a
+    /// single sampled value: the function carries the altered body dimensions
+    /// and kinematic limits as the [`VehicleProfile`] the shared model consumes.
+    fn vehicle_profile_from_components(template: &CompiledModeTemplate) -> VehicleProfile {
+        let constant = |range: ProfileRange| {
+            assert_eq!(
+                range.min(),
+                range.max(),
+                "the synthetic fixture authors constant ranges"
+            );
+            range.min()
+        };
+        let AgentBody::Box { length_m, width_m } = template.body() else {
+            panic!("the synthetic template carries a box body");
+        };
+        let profile = template.profile();
+        VehicleProfile {
+            desired_speed_mps: constant(profile.desired_speed_mps()),
+            length_m: constant(*length_m),
+            width_m: constant(*width_m),
+            time_gap_s: constant(
+                profile
+                    .time_gap_s()
+                    .expect("a wheeled profile carries a gap"),
+            ),
+            max_accel_mps2: constant(
+                profile
+                    .max_accel_mps2()
+                    .expect("a wheeled profile carries an acceleration bound"),
+            ),
+            comfortable_brake_mps2: constant(
+                profile
+                    .comfortable_brake_mps2()
+                    .expect("a wheeled profile carries a braking bound"),
+            ),
+            compliance: constant(profile.compliance()),
+        }
+    }
+
+    /// The synthetic template's compiled components drive the shared stages:
+    /// stages 1-4 over a defined step sequence, with the altered limits binding
+    /// the motion.
+    ///
+    /// Increment 0 does not yet wire `CompiledModeTemplate` into spawning, so
+    /// this test installs the derived body and profile on one spawned agent —
+    /// the step a later increment performs from a template — and then runs the
+    /// kernel's own stage implementations, which never see a mode name.
+    #[test]
+    fn the_synthetic_template_runs_through_the_shared_stages() {
+        let template = compiled_synthetic_template();
+        let profile = vehicle_profile_from_components(&template);
+
+        // The components carry the authored synthetic values, not the Increment
+        // 0 passenger-car envelope.
+        assert!(
+            (profile.length_m - 6.4).abs() < 1e-9,
+            "length {}",
+            profile.length_m
+        );
+        assert!(
+            (profile.width_m - 2.4).abs() < 1e-9,
+            "width {}",
+            profile.width_m
+        );
+        assert!(
+            (profile.desired_speed_mps - 3.4).abs() < 1e-9,
+            "speed {}",
+            profile.desired_speed_mps
+        );
+        assert!((profile.max_accel_mps2 - 0.9).abs() < 1e-9);
+        assert!((profile.comfortable_brake_mps2 - 1.6).abs() < 1e-9);
+        assert!((profile.time_gap_s - 2.8).abs() < 1e-9);
+
+        let mut sim = synthetic_guide_sim(0);
+        assert_eq!(sim.agent_count(), 1, "the harness has one agent");
+        // Install the compiled body dimensions and behavior profile.
+        sim.agents.profile[0] = Some(profile);
+        sim.agents.body_length_m[0] = profile.length_m;
+        sim.agents.body_width_m[0] = profile.width_m;
+        sim.agents.speed_mps[0] = 0.0;
+        sim.spatial.rebuild(&sim.agents);
+
+        let dt = sim.config().step().as_secs();
+        let mut previous_speed: f64 = 0.0;
+        let mut peak_speed: f64 = 0.0;
+        // 400 ticks is 20 s: long enough for the bounded acceleration to bring
+        // the vehicle from rest to the altered desired speed and settle there.
+        for _ in 0..400 {
+            let observation = sim.query_world(0);
+            let tactic = sim.choose_tactic(0, &observation);
+            let command = sim.command_motion(0, &observation, &tactic, dt);
+            let MotionCommand::Longitudinal { speed_mps } = command else {
+                panic!("a wheeled agent commands a longitudinal speed");
+            };
+            // The synthetic desired speed caps every step, and the synthetic
+            // acceleration bound caps how fast the speed may rise.
+            assert!(
+                speed_mps <= profile.desired_speed_mps + 1e-9,
+                "the altered speed limit did not bound the command: {speed_mps}"
+            );
+            assert!(
+                speed_mps - previous_speed <= profile.max_accel_mps2 * dt + 1e-9,
+                "the altered acceleration bound did not bound the step"
+            );
+            sim.advance_physics(0, observation, &command, dt);
+            previous_speed = sim.agents.speed_mps[0];
+            peak_speed = peak_speed.max(previous_speed);
+        }
+        // The run accelerates from rest and settles at the altered desired
+        // speed, so the limit actually binds the motion rather than being inert.
+        assert!(
+            peak_speed >= profile.desired_speed_mps - 1e-6,
+            "the run never reached the synthetic desired speed: {peak_speed}"
+        );
+        assert!(peak_speed <= profile.desired_speed_mps + 1e-9);
+        // The altered body dimension travelled through the shared state.
+        assert_eq!(sim.agents.body_length_m[0], profile.length_m);
+
+        // A required stop through the same stage: the altered braking bound
+        // caps the command's deceleration.
+        let stop = Observation::Vehicle(VehicleObservation {
+            profile: Some(profile),
+            speed_mps: profile.desired_speed_mps,
+            leader: None,
+            stop_line: Some(Constraint {
+                gap_m: 0.5,
+                speed_mps: 0.0,
+                standstill_m: 0.0,
+            }),
+            crossing_yield: None,
+        });
+        let tactic = sim.choose_tactic(0, &stop);
+        assert_eq!(tactic.reason, TacticReason::StopLine);
+        let command = sim.command_motion(0, &stop, &tactic, dt);
+        let MotionCommand::Longitudinal { speed_mps } = command else {
+            panic!("a required stop still commands a longitudinal speed");
+        };
+        let deceleration = (profile.desired_speed_mps - speed_mps) / dt;
+        assert!(
+            deceleration > 0.0,
+            "the stop-line constraint must command braking"
+        );
+        assert!(
+            deceleration <= profile.comfortable_brake_mps2 + 1e-9,
+            "the altered braking bound did not cap the command: {deceleration}"
+        );
     }
 }

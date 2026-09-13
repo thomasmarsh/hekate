@@ -1,9 +1,9 @@
 ---
 context_rev: 3
 priority: P1
-updated: 2026-09-13T15:41:36Z
-summary: The Phase 1 entry gate is satisfied and the schema-version-2 increment is delivered; Increment 0 still owes the compiled agent components with mode templates and a model-card template, the benchmark matrix, and arbitrary-body-kind representation.
-next: [[TAS-058-agent-components-and-controller-stages]]
+updated: 2026-09-13T17:25:38Z
+summary: The Phase 1 entry gate is satisfied and the schema-version-2 and compiled-agent-component increments are delivered; Increment 0 still owes the benchmark matrix and arbitrary-body-kind representation.
+next: [[TAS-059-benchmark-matrix-and-tolerances]]
 ---
 
 # Outcome
@@ -68,15 +68,10 @@ Still owed, groomed into targeted child sessions (§ Increment 0 of `PHASE_2_PLA
    subcommand are in place; run and baseline manifests record source and
    normalized hashes plus the migration version; and every Phase 1 scenario
    passes through the migration path or its original reader.
-2. [[TAS-058-agent-components-and-controller-stages]] — the compiled component
-   model, mode-template validation, the four controller stages, and a model-card
-   template. Its leaves are
-   [[TAS-066-compiled-agent-component-model]],
-   [[TAS-067-mode-template-compilation]],
-   [[TAS-068-controller-stage-interfaces]], [[TAS-069-model-card-template]], and
-   [[TAS-070-synthetic-template-gate]]. The compiled profiles, the
-   `crates/tangle-sim/src/controller.rs` seam, and the vehicle and pedestrian
-   model cards exist, but there is no template layer.
+2. [[TAS-058-agent-components-and-controller-stages]] — **delivered and resolved.**
+   The compiled component model, mode-template compilation and validation, the
+   four controller-stage interfaces, a reusable model-card template conformed to
+   by both Phase 1 cards, and the synthetic-template no-branch gate are in place.
 3. [[TAS-059-benchmark-matrix-and-tolerances]] — the benchmark matrix and
    quantitative tolerances for independent, pairwise, and mixed-mode validation,
    building on the existing fidelity presets.
