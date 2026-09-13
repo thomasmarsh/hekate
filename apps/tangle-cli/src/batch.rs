@@ -37,6 +37,7 @@ use crate::run_dir::{
     SUMMARY_FILE, SamplingPolicy, fidelity, write_run_directory,
 };
 use crate::run_metrics::METRICS_FILE;
+use crate::seed_bank::SeedBankReference;
 use crate::trace::{canonical_run_captured, sha256_hex};
 use crate::trajectories::TRAJECTORY_FILE;
 
@@ -166,6 +167,15 @@ pub struct BatchManifest {
     pub batch_manifest_version: u32,
     /// The specification every run shares.
     pub spec: BatchSpec,
+    /// The seed bank the batch ran from, when it ran from one; `None` when it
+    /// took an explicit seed list. A batch that names a bank records the bank's
+    /// path and content hash, so a comparison can prove both sides consumed one
+    /// bank artifact, and `seeds` is exactly the bank's ordered seed list.
+    ///
+    /// The field is omitted when absent, so a `--seeds` batch serializes
+    /// exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_bank: Option<SeedBankReference>,
     /// The seeds the batch ran, ascending and deduplicated.
     pub seeds: Vec<u64>,
     /// One entry per seed, ordered by ascending seed.
@@ -187,8 +197,12 @@ pub struct BatchRequest {
     pub step_s: f64,
     /// Sampling policy every run applies.
     pub sampling: SamplingPolicy,
-    /// Seeds to run; sorted and deduplicated before any run starts.
+    /// Seeds to run; sorted and deduplicated before any run starts. When
+    /// `seed_bank` is set these are the bank's ordered seeds.
     pub seeds: Vec<u64>,
+    /// The seed bank `seeds` came from, recorded in the manifest verbatim, or
+    /// `None` for a batch run from an explicit seed list.
+    pub seed_bank: Option<SeedBankReference>,
     /// Most whole runs to execute at once. `1` is serial; a larger value runs
     /// that many independent single-threaded runs concurrently, never a
     /// parallel tick.
@@ -241,6 +255,7 @@ pub fn run_batch(request: BatchRequest) -> Result<BatchManifest, BatchError> {
             build_revision: env!("CARGO_PKG_VERSION").to_owned(),
             sampling: request.sampling,
         },
+        seed_bank: request.seed_bank.clone(),
         seeds,
         runs,
     };

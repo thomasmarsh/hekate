@@ -15,6 +15,7 @@ mod batch;
 mod replay;
 mod run_dir;
 mod run_metrics;
+mod seed_bank;
 mod trace;
 mod trajectories;
 mod validate;
@@ -49,6 +50,9 @@ pub use run_dir::{
 pub use run_metrics::{
     EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue,
     MovementMinima, RunMetrics, RunMetricsArtifact, RunMetricsRecorder,
+};
+pub use seed_bank::{
+    LoadedSeedBank, SEED_BANK_VERSION, SeedBank, SeedBankError, SeedBankReference, read_seed_bank,
 };
 pub use trace::{
     Trace, TraceRecorder, canonical_run, canonical_run_captured, canonical_run_sampled,

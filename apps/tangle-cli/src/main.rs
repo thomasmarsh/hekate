@@ -20,7 +20,15 @@
 //! linking every run in ascending seed order. It is resumable — a run directory
 //! that already holds a completed run is skipped, and one without the completion
 //! marker is re-run — and `--jobs` runs whole independent single-threaded runs
-//! concurrently without changing any per-run trace hash.
+//! concurrently without changing any per-run trace hash. `--seed-bank <FILE>`
+//! takes the seed list from a seed bank instead of `--seeds` and records the
+//! bank's path and content hash in the manifest, so two batches can prove they
+//! ran the same common-random-number seeds in the same order.
+//!
+//! `seed-bank` writes that bank: a versioned JSON artifact holding an ordered
+//! seed list, which is byte-reproducible because the writer reads no clock and
+//! no randomness. It is the input two variants of one experiment share so their
+//! per-seed runs pair up.
 //!
 //! `aggregate` reads a completed batch and writes the batch-level experiment
 //! record `aggregation.json`: for every metric the runs report, the across-seed
@@ -49,9 +57,10 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
     AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, CaptureRequest, RunDirectoryRequest,
-    SamplingPolicy, ScenarioProvenance, aggregate_batch, canonical_run, canonical_run_captured,
-    capture, load_scenario_hashed, render_validation_failure, replay_run_directory, run_batch,
-    validate_scenario, write_run_directory,
+    SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch,
+    canonical_run, canonical_run_captured, capture, load_scenario_hashed, read_seed_bank,
+    render_validation_failure, replay_run_directory, run_batch, validate_scenario,
+    write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -85,6 +94,9 @@ enum Command {
     /// Run a scenario once per seed into an output root and write a batch manifest.
     #[command(long_about = BATCH_LONG_ABOUT)]
     Batch(BatchArgs),
+    /// Write a versioned, ordered common-random-number seed bank.
+    #[command(long_about = SEED_BANK_LONG_ABOUT)]
+    SeedBank(SeedBankArgs),
     /// Aggregate a completed batch into a machine-readable metric distribution file.
     #[command(long_about = AGGREGATE_LONG_ABOUT)]
     Aggregate(AggregateArgs),
@@ -105,19 +117,25 @@ under the output root, and write the batch manifest batch.json listing every run
 in ascending seed order.
 
 Usage:
-  tangle-cli batch <SCENARIO> --seeds <LIST> --out-root <DIR> [--ticks <N>] [--jobs <N>] [--full-trajectories]
+  tangle-cli batch <SCENARIO> (--seeds <LIST> | --seed-bank <FILE>) --out-root <DIR> [--ticks <N>] [--jobs <N>] [--full-trajectories]
 
 Inputs:
-  <SCENARIO>  Path to a JSON5 scenario source document.
-  --seeds     Comma-separated seeds, e.g. `--seeds 0,1,2`; sorted and deduplicated.
-  --out-root  Directory holding batch.json and one seed-<n> run directory per seed.
-  --jobs      Whole runs to execute at once; every run stays single-threaded.
+  <SCENARIO>   Path to a JSON5 scenario source document.
+  --seeds      Comma-separated seeds, e.g. `--seeds 0,1,2`; sorted and deduplicated.
+  --seed-bank  A seed bank file whose ordered seeds the batch runs, e.g. one bank
+               shared by two variants of an experiment. Malformed, duplicated,
+               empty, and non-ascending banks are refused. Exactly one of
+               --seeds and --seed-bank is required.
+  --out-root   Directory holding batch.json and one seed-<n> run directory per seed.
+  --jobs       Whole runs to execute at once; every run stays single-threaded.
 
 Output:
   batch.json names the specification, the seed list, and each run's directory,
-  trace hash, and manifest hash. Each seed directory is a run directory: the
-  same manifest.json, summary.json, compressed event stream, and sampled
-  trajectories `run --run-dir` writes.
+  trace hash, and manifest hash. A batch run from a seed bank also names the
+  bank's path and content hash, so a comparison can prove both sides ran one
+  bank; a --seeds batch omits that field. Each seed directory is a run
+  directory: the same manifest.json, summary.json, compressed event stream, and
+  sampled trajectories `run --run-dir` writes.
 
 Resume:
   A seed whose run directory already holds manifest.json is skipped and never
@@ -126,8 +144,41 @@ Resume:
 
 Exit codes:
   0  every run in the batch is complete
-  1  a run failed, a run directory did not match the batch, or an artifact could
-     not be written
+  1  a run failed, a run directory did not match the batch, a seed bank could
+     not be read or is invalid, or an artifact could not be written
+  2  command-line usage error";
+
+/// The `seed-bank` contract shown by `--help`: inputs, ordering, exits.
+const SEED_BANK_LONG_ABOUT: &str = "\
+Write a versioned common-random-number seed bank: the ordered seed list two
+variants of one scenario share so their per-seed runs are paired and a paired
+A/B comparison cancels the between-seed variance both sides carry.
+
+Usage:
+  tangle-cli seed-bank --seeds <LIST> [--output <PATH>]
+  tangle-cli seed-bank --start <N> --count <N> [--stride <N>] [--output <PATH>]
+
+Inputs:
+  --seeds   Comma-separated seeds, e.g. `--seeds 0,1,2`.
+  --start   First seed of an arithmetic bank.
+  --count   How many seeds that bank holds; must be positive.
+  --stride  Step between consecutive seeds; defaults to 1, must be positive.
+
+Output:
+  A seed bank document with seed_bank_version 1 and an ordered seeds list,
+  written to --output, or to stdout for `-` (the default).
+
+Ordering:
+  The seeds are written strictly ascending and unique. The order is canonical,
+  not the order the request listed, so equal seed sets produce byte-identical
+  banks and a bank's content hash identifies the pairing. A repeated seed is
+  refused rather than collapsed. The writer reads no clock and no randomness, so
+  the same request always produces the same bytes.
+
+Exit codes:
+  0  the seed bank was written
+  1  the request is empty or repeats a seed, the arithmetic sequence overflows,
+     or the output could not be written
   2  command-line usage error";
 
 /// The `aggregate` contract shown by `--help`: inputs, output, method, exits.
@@ -249,6 +300,7 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Run(args) => run(args),
         Command::Batch(args) => batch(args),
+        Command::SeedBank(args) => seed_bank(args),
         Command::Aggregate(args) => aggregate(args),
         Command::Replay(args) => replay(args),
         Command::Validate(args) => validate(args),
@@ -349,13 +401,19 @@ fn sampling_policy(full_trajectories: bool) -> SamplingPolicy {
 
 /// Arguments for `batch`.
 #[derive(Args)]
+#[command(group = clap::ArgGroup::new("seed_source").required(true).args(["seeds", "seed_bank"]))]
 struct BatchArgs {
     /// Path to the JSON5 scenario.
     scenario: PathBuf,
 
     /// Seeds to run, comma-separated and sorted ascending, e.g. `0,1,2`.
-    #[arg(long, value_delimiter = ',', required = true)]
+    #[arg(long, value_delimiter = ',')]
     seeds: Vec<u64>,
+
+    /// Run the ordered seeds of a seed bank, e.g. one bank shared by two
+    /// variants. The bank's path and content hash are recorded in the manifest.
+    #[arg(long)]
+    seed_bank: Option<PathBuf>,
 
     /// Number of fixed steps every run advances.
     #[arg(long, default_value_t = DEFAULT_TICKS)]
@@ -380,6 +438,23 @@ fn batch(args: BatchArgs) -> ExitCode {
         Err(error) => return fail(error),
     };
 
+    // Exactly one of `--seeds` and `--seed-bank` is present. A bank is read and
+    // validated before any run starts, and its identity is recorded at the path
+    // the command named it by rather than a canonicalized one.
+    let (seeds, seed_bank) = match &args.seed_bank {
+        Some(path) => match read_seed_bank(path) {
+            Ok(loaded) => (
+                loaded.bank.seeds,
+                Some(SeedBankReference {
+                    path: path.display().to_string(),
+                    content_sha256: loaded.content_sha256,
+                }),
+            ),
+            Err(error) => return fail(error),
+        },
+        None => (args.seeds, None),
+    };
+
     let provenance = ScenarioProvenance {
         id: scenario.id().to_owned(),
         source_path: args.scenario.to_string_lossy().into_owned(),
@@ -394,7 +469,8 @@ fn batch(args: BatchArgs) -> ExitCode {
         ticks: args.ticks,
         step_s: RunConfig::new(0).step().as_secs(),
         sampling: sampling_policy(args.full_trajectories),
-        seeds: args.seeds,
+        seeds,
+        seed_bank,
         jobs: args.jobs,
     }) {
         Ok(manifest) => manifest,
@@ -405,6 +481,64 @@ fn batch(args: BatchArgs) -> ExitCode {
         "batch manifest: {} ({} runs)",
         out_root.join(BATCH_MANIFEST_FILE).display(),
         manifest.runs.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Arguments for `seed-bank`.
+#[derive(Args)]
+#[command(group = clap::ArgGroup::new("request").required(true).args(["seeds", "start"]))]
+struct SeedBankArgs {
+    /// Seeds to write, comma-separated; written ascending, duplicates refused.
+    #[arg(long, value_delimiter = ',')]
+    seeds: Vec<u64>,
+
+    /// First seed of an arithmetic bank.
+    #[arg(long, requires = "count")]
+    start: Option<u64>,
+
+    /// How many seeds an arithmetic bank holds.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..), requires = "start")]
+    count: Option<u64>,
+
+    /// Step between consecutive seeds of an arithmetic bank; defaults to 1.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..), requires = "start")]
+    stride: Option<u64>,
+
+    /// Destination for the seed bank; `-` writes it to stdout.
+    #[arg(long, short, default_value = "-")]
+    output: PathBuf,
+}
+
+/// Write a versioned, ordered common-random-number seed bank.
+///
+/// The bank is a pure function of the request — no clock and no randomness — so
+/// repeating the command reproduces the same bytes, and two batches that run
+/// the same bank artifact can prove it by the bank's content hash.
+fn seed_bank(args: SeedBankArgs) -> ExitCode {
+    let bank = if args.seeds.is_empty() {
+        let start = args.start.expect("clap requires --start or --seeds");
+        let count = args.count.expect("clap requires --count with --start");
+        SeedBank::from_range(start, count, args.stride.unwrap_or(1))
+    } else {
+        SeedBank::from_seeds(&args.seeds)
+    };
+    let bank = match bank {
+        Ok(bank) => bank,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = write_json(&args.output, &bank) {
+        return fail(format_args!(
+            "cannot write seed bank to '{}': {error}",
+            args.output.display()
+        ));
+    }
+
+    eprintln!(
+        "seed bank: {} ({} seeds)",
+        args.output.display(),
+        bank.seeds.len()
     );
     ExitCode::SUCCESS
 }
@@ -575,7 +709,7 @@ fn baseline(args: BaselineArgs) -> ExitCode {
 }
 
 fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> io::Result<()> {
-    let mut json = serde_json::to_string_pretty(value).expect("baseline manifests serialize");
+    let mut json = serde_json::to_string_pretty(value).expect("JSON artifacts serialize");
     json.push('\n');
     if path.as_os_str() == "-" {
         io::stdout().write_all(json.as_bytes())

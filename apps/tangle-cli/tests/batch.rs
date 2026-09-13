@@ -92,6 +92,7 @@ fn request(root: &Path, seeds: &[u64], ticks: u64, jobs: u64) -> BatchRequest {
         step_s: RunConfig::new(0).step().as_secs(),
         sampling: SamplingPolicy::default(),
         seeds: seeds.to_vec(),
+        seed_bank: None,
         jobs,
     }
 }

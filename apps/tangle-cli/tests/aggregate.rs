@@ -303,6 +303,7 @@ fn write_synthetic_batch(root: &Path, seeds: &[(u64, SyntheticSeed)]) {
                 build_revision: "0.0.0".to_owned(),
                 sampling: SamplingPolicy::default(),
             },
+            seed_bank: None,
             seeds: seeds.iter().map(|(seed, _)| *seed).collect(),
             runs,
         },
@@ -906,6 +907,7 @@ fn a_real_batch_aggregates_its_mode_and_movement_slices() {
         step_s: RunConfig::new(0).step().as_secs(),
         sampling: SamplingPolicy::default(),
         seeds: vec![0, 1, 2],
+        seed_bank: None,
         jobs: 1,
     })
     .expect("the batch runs");
@@ -1210,6 +1212,7 @@ fn the_aggregate_command_writes_the_aggregation_and_mutates_no_run_artifact() {
         step_s: RunConfig::new(0).step().as_secs(),
         sampling: SamplingPolicy::default(),
         seeds: vec![0, 1, 2],
+        seed_bank: None,
         jobs: 1,
     })
     .expect("the batch runs");
