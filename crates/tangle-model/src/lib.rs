@@ -10,8 +10,14 @@
 //! 2. [`validate`] returns stable [`Diagnostic`]s for semantic errors.
 //! 3. [`CompiledScenario::compile`] produces the immutable, dense-indexed
 //!    representation the kernel consumes.
+//!
+//! Alongside the compiled scenario, [`AgentComponents`] defines the compiled
+//! components of one simulated road user: a compact core plus body, motion,
+//! tactical, access, occupancy, and social components, dispatched through the
+//! derived [`AgentFamily`] rather than a named mode.
 
 mod compiled;
+mod components;
 mod migrate;
 mod schema;
 mod source;
@@ -26,6 +32,13 @@ pub use compiled::{
     CompiledSignalHead, CompiledSignalPhase, CompiledWaitingArea, ConflictRegionId, CrossingId,
     DemandId, IdMap, MovementId, PathId, PedestrianDemandId, PedestrianRouteId, PortalId,
     ProfileRange, RegionId, RuleId, SignalId, WaitingAreaId,
+};
+pub use components::{
+    AgentAccess, AgentBehaviorProfile, AgentBody, AgentComponents, AgentCore, AgentFamily,
+    AgentIntent, AgentLifecycle, AgentMotion, AgentOccupancy, AgentPose, AgentRoute, AgentVelocity,
+    BodyKind, BodySegment, ComponentMismatch, GroupMembership, GroupRole, NominalDirection,
+    PedestrianGroupId, SocialState, SpeedPolicy, TacticalCapabilities, TacticalCapability,
+    TransitOccupancy,
 };
 pub use migrate::{MIGRATION_VERSION, migrate_v1_to_v2, to_canonical_v2_json};
 pub use schema::{

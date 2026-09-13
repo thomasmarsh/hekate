@@ -1237,6 +1237,14 @@ pub struct ProfileRange {
 }
 
 impl ProfileRange {
+    /// Construct an inclusive range from its bounds.
+    ///
+    /// A range with `min == max` is a constant, matching the authored
+    /// [`crate::source::ProfileRangeSource`] contract.
+    pub const fn new(min: f64, max: f64) -> Self {
+        Self { min, max }
+    }
+
     fn from_source(range: crate::source::ProfileRangeSource) -> Self {
         Self {
             min: range.min,
