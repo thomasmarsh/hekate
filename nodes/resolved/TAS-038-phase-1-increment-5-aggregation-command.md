@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T01:33:23Z
+updated: 2026-09-13T01:38:00Z
 summary: Slice C1b of Phase 1 Increment 5 adds an `aggregate` command that reads a batch's per-seed metrics.json files and writes a machine-readable aggregation with per-metric distributions and confidence intervals, disaggregated by mode and movement and linked to each run manifest and metric_definition_version 1.
-next: Verify the five gates on the final tree and resolve the node with per-criterion evidence.
 ---
 
 # Outcome
@@ -189,3 +188,90 @@ warnings`, `cargo fmt --all --check`, `./scripts/check-dependency-direction.sh`
 (`dependency direction OK`), and `braintree check nodes` (`graph check: passed`).
 No file under `tests/golden/`, `baselines/`, `scenarios/`, or `schemas/`
 changed, and `EVENT_VERSION` stays 2.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (implementation in
+`3e58717`), verified by rerunning the five gates on that tree.
+
+1. **`aggregate` reads a batch and writes a machine-readable aggregation with
+   per-metric count, mean, spread, and a documented confidence interval.**
+   `aggregate.rs:484` reads `batch.json` and each run's `manifest.json` and
+   `metrics.json`; `aggregate.rs:421` defines the distribution
+   (`metric_definition_version`, `unit`, `count`, `mean`, `spread`,
+   `confidence_interval`, the three seed lists, `manifests`);
+   `aggregate.rs:762` computes the statistics and `aggregate.rs:399` the
+   interval. The method is documented structurally in the artifact
+   (`StatisticsMethod::v1`, `aggregate.rs:329`) and read from the published
+   table `T_CRITICAL_975` (`aggregate.rs:125`) with `NORMAL_CRITICAL_975`
+   (`aggregate.rs:159`) above 30 degrees of freedom. `main.rs:90` declares the
+   subcommand, `main.rs:414` its arguments, and `main.rs:429` writes the file
+   (default `<BATCH_ROOT>/aggregation.json`). Asserted by
+   `tests/aggregate.rs:391` against hand-computed values (mean 2.5, variance
+   5/3, `t(3) = 3.182446305`) and by `tests/aggregate.rs:1194` through the
+   binary.
+2. **The aggregation is disaggregated by mode and by movement.**
+   `Aggregation.mode_pair_slices` (`aggregate.rs:456`) is keyed by the `ModePair`
+   label and holds that pair's `minimum_separation_m`; `MovementSlice`
+   (`aggregate.rs:447`) is keyed by the bucket of two movement keys and holds the
+   bucket's three interaction metrics with its sorted `movement_keys`.
+   `Accumulation::accumulate` (`aggregate.rs:814`) fills both from the run
+   artifact's `mode_pair_minimum_separation_m` and `movement_minima`. Asserted
+   by `tests/aggregate.rs:633` (all three mode pairs, the bucket keys and
+   metrics, and a bucket one seed does not carry) and by
+   `tests/aggregate.rs:890` on the real mixed benchmark.
+3. **Every aggregated metric links to its run manifest(s) and to
+   `metric_definition_version: 1`.** `MetricDistribution` carries both fields
+   (`aggregate.rs:421`), stamped at `aggregate.rs:762` from
+   `METRIC_DEFINITION_VERSION` and from the manifest hashes the seeds were read
+   with; the aggregation also refuses a run whose metrics artifact links to a
+   manifest the batch did not record (`AggregateError::ManifestLink`,
+   `aggregate.rs:235`, checked at `aggregate.rs:542`) or whose bytes changed
+   (`ManifestDigest`, `aggregate.rs:221`, checked at `aggregate.rs:516`).
+   Asserted by `tests/aggregate.rs:795`, which walks every distribution in the
+   artifact and checks each reported seed's manifest against the seed list and
+   the files on disk.
+4. **Not-applicable/not-observed values are counted, not treated as zero.**
+   `Accumulator::reading` (`aggregate.rs:705`) records each seed behind
+   `reported` / `not_applicable` / `not_observed` separately and
+   `Accumulator::finish` (`aggregate.rs:762`) computes every statistic from the
+   reported values alone; a movement bucket a run does not carry is counted not
+   observed (`fill_not_observed`, `aggregate.rs:753`). A whole-batch metric that
+   does not cover every seed is refused rather than averaged over a smaller
+   sample (`MissingMetric`, `aggregate.rs:275`, checked at `aggregate.rs:879`).
+   Asserted by `tests/aggregate.rs:517` (the mean of the reported seeds only,
+   and every metric's three statuses covering every seed) and by
+   `tests/aggregate.rs:1194` (the walking run's not-applicable time to collision
+   reported as three counted seeds with `mean: null`).
+5. **The output ordering is deterministic, covered by a test.** Every map is a
+   `BTreeMap`, the seeds are sorted by ascending seed before they are read
+   (`aggregate.rs:496`), and `Accumulator::finish` sorts the seed lists
+   (`aggregate.rs:762`). Asserted by `tests/aggregate.rs:992`, which aggregates
+   two batches whose manifests name the same seeds in opposite orders and
+   compares everything but the batch link, checks every key and seed list is
+   ascending, and checks the command writes exactly the library's bytes.
+6. **The canonical trace, trace golden, trace hash golden, Phase 1 baseline,
+   and all goldens are unchanged; `EVENT_VERSION` stays 2.** The implementation
+   commit touches only `apps/tangle-cli/src`, `apps/tangle-cli/tests`, and this
+   node; no file under `tests/golden/`, `baselines/`, `scenarios/`, or
+   `schemas/` changed, `EVENT_VERSION` stays 2
+   (`crates/tangle-sim/src/event.rs`), and `Cargo.toml`/`Cargo.lock` are
+   unchanged, so no dependency was added. `metrics.json`'s shape is read, not
+   modified.
+7. **The five gates pass on the final tree** (rerun on `3e58717`): `cargo test
+   --workspace --all-features` passed with 509 tests and 0 failures across 47
+   test binaries; clippy with `--all-targets --all-features -- -D warnings` was
+   clean; `cargo fmt --all --check` was clean;
+   `./scripts/check-dependency-direction.sh` printed `dependency direction OK`;
+   and `braintree check nodes` printed `graph check: passed (66 nodes)`.
+
+Outcome complete: the across-seed aggregation, its deterministic ordering, the
+mode and movement disaggregation, the manifest and definition-version links, and
+the counted not-applicable/not-observed statuses are on the committed tree.
+
+## Handoff note
+
+`TAS-031`'s `next` names this node and its exclusive write set excludes the
+parent, so this worker did not edit it; advancing that pointer to the next
+direct child is the coordinator's, per
+[[FBK-011-skill-md-s-mutation-rules-say-advancing-a-coordi]].
