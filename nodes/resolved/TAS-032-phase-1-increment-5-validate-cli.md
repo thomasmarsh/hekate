@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T00:02:34Z
+updated: 2026-09-13T00:06:58Z
 summary: Slice A1 of Phase 1 Increment 5 adds a first-class `validate` CLI command that checks a scenario source (and compiled scenario) and reports actionable diagnostics with a documented contract and non-zero exit on failure.
-next: Hand this slice to the TAS-031 coordinator for integration, slice F verification, and closeout.
 ---
 
 # Outcome
@@ -117,3 +116,39 @@ new dependency was added.
   `Simulation` and takes no seed or tick count, which stay `run`'s arguments.
 - `run`, `batch`, `replay`, and the run-directory format stay with the later
   slices of TAS-031; this node introduces no seam for them.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (slice implementation
+in `04f8776`), verified by rerunning the gates on that tree:
+
+1. **`validate` is reachable with a documented contract.**
+   `apps/tangle-cli/src/main.rs:57` registers the subcommand, `:63`
+   (`VALIDATE_LONG_ABOUT`) carries usage, accepted input, output stream, and
+   exit codes 0/1/2, and `:156` runs it. The contract is checked by
+   `tests/validate.rs:286` (`help_documents_usage_inputs_and_exit_codes`).
+2. **Valid, malformed, schema-invalid, and loader-invalid sources are covered,
+   each invalid case non-zero with an actionable message.**
+   `tests/validate.rs:148` (`valid_source_exits_zero_and_reports_the_scenario`,
+   exit 0, report line, empty stderr); `:183`
+   (`malformed_source_exits_non_zero_with_a_positioned_message`, exit 1, `4:1`);
+   `:202` (`schema_invalid_source_exits_non_zero_naming_the_offending_field`,
+   exit 1, names `speed_limit_mps`); `:221`
+   (`loader_invalid_source_exits_non_zero_with_every_diagnostic`, exit 1,
+   `E_ID_DUPLICATE` and `E_PORTAL_UNKNOWN_PATH` one per line). `:163`
+   additionally validates the checked-in walking scenario by absolute path.
+3. **No run artifact is written and no tick executes.**
+   `tests/validate.rs:254` (`validate_writes_no_run_artifact`) leaves a scratch
+   working directory holding exactly the two source fixtures after a valid and
+   an invalid invocation, and no invocation prints a `trace hash`. Structural
+   half: `apps/tangle-cli/src/validate.rs:29` (`validate_scenario`) calls only
+   `load_scenario`; the crate's tick entry points stay in `run`
+   (`src/main.rs:120`) and `baseline` (`src/main.rs:201`).
+4. **The five gates pass on the final tree** (rerun 2026-09-13,
+   `cargo test --workspace --all-features`: 41 test binaries, 0 failed;
+   clippy with `-D warnings`: clean; `cargo fmt --all --check`: clean;
+   `./scripts/check-dependency-direction.sh`: `dependency direction OK`;
+   `braintree check nodes`: `graph check: passed`).
+
+Outcome complete: the command, its contract, its tests, and the gate evidence
+are on the committed tree with no residual work inside this node's scope.
