@@ -47,6 +47,16 @@
 //! share, which the unpaired per-side interval cannot. It refuses unpaired or
 //! mismatched inputs and mutates no run artifact.
 //!
+//! `converge` runs one scenario at the Fast, Standard, and Fine fidelity presets
+//! over one seed bank — one batch per fidelity, each covering the same simulated
+//! duration — and writes `convergence.json`: for every metric the across-seed
+//! value at each fidelity, the paired refinement change from Fast to Standard
+//! and from Standard to Fine, and a convergence verdict against a declared 5%
+//! relative tolerance, disaggregated by mode pair and by movement. A metric
+//! whose standard-to-fine change exceeds the tolerance is reported as materially
+//! sensitive rather than hidden. It writes the three batches through the batch
+//! machinery's resume path, so a completed run directory is never rewritten.
+//!
 //! `replay` reproduces a completed run directory from its manifest: it re-loads
 //! the recorded scenario source, checks the recorded content hash, and re-runs
 //! the kernel with the recorded seed, step, and tick count, emitting the
@@ -65,9 +75,10 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
-    AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, COMPARISON_FILE, CaptureRequest,
-    RunDirectoryRequest, SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference,
-    aggregate_batch, canonical_run, canonical_run_captured, capture, compare_batches,
+    AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, COMPARISON_FILE, CONVERGENCE_FILE,
+    CONVERGENCE_TOLERANCE, CaptureRequest, PRESETS, RunDirectoryRequest, SamplingPolicy,
+    ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch, canonical_run,
+    canonical_run_captured, capture, compare_batches, converge_batches, fidelity_ticks,
     load_scenario_hashed, read_seed_bank, render_validation_failure, replay_run_directory,
     run_batch, validate_scenario, write_run_directory,
 };
@@ -112,6 +123,9 @@ enum Command {
     /// Compare two batches run from one seed bank, pairing runs by seed.
     #[command(long_about = COMPARE_LONG_ABOUT)]
     Compare(CompareArgs),
+    /// Run one scenario at the Fast, Standard, and Fine fidelities over one seed bank.
+    #[command(long_about = CONVERGE_LONG_ABOUT)]
+    Converge(ConvergeArgs),
     /// Reproduce a completed run directory's canonical event stream.
     #[command(long_about = REPLAY_LONG_ABOUT)]
     Replay(ReplayArgs),
@@ -268,6 +282,60 @@ Exit codes:
      reported by one side only, or the comparison could not be written
   2  command-line usage error";
 
+/// The `converge` contract shown by `--help`: inputs, method, output, exits.
+const CONVERGE_LONG_ABOUT: &str = "\
+Run one scenario at the Fast, Standard, and Fine fidelities over one
+common-random-number seed bank and write convergence.json: for every metric the
+across-seed value at each fidelity, the paired refinement change from Fast to
+Standard and from Standard to Fine, and a convergence verdict against the
+declared tolerance, disaggregated by mode pair and by movement.
+
+Usage:
+  tangle-cli converge <SCENARIO> --seed-bank <FILE> --out-root <DIR> [--ticks <N>] [--output <PATH>]
+
+Inputs:
+  <SCENARIO>   Path to a JSON5 scenario source document.
+  --seed-bank  The bank every fidelity runs; each fidelity's batch records it, so
+               the report can prove all three ran one bank in one seed order.
+  --out-root   Directory holding one batch root per fidelity — fast/,
+               standard/, and fine/ — each the batch.json and seed-<n> run
+               directories `batch` writes.
+  --ticks      Fixed steps the Standard fidelity advances; the Fast and Fine
+               fidelities advance the whole number of steps that covers the same
+               simulated duration, because the presets differ in step size.
+  --output     Destination for the report; `-` writes it to stdout. Defaults to
+               convergence.json in the current directory.
+
+Method:
+  A metric's value at a fidelity is the across-seed distribution the aggregation
+reports: count, mean, spread, interval, and the seeds behind each reporting
+status. A refinement step's change is the paired mean difference of that one
+bank's runs at the two fidelities, with its paired 95% Student-t interval. The
+declared tolerance is 5% of the coarser fidelity's across-seed value, measured
+as the relative change |fine - coarse| / |coarse|: a metric whose
+standard-to-fine relative change exceeds it is materially sensitive, and the
+report names it. A metric no seed reports at both steps is inconclusive; a
+not-applicable or not-observed value is a status, never a zero; and a zero
+coarser value has no relative scale, so a zero change is converged and any other
+change is materially sensitive.
+
+Output:
+  convergence.json names the scenario, the seed bank, the three fidelity batches
+with their ticks and artifact hashes, the declared tolerance, and one record per
+metric, mode-pair slice, and movement slice. Fidelities and refinement steps are
+in the declared Fast, Standard, Fine order, metrics and slices are ordered
+deterministically, and no run artifact is mutated: a completed run directory is
+never rewritten, so re-invoking the command resumes the batches and changes
+nothing but the report.
+
+Exit codes:
+  0  the three fidelities ran and the report was written
+  1  the scenario or seed bank could not be read, a fidelity's batch is missing
+     or unreadable, a batch does not run its fidelity's declared step or duration,
+     the fidelities name two scenarios or two banks, a run disagrees with what its
+     batch recorded, or the report could not be written
+  2  command-line usage error";
+
 /// The `replay` contract shown by `--help`: usage, inputs, output, exit codes.
 const REPLAY_LONG_ABOUT: &str = "\
 Reproduce a completed run directory's canonical event stream. The manifest
@@ -360,6 +428,7 @@ fn main() -> ExitCode {
         Command::SeedBank(args) => seed_bank(args),
         Command::Aggregate(args) => aggregate(args),
         Command::Compare(args) => compare(args),
+        Command::Converge(args) => converge(args),
         Command::Replay(args) => replay(args),
         Command::Validate(args) => validate(args),
         Command::Baseline(args) => baseline(args),
@@ -690,6 +759,113 @@ fn compare(args: CompareArgs) -> ExitCode {
         output.display(),
         comparison.metrics.len(),
         comparison.pairs.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Arguments for `converge`.
+#[derive(Args)]
+struct ConvergeArgs {
+    /// Path to the JSON5 scenario.
+    scenario: PathBuf,
+
+    /// The seed bank every fidelity runs, e.g. one bank shared by three runs of
+    /// one experiment.
+    #[arg(long)]
+    seed_bank: PathBuf,
+
+    /// Output root holding one batch root per fidelity.
+    #[arg(long)]
+    out_root: PathBuf,
+
+    /// Fixed steps the Standard fidelity advances.
+    ///
+    /// The Fast and Fine fidelities advance the whole number of steps that
+    /// covers the same simulated duration, because the presets differ in step
+    /// size and a fixed tick count would compare different horizons.
+    #[arg(long, default_value_t = DEFAULT_TICKS, value_parser = clap::value_parser!(u64).range(1..))]
+    ticks: u64,
+
+    /// Destination for the report; `-` writes it to stdout.
+    ///
+    /// Defaults to `convergence.json` in the current directory. The report is
+    /// derived and deterministic, so writing it again is a no-op in content; no
+    /// run artifact is ever written or rewritten beyond the batch machinery's
+    /// own resume path.
+    #[arg(long, default_value = CONVERGENCE_FILE)]
+    output: PathBuf,
+}
+
+/// Run one scenario at the three fidelity presets over one seed bank and write
+/// the sensitivity report.
+///
+/// The three batches go through `run_batch`, so a completed run directory is
+/// skipped rather than rewritten and the report reads the artifacts actually on
+/// disk. `PRESETS` is the declared Fast, Standard, Fine order the report records
+/// and reads back.
+fn converge(args: ConvergeArgs) -> ExitCode {
+    let (scenario, content_sha256) = match load_scenario_hashed(&args.scenario) {
+        Ok(loaded) => loaded,
+        Err(error) => return fail(error),
+    };
+    let bank = match read_seed_bank(&args.seed_bank) {
+        Ok(loaded) => loaded,
+        Err(error) => return fail(error),
+    };
+    let seed_bank = SeedBankReference {
+        path: args.seed_bank.display().to_string(),
+        content_sha256: bank.content_sha256,
+    };
+    let provenance = ScenarioProvenance {
+        id: scenario.id().to_owned(),
+        source_path: args.scenario.to_string_lossy().into_owned(),
+        schema_version: scenario.schema_version(),
+        content_sha256,
+    };
+
+    let mut roots: Vec<PathBuf> = Vec::with_capacity(PRESETS.len());
+    for preset in PRESETS {
+        let root = args.out_root.join(preset.name);
+        let request = BatchRequest {
+            root: root.clone(),
+            scenario: scenario.clone(),
+            provenance: provenance.clone(),
+            ticks: fidelity_ticks(preset.step_s, args.ticks),
+            step_s: preset.step_s,
+            sampling: SamplingPolicy::default(),
+            seeds: bank.bank.seeds.clone(),
+            seed_bank: Some(seed_bank.clone()),
+            jobs: 1,
+        };
+        if let Err(error) = run_batch(request) {
+            return fail(error);
+        }
+        roots.push(root);
+    }
+
+    let report = match converge_batches(
+        &roots[0],
+        &roots[1],
+        &roots[2],
+        &args.seed_bank,
+        CONVERGENCE_TOLERANCE,
+    ) {
+        Ok(report) => report,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = write_json(&args.output, &report) {
+        return fail(format_args!(
+            "cannot write convergence report to '{}': {error}",
+            args.output.display()
+        ));
+    }
+
+    eprintln!(
+        "convergence: {} ({} metrics over {} fidelities)",
+        args.output.display(),
+        report.metrics.len(),
+        report.fidelities.len()
     );
     ExitCode::SUCCESS
 }

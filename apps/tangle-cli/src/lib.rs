@@ -13,6 +13,7 @@ mod aggregate;
 mod baseline;
 mod batch;
 mod compare;
+mod converge;
 mod replay;
 mod run_dir;
 mod run_metrics;
@@ -44,6 +45,12 @@ pub use compare::{
     COMPARISON_FILE, COMPARISON_VERSION, CompareError, ComparedBatch, ComparedMovementSlice,
     ComparedPair, ComparedRun, Comparison, PAIRED_DIFFERENCE, PAIRED_INTERVAL_METHOD,
     PairedDistribution, PairedMethod, Side, UnpairedSeed, compare_batches,
+};
+pub use converge::{
+    CONVERGENCE_FILE, CONVERGENCE_TOLERANCE, CONVERGENCE_VERSION, ConvergenceError,
+    ConvergenceReport, ConvergenceVerdict, FidelityBatch, FidelityValue, MetricSensitivity,
+    MovementSensitivity, RefinementStep, TOLERANCE_MEASURE, TOLERANCE_REFERENCE, Tolerance,
+    VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
 };
 pub use replay::{ReplayError, replay_run_directory};
 pub use run_dir::{
