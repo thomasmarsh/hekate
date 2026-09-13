@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T02:35:00Z
+updated: 2026-09-13T02:30:49Z
 summary: Phase 1 Increment 5 adds the validate/run/batch/replay CLI surface, immutable run directories with bounded sampled trajectories, multi-seed aggregation with common-random-number seed banks, a Fast/Standard/Fine convergence runner with a machine-readable sensitivity report, and release-mode benchmarks and profiler captures before any optimization.
 next: [[TAS-042-phase-1-increment-5-release-benchmarks-profiling]]
 ---
@@ -26,9 +26,11 @@ designs:
 
 Increment 5 records the Increment 4 residuals as its baseline but does not
 absorb them: the always-on interaction-metrics pass costs roughly 22 microseconds
-per tick in a release build on `mixed_interaction_v1`, and the swept TOI query is
-a capability that no tick consumer yet ticks. This increment measures those
-states (slice E) and does not optimize or rewire them.
+per tick in a release build on `mixed_interaction_v1`, and the swept TOI cast is
+on the tick path exactly once, as the safety monitor's per-tick contact
+confirmation, with no behavioral consumer (control, admission, signalling, or
+yielding) depending on a sweep. This increment measures those states (slice E)
+and does not optimize or rewire them.
 
 Any schema change stays additive to schema version 1: validate, regenerate
 `schemas/scenario-source.schema.json`, and keep the drift test. No schema
@@ -70,7 +72,7 @@ It is created just in time as a direct child when slice D reaches it.
 - Parallel and serial batch execution produce identical per-run trace hashes.
 - Release-mode end-to-end benchmarks and profiler captures are recorded before
   any optimization, including the always-on interaction-metrics cost and the
-  unticked swept-TOI state as the baseline.
+  swept-TOI tick-path state as the baseline.
 - The five gates pass on the final tree: `cargo test --workspace --all-features`,
   clippy with `-D warnings`, `cargo fmt --all --check`,
   `./scripts/check-dependency-direction.sh`, and `braintree check nodes`.
