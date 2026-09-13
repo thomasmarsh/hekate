@@ -72,10 +72,15 @@ use crate::aggregate::{
     AggregateError, AggregatedBatch, AggregatedSeed, Aggregation, ConfidenceInterval,
     MetricDistribution, aggregate_batch,
 };
-use crate::baseline::ScenarioProvenance;
+use crate::baseline::{PRESETS, ScenarioProvenance};
 use crate::batch::{BatchError, BatchRequest, run_batch};
 use crate::compare::{
     CompareError, Comparison, PAIRED_DIFFERENCE, PairedDistribution, UnpairedSeed, compare_batches,
+};
+use crate::converge::{
+    CONVERGENCE_TOLERANCE, ConvergenceError, ConvergenceReport, ConvergenceVerdict, FidelityBatch,
+    FidelityValue, MetricTolerance, RefinementStep, SLICE_FAMILIES, SliceFamily, Tolerance,
+    converge_batches, fidelity_ticks, standard_fidelity,
 };
 use crate::run_dir::SamplingPolicy;
 use crate::run_metrics::{EVENT_FAMILY_LABELS, METRIC_DEFINITION_VERSION};
@@ -91,6 +96,41 @@ pub const REPORT_VERSION: u32 = 1;
 
 /// Default file name of the comparison report.
 pub const REPORT_FILE: &str = "comparison_report.json";
+
+/// Default file name of the experiment's convergence evidence.
+pub const CONVERGENCE_EVIDENCE_FILE: &str = "convergence_evidence.json";
+
+/// Version of the experiment convergence evidence format.
+pub const CONVERGENCE_EVIDENCE_VERSION: u32 = 1;
+
+/// Default file name of the experiment's convergence summary.
+pub const CONVERGENCE_SUMMARY_FILE: &str = "convergence_summary.md";
+
+/// The directory, under the run root, holding each variant's Fast and Fine
+/// batches. Its Standard fidelity is the variant's own run root, so the
+/// comparison and the convergence evidence share one Standard batch.
+pub const CONVERGENCE_RUN_DIR: &str = "convergence";
+
+/// The difference a selected finding's direction is the sign of.
+pub const FINDING_DIFFERENCE: &str =
+    "side_a - side_b, of the two variants' across-seed means at one fidelity";
+
+/// The rule a selected finding's direction applies.
+pub const FINDING_DIRECTION_RULE: &str = "stable when both variants report an across-seed mean at the reference fidelity and at the judged fidelity and the sign of side_a - side_b is the same at both; flipped when both are nonzero and the signs differ; inconclusive otherwise";
+
+/// The fidelity a selected finding's direction is judged at: the finest of the
+/// declared preset order, whose step the Phase 1 gate's stability claim names.
+pub const FINDING_FIDELITY: &str = PRESETS[PRESETS.len() - 1].name;
+
+/// The fidelity a selected finding's direction is compared against: the
+/// coarsest of the declared preset order.
+pub const FINDING_REFERENCE_FIDELITY: &str = PRESETS[0].name;
+
+/// The index, in the declared fidelity order, of [`FINDING_FIDELITY`].
+const FINDING_FIDELITY_INDEX: usize = PRESETS.len() - 1;
+
+/// What the summary writes where the report carries no value.
+const SUMMARY_ABSENT: &str = "-";
 
 /// The experiment spec's fixed-step tolerance when it checks that its own ticks
 /// and duration agree: half a microsecond, far below any authored duration.
@@ -189,6 +229,29 @@ pub struct ExperimentSpec {
     /// The variants, in the declared order. The first is side A of every paired
     /// difference.
     pub variants: Vec<ExperimentVariant>,
+    /// The comparison findings the experiment's conclusion rests on, in the
+    /// order the summary reports them. Absent from a spec that selects none.
+    #[serde(default)]
+    pub selected_findings: Vec<SelectedFinding>,
+}
+
+/// One comparison finding an experiment's conclusion rests on.
+///
+/// A finding names one metric of one slice of the convergence report's families
+/// — the metric the comparison's conclusion turns on — so the convergence
+/// evidence can state whether its direction survives the fixed step refining.
+/// The selection is the experiment author's, declared by the spec rather than
+/// inferred: a metric that happens to move is not a finding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectedFinding {
+    /// What the finding claims, in the experiment's own words.
+    pub label: String,
+    /// The slice family the finding lives in, one of [`SLICE_FAMILIES`].
+    pub family: SliceFamily,
+    /// The slice key within that family ([`SLICE_KEY_RUN`] for the run).
+    pub slice: String,
+    /// The metric key within that slice.
+    pub metric: String,
 }
 
 /// One side of an experiment: its name and its scenario source.
@@ -551,6 +614,45 @@ pub enum ExperimentError {
     /// The two variants' batches could not be paired.
     #[error(transparent)]
     Compare(#[from] CompareError),
+    /// The spec's declared fidelity is not the one convergence evidence refines.
+    #[error(
+        "experiment spec '{path}' declares the {fidelity} fidelity at a {step_s} s step, but convergence evidence refines the {standard} fidelity at {standard_step_s} s over one simulated duration; a spec that declares another fidelity has no Standard batch for the evidence to read"
+    )]
+    ConvergenceFidelity {
+        /// The spec that declares another fidelity.
+        path: PathBuf,
+        /// The fidelity it declares.
+        fidelity: String,
+        /// The step it declares.
+        step_s: f64,
+        /// The Standard fidelity preset's name.
+        standard: String,
+        /// The Standard preset's step.
+        standard_step_s: f64,
+    },
+    /// One variant's Fast/Standard/Fine batches could not be read into a report.
+    #[error("variant '{variant}': {source}")]
+    Convergence {
+        /// The variant whose convergence report failed.
+        variant: String,
+        /// The convergence failure.
+        #[source]
+        source: ConvergenceError,
+    },
+    /// A selected finding names no slice or metric a variant's evidence carries.
+    #[error(
+        "experiment spec '{path}' selects the finding '{label}', but variant '{variant}' reports no such slice and metric: {detail}"
+    )]
+    Finding {
+        /// The spec that selects the finding.
+        path: PathBuf,
+        /// The variant whose evidence does not carry it.
+        variant: String,
+        /// The finding's label.
+        label: String,
+        /// What the finding named, as the family, slice, and metric it read.
+        detail: String,
+    },
 }
 
 /// Run one checked-in experiment and build its comparison report.
@@ -655,6 +757,782 @@ pub fn run_experiment(
         variants: variants.into_iter().map(|(variant, _)| variant).collect(),
         sections: group_sections(&slices),
     })
+}
+
+/// One refinement step's reading in the experiment's convergence evidence: the
+/// paired change and the metric's tolerance's verdict on it.
+///
+/// The full convergence report repeats the per-seed pairing behind every step
+/// ([`crate::converge::RefinementStep::paired`]); here the pairing is the same
+/// seed bank for every metric of a fidelity, so it is stated once per fidelity
+/// in [`VariantConvergence::fidelities`] and counted here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefinementReading {
+    /// The coarser fidelity's name.
+    pub from: String,
+    /// The finer fidelity's name.
+    pub to: String,
+    /// The paired mean difference `to - from` over the shared seed bank.
+    pub mean_difference: Option<f64>,
+    /// The paired two-sided 95% Student-t interval of that difference, absent
+    /// where fewer than two seeds paired.
+    pub confidence_interval: Option<ConfidenceInterval>,
+    /// The seeds the statistic paired.
+    pub paired_seeds: usize,
+    /// The seeds the statistic excluded: a status at one side or the other.
+    pub unpaired_seeds: usize,
+    /// The relative change `|mean(to) - mean(from)| / |mean(from)|`, absent
+    /// against a zero coarser value or with no pairing.
+    pub relative_change: Option<f64>,
+    /// Whether this step's change exceeds the metric's tolerance; absent when
+    /// no change is measurable.
+    pub materially_sensitive: Option<bool>,
+}
+
+/// One metric's Fast/Standard/Fine evidence in the experiment's convergence
+/// evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricConvergence {
+    /// The metric definition revision every number here is reported at.
+    pub metric_definition_version: u32,
+    /// The metric's unit, as metric definition v2 fixes it.
+    pub unit: String,
+    /// The tolerance this metric's verdict was read against.
+    pub tolerance: MetricTolerance,
+    /// The across-seed mean at each fidelity, in the declared fidelity order;
+    /// absent where that fidelity carries no value for the metric.
+    pub means: Vec<Option<f64>>,
+    /// The seeds that reported a value, at each fidelity in the declared order.
+    pub reported_seeds: Vec<usize>,
+    /// The seeds whose value was not applicable, at each fidelity.
+    pub not_applicable_seeds: Vec<usize>,
+    /// The seeds that made no observation, at each fidelity.
+    pub not_observed_seeds: Vec<usize>,
+    /// The refinement steps, in the declared Fast → Standard → Fine order.
+    pub refinements: Vec<RefinementReading>,
+    /// The verdict on the standard-to-fine step.
+    pub verdict: ConvergenceVerdict,
+}
+
+/// One slice of one variant's convergence evidence: the family it belongs to,
+/// its key, and its metrics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SliceConvergence {
+    /// The family the slice belongs to, one of [`SLICE_FAMILIES`].
+    pub family: SliceFamily,
+    /// The slice key within that family ([`SLICE_KEY_RUN`] for the run).
+    pub slice: String,
+    /// The slice's metrics, keyed by metric name.
+    pub metrics: BTreeMap<String, MetricConvergence>,
+}
+
+/// One variant's convergence evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VariantConvergence {
+    /// The variant's name, as the spec and the run root spell it.
+    pub variant: String,
+    /// The variant's scenario provenance, including its content hash.
+    pub scenario: ScenarioProvenance,
+    /// The tolerance every verdict here was read against.
+    pub tolerance: Tolerance,
+    /// The one seed bank every fidelity ran.
+    pub seed_bank: SeedBankReference,
+    /// The three fidelity batches read, in the declared Fast, Standard, Fine
+    /// order, each with the seed table and artifact hashes every metric above
+    /// resolves to.
+    pub fidelities: Vec<FidelityBatch>,
+    /// The slices, in the declared family order and ascending key order within
+    /// a family.
+    pub slices: Vec<SliceConvergence>,
+}
+
+/// The direction of a selected finding's cross-variant difference at Fine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingDirection {
+    /// The sign of `side_a - side_b` at [`FINDING_FIDELITY`] is the sign it had
+    /// at [`FINDING_REFERENCE_FIDELITY`].
+    Stable,
+    /// Both signs are nonzero and they differ: the finding's direction does not
+    /// survive the fixed step refining.
+    Flipped,
+    /// No direction could be read: a variant reports no across-seed mean at one
+    /// of the two fidelities, or the difference is zero there.
+    Inconclusive,
+}
+
+/// One selected finding's convergence evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FindingEvidence {
+    /// The finding the spec selected.
+    pub finding: SelectedFinding,
+    /// Side A's across-seed mean at each fidelity, in the declared fidelity
+    /// order; absent where that variant carries no value there.
+    pub side_a: Vec<Option<f64>>,
+    /// Side B's across-seed mean at each fidelity, in the declared fidelity
+    /// order.
+    pub side_b: Vec<Option<f64>>,
+    /// The difference `side_a - side_b` at each fidelity, in the declared
+    /// order; absent where either side has no mean.
+    pub difference: Vec<Option<f64>>,
+    /// The direction the finding holds at [`FINDING_FIDELITY`].
+    pub direction: FindingDirection,
+}
+
+/// The documented method behind every selected finding's direction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FindingMethod {
+    /// The direction rule, [`FINDING_DIRECTION_RULE`].
+    pub rule: String,
+    /// The difference the direction is the sign of, [`FINDING_DIFFERENCE`].
+    pub difference: String,
+    /// The fidelity the direction is judged at, [`FINDING_FIDELITY`].
+    pub fidelity: String,
+    /// The fidelity it is compared against, [`FINDING_REFERENCE_FIDELITY`].
+    pub reference_fidelity: String,
+}
+
+/// `convergence_evidence.json`: the Fast/Standard/Fine convergence evidence of
+/// one experiment's variants.
+///
+/// Every metric of every slice family is judged per variant at each fidelity —
+/// the artifact the increment's convergence gate reads — with the per-metric
+/// tolerance, the refinement change, and the verdict. The per-seed pairing
+/// behind each statistic is not repeated per metric: the seed bank is one, so
+/// each variant's `fidelities` state it once and each metric counts it. The
+/// summary [`render_convergence_summary`] renders is this artifact and nothing
+/// else, so the two cannot disagree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExperimentConvergence {
+    /// The evidence format version, [`CONVERGENCE_EVIDENCE_VERSION`].
+    pub evidence_version: u32,
+    /// The metric definition revision every number here is reported at.
+    pub metric_definition_version: u32,
+    /// The experiment spec this evidence was built from.
+    pub experiment: ExperimentReference,
+    /// The method behind every selected finding's direction.
+    pub findings_method: FindingMethod,
+    /// One variant's evidence per variant, in the spec's declared order. The
+    /// first is side A of every finding's difference.
+    pub variants: Vec<VariantConvergence>,
+    /// The selected findings' evidence, in the spec's declared order.
+    pub findings: Vec<FindingEvidence>,
+}
+
+/// Run one checked-in experiment's variants at the Fast, Standard, and Fine
+/// fidelities over the spec's seed bank and build the convergence evidence.
+///
+/// Each variant's Standard fidelity is the batch its own run root holds, which
+/// is the batch the comparison report reads, and its Fast and Fine fidelities
+/// run into `run_root/convergence/<variant>/<fidelity>`; the batch machinery's
+/// resume path means the Standard batch is not re-run, so the comparison and
+/// this evidence cannot disagree about it. The spec must therefore declare the
+/// Standard preset — [`standard_fidelity`] — because a spec at another fidelity
+/// has no Standard batch for the evidence to read.
+///
+/// Every selected finding must name a metric the reports carry; a finding that
+/// names none is refused rather than reported as an absent value. Nothing is
+/// written: the caller writes the returned evidence, and
+/// [`render_convergence_summary`] renders its human-readable summary.
+pub fn run_experiment_convergence(
+    spec_path: &Path,
+    run_root: &Path,
+    jobs: u64,
+) -> Result<ExperimentConvergence, ExperimentError> {
+    let spec = read_spec(spec_path)?;
+    let standard = standard_fidelity();
+    if spec.fidelity != standard.name || spec.step_s != standard.step_s {
+        return Err(ExperimentError::ConvergenceFidelity {
+            path: spec_path.to_path_buf(),
+            fidelity: spec.fidelity.clone(),
+            step_s: spec.step_s,
+            standard: standard.name.to_owned(),
+            standard_step_s: standard.step_s,
+        });
+    }
+    let bank = read_seed_bank(Path::new(&spec.seed_bank))?;
+    let seed_bank = SeedBankReference {
+        path: spec.seed_bank.clone(),
+        content_sha256: bank.content_sha256.clone(),
+    };
+
+    let mut variants = Vec::with_capacity(spec.variants.len());
+    for variant in &spec.variants {
+        let (scenario, content_sha256) = load_scenario_hashed(Path::new(&variant.scenario))
+            .map_err(|source| ExperimentError::Scenario {
+                variant: variant.variant.clone(),
+                path: spec_path.to_path_buf(),
+                source,
+            })?;
+        let provenance = ScenarioProvenance {
+            id: scenario.id().to_owned(),
+            source_path: variant.scenario.clone(),
+            schema_version: scenario.schema_version(),
+            content_sha256,
+        };
+        let mut roots: Vec<PathBuf> = Vec::with_capacity(PRESETS.len());
+        for preset in PRESETS {
+            let root = match preset.name == standard.name {
+                true => run_root.join(&variant.variant),
+                false => run_root
+                    .join(CONVERGENCE_RUN_DIR)
+                    .join(&variant.variant)
+                    .join(preset.name),
+            };
+            run_batch(BatchRequest {
+                root: root.clone(),
+                scenario: scenario.clone(),
+                provenance: provenance.clone(),
+                ticks: fidelity_ticks(preset.step_s, spec.ticks),
+                step_s: preset.step_s,
+                sampling: spec.sampling,
+                seeds: bank.bank.seeds.clone(),
+                seed_bank: Some(seed_bank.clone()),
+                jobs,
+            })
+            .map_err(|source| ExperimentError::Batch {
+                variant: variant.variant.clone(),
+                source,
+            })?;
+            roots.push(root);
+        }
+        let report = converge_batches(
+            &roots[0],
+            &roots[1],
+            &roots[2],
+            Path::new(&spec.seed_bank),
+            CONVERGENCE_TOLERANCE,
+        )
+        .map_err(|source| ExperimentError::Convergence {
+            variant: variant.variant.clone(),
+            source,
+        })?;
+        variants.push(project_variant(variant.variant.clone(), report));
+    }
+
+    let findings = finding_evidence(spec_path, &spec, &variants)?;
+    let spec_bytes = read(spec_path, "read experiment spec")?;
+
+    Ok(ExperimentConvergence {
+        evidence_version: CONVERGENCE_EVIDENCE_VERSION,
+        metric_definition_version: METRIC_DEFINITION_VERSION,
+        experiment: ExperimentReference {
+            experiment_version: spec.experiment_version,
+            id: spec.id.clone(),
+            path: spec_path.display().to_string(),
+            content_sha256: sha256_hex(&spec_bytes),
+        },
+        findings_method: FindingMethod {
+            rule: FINDING_DIRECTION_RULE.to_owned(),
+            difference: FINDING_DIFFERENCE.to_owned(),
+            fidelity: FINDING_FIDELITY.to_owned(),
+            reference_fidelity: FINDING_REFERENCE_FIDELITY.to_owned(),
+        },
+        variants,
+        findings,
+    })
+}
+
+/// Project one full convergence report into the bounded per-metric evidence.
+///
+/// The full report repeats the per-seed pairing behind every statistic, which
+/// for a few hundred metrics over ten seeds is megabytes; the evidence keeps one
+/// record per metric and states the seed bank and the per-fidelity seed tables
+/// once per variant, the way the comparison report links a metric's seeds to its
+/// variant's run table instead of to every record.
+fn project_variant(variant: String, report: ConvergenceReport) -> VariantConvergence {
+    let mut slices: Vec<SliceConvergence> = Vec::new();
+    for (family, slice, metric, sensitivity) in report.sensitivities() {
+        let record = MetricConvergence {
+            metric_definition_version: sensitivity.metric_definition_version,
+            unit: sensitivity.unit.clone(),
+            tolerance: sensitivity.tolerance.clone(),
+            means: sensitivity
+                .fidelities
+                .iter()
+                .map(mean_at_fidelity)
+                .collect(),
+            reported_seeds: sensitivity
+                .fidelities
+                .iter()
+                .map(|value| value.value.as_ref().map_or(0, |d| d.reported_seeds.len()))
+                .collect(),
+            not_applicable_seeds: sensitivity
+                .fidelities
+                .iter()
+                .map(|value| {
+                    value
+                        .value
+                        .as_ref()
+                        .map_or(0, |d| d.not_applicable_seeds.len())
+                })
+                .collect(),
+            not_observed_seeds: sensitivity
+                .fidelities
+                .iter()
+                .map(|value| {
+                    value
+                        .value
+                        .as_ref()
+                        .map_or(0, |d| d.not_observed_seeds.len())
+                })
+                .collect(),
+            refinements: sensitivity
+                .refinements
+                .iter()
+                .map(refinement_reading)
+                .collect(),
+            verdict: sensitivity.verdict,
+        };
+        match slices.last_mut() {
+            Some(evidence) if evidence.family == family && evidence.slice == slice => {
+                evidence.metrics.insert(metric, record);
+            }
+            _ => slices.push(SliceConvergence {
+                family,
+                slice,
+                metrics: BTreeMap::from([(metric, record)]),
+            }),
+        }
+    }
+
+    VariantConvergence {
+        variant,
+        scenario: report.scenario,
+        tolerance: report.tolerance,
+        seed_bank: report.seed_bank,
+        fidelities: report.fidelities,
+        slices,
+    }
+}
+
+/// One refinement step, without the per-seed pairing lists the full report
+/// carries.
+fn refinement_reading(step: &RefinementStep) -> RefinementReading {
+    let paired = step.paired.as_ref();
+    RefinementReading {
+        from: step.from.clone(),
+        to: step.to.clone(),
+        mean_difference: paired.and_then(|paired| paired.mean_difference),
+        confidence_interval: paired.and_then(|paired| paired.confidence_interval.clone()),
+        paired_seeds: paired.map_or(0, |paired| paired.paired_seeds.len()),
+        unpaired_seeds: paired.map_or(0, |paired| paired.unpaired.len()),
+        relative_change: step.relative_change,
+        materially_sensitive: step.materially_sensitive,
+    }
+}
+
+/// One fidelity value's across-seed mean.
+fn mean_at_fidelity(value: &FidelityValue) -> Option<f64> {
+    value
+        .value
+        .as_ref()
+        .and_then(|distribution| distribution.mean)
+}
+
+/// Every selected finding's convergence evidence, in the spec's declared order.
+fn finding_evidence(
+    spec_path: &Path,
+    spec: &ExperimentSpec,
+    variants: &[VariantConvergence],
+) -> Result<Vec<FindingEvidence>, ExperimentError> {
+    let mut evidence = Vec::with_capacity(spec.selected_findings.len());
+    for finding in &spec.selected_findings {
+        let mut sides: Vec<Vec<Option<f64>>> = Vec::with_capacity(variants.len());
+        for variant in variants {
+            let Some(metric) = finding_metric(variant, finding) else {
+                return Err(ExperimentError::Finding {
+                    path: spec_path.to_path_buf(),
+                    variant: variant.variant.clone(),
+                    label: finding.label.clone(),
+                    detail: format!(
+                        "the {} slice '{}' carries no metric '{}'",
+                        finding.family.label(),
+                        finding.slice,
+                        finding.metric
+                    ),
+                });
+            };
+            sides.push(metric.means.clone());
+        }
+        let side_a = sides[0].clone();
+        let side_b = sides[1].clone();
+        let difference = (0..PRESETS.len())
+            .map(|index| match (side_a[index], side_b[index]) {
+                (Some(a), Some(b)) => Some(a - b),
+                _ => None,
+            })
+            .collect();
+        evidence.push(FindingEvidence {
+            finding: finding.clone(),
+            direction: finding_direction(&side_a, &side_b),
+            side_a,
+            side_b,
+            difference,
+        });
+    }
+    Ok(evidence)
+}
+
+/// The metric a selected finding names, or `None` when a variant's evidence
+/// carries no such slice and metric.
+fn finding_metric<'a>(
+    variant: &'a VariantConvergence,
+    finding: &SelectedFinding,
+) -> Option<&'a MetricConvergence> {
+    variant
+        .slices
+        .iter()
+        .filter(|slice| slice.family == finding.family && slice.slice == finding.slice)
+        .find_map(|slice| slice.metrics.get(&finding.metric))
+}
+
+/// The direction a finding's cross-variant difference holds at
+/// [`FINDING_FIDELITY`]
+fn finding_direction(side_a: &[Option<f64>], side_b: &[Option<f64>]) -> FindingDirection {
+    let difference = |index: usize| match (side_a[index], side_b[index]) {
+        (Some(a), Some(b)) => Some(a - b),
+        _ => None,
+    };
+    match (difference(0), difference(FINDING_FIDELITY_INDEX)) {
+        (Some(reference), Some(judged)) if reference != 0.0 && judged != 0.0 => {
+            match reference.signum() == judged.signum() {
+                true => FindingDirection::Stable,
+                false => FindingDirection::Flipped,
+            }
+        }
+        _ => FindingDirection::Inconclusive,
+    }
+}
+
+/// Render the human-readable summary of an experiment's convergence evidence.
+///
+/// The summary is a pure function of the artifact: it states the tolerance, the
+/// fidelities, and the bank once, lists **every** metric of every slice family
+/// of every variant with its value at each fidelity, its two refinement changes,
+/// and its verdict, and states each selected finding's direction at every
+/// fidelity. Nothing is left out of the per-metric tables, so a materially
+/// sensitive metric cannot be hidden by the summary, and a value the report does
+/// not carry is `-` rather than a zero.
+pub fn render_convergence_summary(evidence: &ExperimentConvergence) -> String {
+    let first = &evidence.variants[0];
+    let mut out = String::new();
+
+    line(
+        &mut out,
+        format!("# {} convergence summary", evidence.experiment.id),
+    );
+    line(&mut out, String::new());
+    line(
+        &mut out,
+        format!(
+            "Generated from `{CONVERGENCE_EVIDENCE_FILE}` (evidence_version {}, metric_definition_version {}) by `tangle-cli experiment --convergence --summary`. Every number below is that artifact's own.",
+            evidence.evidence_version, evidence.metric_definition_version,
+        ),
+    );
+    line(&mut out, String::new());
+    line(
+        &mut out,
+        format!(
+            "- Spec: `{}` (sha256 `{}`)",
+            evidence.experiment.path, evidence.experiment.content_sha256
+        ),
+    );
+    line(
+        &mut out,
+        format!(
+            "- Seed bank: `{}` (sha256 `{}`)",
+            first.seed_bank.path, first.seed_bank.content_sha256
+        ),
+    );
+    line(
+        &mut out,
+        format!(
+            "- Seeds: {} (one bank every fidelity ran)",
+            first
+                .fidelities
+                .first()
+                .map(|fidelity| fidelity
+                    .seeds
+                    .iter()
+                    .map(|seed| seed.seed.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", "))
+                .unwrap_or_default()
+        ),
+    );
+    line(
+        &mut out,
+        format!(
+            "- Fidelities: {} (each covering one simulated duration)",
+            first
+                .fidelities
+                .iter()
+                .map(|fidelity| format!(
+                    "{} {} s over {} steps",
+                    fidelity.fidelity, fidelity.step_s, fidelity.ticks
+                ))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ),
+    );
+    line(
+        &mut out,
+        format!(
+            "- Tolerance: rule `{}`; relative {}; a countable metric ({}) adds an absolute {}; the verdict reads the `{}` step, and the relative change is read against {}.",
+            first.tolerance.rule,
+            first.tolerance.relative,
+            first.tolerance.count_units.join(", "),
+            first.tolerance.count_absolute,
+            first.tolerance.verdict_refinement,
+            first.tolerance.reference,
+        ),
+    );
+    line(&mut out, String::new());
+
+    line(&mut out, "## Variants".to_owned());
+    line(&mut out, String::new());
+    line(
+        &mut out,
+        "| Variant | Scenario | Scenario sha256 | Fidelity batches |".to_owned(),
+    );
+    line(&mut out, "| --- | --- | --- | --- |".to_owned());
+    for variant in &evidence.variants {
+        line(
+            &mut out,
+            format!(
+                "| `{}` | `{}` | `{}` | {} |",
+                variant.variant,
+                variant.scenario.source_path,
+                variant.scenario.content_sha256,
+                variant
+                    .fidelities
+                    .iter()
+                    .map(|fidelity| format!(
+                        "{} `{}`",
+                        fidelity.fidelity,
+                        fidelity.root.trim_start_matches("../")
+                    ))
+                    .collect::<Vec<String>>()
+                    .join("; "),
+            ),
+        );
+    }
+    line(&mut out, String::new());
+
+    render_findings(&mut out, evidence);
+    render_sensitivities(&mut out, evidence);
+    render_counts(&mut out, evidence);
+
+    out
+}
+
+/// The selected findings' section: one row per finding, with both sides' means
+/// at every fidelity and the direction at the judged one.
+fn render_findings(out: &mut String, evidence: &ExperimentConvergence) {
+    if evidence.findings.is_empty() {
+        return;
+    }
+    let method = &evidence.findings_method;
+    line(out, "## Selected findings".to_owned());
+    line(out, String::new());
+    line(
+        out,
+        format!(
+            "Method: {}; the difference is {}; judged at `{}`, compared against `{}`. Side A is `{}` and side B is `{}`, the spec's declared order.",
+            method.rule,
+            method.difference,
+            method.fidelity,
+            method.reference_fidelity,
+            evidence.variants[0].variant,
+            evidence.variants[1].variant,
+        ),
+    );
+    line(out, String::new());
+    line(
+        out,
+        format!(
+            "| Finding | Family | Slice | Metric | A {} | A standard | A {} | B {} | B standard | B {} | Difference {} | Difference standard | Difference {} | Direction at {} |",
+            method.reference_fidelity,
+            method.fidelity,
+            method.reference_fidelity,
+            method.fidelity,
+            method.reference_fidelity,
+            method.fidelity,
+            method.fidelity,
+        ),
+    );
+    line(
+        out,
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            .to_owned(),
+    );
+    for finding in &evidence.findings {
+        let mut cells = Vec::new();
+        for values in [&finding.side_a, &finding.side_b, &finding.difference] {
+            for value in values {
+                cells.push(summary_number(*value));
+            }
+        }
+        line(
+            out,
+            format!(
+                "| {} | {} | `{}` | `{}` | {} | {} |",
+                finding.finding.label,
+                finding.finding.family.label(),
+                finding.finding.slice,
+                finding.finding.metric,
+                cells.join(" | "),
+                summary_direction(finding.direction),
+            ),
+        );
+    }
+    line(out, String::new());
+}
+
+/// The per-metric section: every metric of every slice family of every variant.
+fn render_sensitivities(out: &mut String, evidence: &ExperimentConvergence) {
+    line(out, "## Material sensitivity per metric".to_owned());
+    line(out, String::new());
+    line(
+        out,
+        "Every metric of every slice family the evidence carries, with its across-seed mean at each fidelity, the paired refinement change as a relative change of the coarser fidelity's mean, and the verdict the report reached. `-` is a value the evidence does not carry — not applicable, not observed, or a slice that fidelity does not reach — never a zero."
+            .to_owned(),
+    );
+    line(out, String::new());
+    for variant in &evidence.variants {
+        line(out, format!("### {}", variant.variant));
+        line(out, String::new());
+        for family in SLICE_FAMILIES {
+            let group: Vec<&SliceConvergence> = variant
+                .slices
+                .iter()
+                .filter(|slice| slice.family == family)
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            line(out, format!("#### {} slices", family.label()));
+            line(out, String::new());
+            line(
+                out,
+                "| Slice | Metric | Unit (class) | Fast | Standard | Fine | Fast -> Standard | Standard -> Fine | Verdict |"
+                    .to_owned(),
+            );
+            line(
+                out,
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |".to_owned(),
+            );
+            for slice in group {
+                for (metric, record) in &slice.metrics {
+                    line(
+                        out,
+                        format!(
+                            "| `{}` | `{metric}` | {} ({}) | {} | {} | {} | {} | {} | {} |",
+                            slice.slice,
+                            record.unit,
+                            record.tolerance.class,
+                            summary_number(mean_at(record, 0)),
+                            summary_number(mean_at(record, 1)),
+                            summary_number(mean_at(record, 2)),
+                            summary_percent(change_at(record, 0)),
+                            summary_percent(change_at(record, 1)),
+                            summary_verdict(record.verdict),
+                        ),
+                    );
+                }
+            }
+            line(out, String::new());
+        }
+    }
+}
+
+/// The counts' section: how many metrics each variant reached each verdict for.
+fn render_counts(out: &mut String, evidence: &ExperimentConvergence) {
+    line(out, "## Counts".to_owned());
+    line(out, String::new());
+    line(
+        out,
+        "| Variant | Metrics | Converged | Materially sensitive | Inconclusive |".to_owned(),
+    );
+    line(out, "| --- | --- | --- | --- | --- |".to_owned());
+    for variant in &evidence.variants {
+        let metrics: Vec<&MetricConvergence> = variant
+            .slices
+            .iter()
+            .flat_map(|slice| slice.metrics.values())
+            .collect();
+        let count = |verdict: ConvergenceVerdict| {
+            metrics
+                .iter()
+                .filter(|record| record.verdict == verdict)
+                .count()
+        };
+        line(
+            out,
+            format!(
+                "| `{}` | {} | {} | {} | {} |",
+                variant.variant,
+                metrics.len(),
+                count(ConvergenceVerdict::Converged),
+                count(ConvergenceVerdict::MateriallySensitive),
+                count(ConvergenceVerdict::Inconclusive),
+            ),
+        );
+    }
+}
+
+/// One metric's across-seed mean at one fidelity, in the declared order; absent
+/// where the evidence carries no value there.
+fn mean_at(record: &MetricConvergence, index: usize) -> Option<f64> {
+    record.means.get(index).copied().flatten()
+}
+
+/// One metric's relative change at one refinement step, in the declared order.
+fn change_at(record: &MetricConvergence, index: usize) -> Option<f64> {
+    record
+        .refinements
+        .get(index)
+        .and_then(|step| step.relative_change)
+}
+
+/// One number of the summary, or [`SUMMARY_ABSENT`] when the report carries
+/// none: a status is never rendered as a zero.
+fn summary_number(value: Option<f64>) -> String {
+    value.map_or_else(|| SUMMARY_ABSENT.to_owned(), |value| format!("{value:.4}"))
+}
+
+/// One relative change of the summary, as a percentage of the coarser mean, or
+/// [`SUMMARY_ABSENT`].
+fn summary_percent(value: Option<f64>) -> String {
+    value.map_or_else(
+        || SUMMARY_ABSENT.to_owned(),
+        |value| format!("{:.2}%", value * 100.0),
+    )
+}
+
+/// One verdict's summary label.
+fn summary_verdict(verdict: ConvergenceVerdict) -> &'static str {
+    match verdict {
+        ConvergenceVerdict::Converged => "converged",
+        ConvergenceVerdict::MateriallySensitive => "materially_sensitive",
+        ConvergenceVerdict::Inconclusive => "inconclusive",
+    }
+}
+
+/// One finding direction's summary label.
+fn summary_direction(direction: FindingDirection) -> &'static str {
+    match direction {
+        FindingDirection::Stable => "stable",
+        FindingDirection::Flipped => "flipped",
+        FindingDirection::Inconclusive => "inconclusive",
+    }
+}
+
+/// Append one line to the summary.
+fn line(out: &mut String, text: String) {
+    out.push_str(&text);
+    out.push('\n');
 }
 
 /// Read and check the experiment spec's own consistency.

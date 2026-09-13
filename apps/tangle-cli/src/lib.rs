@@ -53,13 +53,18 @@ pub use converge::{
     ConvergenceVerdict, FidelityBatch, FidelityValue, MetricSensitivity, MetricTolerance,
     MovementSensitivity, RefinementStep, SLICE_FAMILIES, SLICE_KEY_RUN, SliceFamily,
     SliceSensitivities, TOLERANCE_MEASURE, TOLERANCE_REFERENCE, TOLERANCE_RULE, Tolerance,
-    VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
+    VERDICT_REFINEMENT, converge_batches, fidelity_ticks, standard_fidelity,
 };
 pub use experiment::{
-    EXPERIMENT_VERSION, ExperimentError, ExperimentReference, ExperimentReport, ExperimentSpec,
-    ExperimentVariant, REPORT_FILE, REPORT_VERSION, RUN_SLICE, ReportDistribution, ReportFidelity,
-    ReportLinks, ReportMetric, ReportPaired, ReportRun, ReportSection, ReportSlice, ReportVariant,
-    SECTION_ORDER, SLICE_ORDER, SliceKind, run_experiment,
+    CONVERGENCE_EVIDENCE_FILE, CONVERGENCE_EVIDENCE_VERSION, CONVERGENCE_RUN_DIR,
+    CONVERGENCE_SUMMARY_FILE, EXPERIMENT_VERSION, ExperimentConvergence, ExperimentError,
+    ExperimentReference, ExperimentReport, ExperimentSpec, ExperimentVariant, FINDING_DIFFERENCE,
+    FINDING_DIRECTION_RULE, FINDING_FIDELITY, FINDING_REFERENCE_FIDELITY, FindingDirection,
+    FindingEvidence, FindingMethod, MetricConvergence, REPORT_FILE, REPORT_VERSION, RUN_SLICE,
+    RefinementReading, ReportDistribution, ReportFidelity, ReportLinks, ReportMetric, ReportPaired,
+    ReportRun, ReportSection, ReportSlice, ReportVariant, SECTION_ORDER, SLICE_ORDER,
+    SelectedFinding, SliceConvergence, SliceKind, render_convergence_summary, run_experiment,
+    run_experiment_convergence,
 };
 pub use replay::{ReplayError, replay_run_directory};
 pub use run_dir::{

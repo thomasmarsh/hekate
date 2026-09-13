@@ -90,8 +90,9 @@ use tangle_cli::{
     CONVERGENCE_TOLERANCE, CaptureRequest, PRESETS, REPORT_FILE, RunDirectoryRequest,
     SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch,
     canonical_run, canonical_run_captured, capture, compare_batches, converge_batches,
-    fidelity_ticks, load_scenario_hashed, read_seed_bank, render_validation_failure,
-    replay_run_directory, run_batch, run_experiment, validate_scenario, write_run_directory,
+    fidelity_ticks, load_scenario_hashed, read_seed_bank, render_convergence_summary,
+    render_validation_failure, replay_run_directory, run_batch, run_experiment,
+    run_experiment_convergence, validate_scenario, write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -937,15 +938,25 @@ separation, and the remaining counted event families by mode and by movement,
 with both variants' across-seed distributions, the paired difference, and the
 run table every number resolves to.
 
+With --convergence the command also runs each variant at the Fast and Fine
+fidelities over the same bank and the same simulated duration, reads the three
+fidelities' batches into one Fast/Standard/Fine sensitivity report per variant,
+and writes convergence_report.json; --summary also writes the same evidence as
+a human-readable Markdown summary. Each variant's Standard fidelity is its own
+run root, which is the batch the comparison report read, and its Fast and Fine
+batches are written under <run-root>/convergence/<variant>/<fidelity>.
+
 Usage:
-  tangle-cli experiment <SPEC> --run-root <DIR> [--jobs <N>] [--output <PATH>]
+  tangle-cli experiment <SPEC> --run-root <DIR> [--jobs <N>] [--output <PATH>] [--convergence <PATH>] [--summary <PATH>]
 
 Inputs:
   <SPEC>       Path to a JSON5-free experiment spec: an experiment_version 1
                document naming two variants, the seed bank both run, and the
                fidelity, step, ticks, duration, and sampling policy every run
-               applies. Its scenario and bank paths are relative to the working
-               directory, so run it from the repository root.
+               applies, with the selected findings the convergence summary
+               reports the direction of. Its scenario and bank paths are
+               relative to the working directory, so run it from the repository
+               root.
   --run-root   Directory holding one batch root per variant, each the batch.json
                and seed-<n> run directories `batch` writes. A completed run
                directory is never rewritten, so the command resumes.
@@ -954,6 +965,12 @@ Inputs:
                serial one.
   --output     Destination for the report; `-` writes it to stdout. Defaults to
                comparison_report.json in the current directory.
+  --convergence  Also run the Fast and Fine batches of every variant and write
+               the Fast/Standard/Fine convergence evidence here. The spec must
+               declare the Standard fidelity.
+  --summary    Also write the human-readable convergence summary here; requires
+               --convergence. Both files are derived from the same evidence, so
+               re-invoking the command reproduces them byte for byte.
 
 Output:
   comparison_report.json names the experiment spec and its content hash, the run
@@ -962,14 +979,19 @@ batch link and seed table, and one record per metric per slice, grouped into the
 gate sections the metric belongs to. A record holds both variants' across-seed
 distributions and the paired difference side_a - side_b, and states
 metric_definition_version 2. A not-applicable or not-observed value is a status
-and a seed list, never a fabricated zero.
+and a seed list, never a fabricated zero. convergence_report.json holds one
+convergence report per variant over every slice family, and one record per
+selected finding with both variants' across-seed means at each fidelity and the
+direction of their difference at Fine.
 
 Exit codes:
-  0  both variants ran, were aggregated and paired, and the report was written
-  1  the spec is unreadable, declares fewer than two variants, repeats one, or
-     disagrees with its own run policy, a scenario or the seed bank cannot be
-     read, a run fails, the two variants did not run one bank in one order, or
-     an artifact cannot be written
+  0  both variants ran, were aggregated and paired, and the report (and any
+     requested convergence evidence) was written
+  1  the spec is unreadable, declares fewer than two variants, repeats one,
+     disagrees with its own run policy, selects a finding no variant reports, or
+     declares another fidelity than the Standard one --convergence refines, a
+     scenario or the seed bank cannot be read, a run fails, the two variants did
+     not run one bank in one order, or an artifact cannot be written
   2  command-line usage error";
 
 /// Arguments for `experiment`.
@@ -989,13 +1011,31 @@ struct ExperimentArgs {
     /// Destination for the report; `-` writes it to stdout.
     #[arg(long, default_value = REPORT_FILE)]
     output: PathBuf,
+
+    /// Also run each variant at the Fast, Standard, and Fine fidelities over the
+    /// same seed bank and write the convergence report here.
+    ///
+    /// The spec must declare the Standard fidelity; its own run root is that
+    /// fidelity's batch, and the Fast and Fine batches are written under
+    /// `<run-root>/convergence/<variant>/<fidelity>`. Omitted, the command runs
+    /// the comparison alone.
+    #[arg(long)]
+    convergence: Option<PathBuf>,
+
+    /// Also write the human-readable convergence summary here; requires
+    /// `--convergence`, and it is the same artifact rendered as Markdown.
+    #[arg(long, requires = "convergence")]
+    summary: Option<PathBuf>,
 }
 
 /// Run the checked-in experiment's variants and write the comparison report.
 ///
 /// The runs go through `run_batch` and the report through `run_experiment`, so a
 /// completed run directory is never rewritten and the report reads the artifacts
-/// actually on disk.
+/// actually on disk. With `--convergence` the same command runs each variant's
+/// Fast and Fine batches and writes the Fast/Standard/Fine convergence evidence
+/// beside the report, so one invocation reproduces both of the increment's
+/// machine-readable artifacts.
 fn experiment(args: ExperimentArgs) -> ExitCode {
     let report = match run_experiment(&args.spec, &args.run_root, args.jobs) {
         Ok(report) => report,
@@ -1019,6 +1059,34 @@ fn experiment(args: ExperimentArgs) -> ExitCode {
             .variants
             .first()
             .map_or(0, |variant| variant.runs.len())
+    );
+
+    let Some(convergence_path) = &args.convergence else {
+        return ExitCode::SUCCESS;
+    };
+    let convergence = match run_experiment_convergence(&args.spec, &args.run_root, args.jobs) {
+        Ok(convergence) => convergence,
+        Err(error) => return fail(error),
+    };
+    if let Err(error) = write_json(convergence_path, &convergence) {
+        return fail(format_args!(
+            "cannot write convergence report to '{}': {error}",
+            convergence_path.display()
+        ));
+    }
+    if let Some(summary_path) = &args.summary
+        && let Err(error) = fs::write(summary_path, render_convergence_summary(&convergence))
+    {
+        return fail(format_args!(
+            "cannot write convergence summary to '{}': {error}",
+            summary_path.display()
+        ));
+    }
+    eprintln!(
+        "convergence report: {} ({} variants, {} selected findings)",
+        convergence_path.display(),
+        convergence.variants.len(),
+        convergence.findings.len()
     );
     ExitCode::SUCCESS
 }

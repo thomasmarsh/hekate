@@ -598,14 +598,20 @@ pub fn fidelity_ticks(step_s: f64, standard_ticks: u64) -> u64 {
     (standard_ticks as f64 * standard_step_s() / step_s).round() as u64
 }
 
-/// The Standard preset's fixed step, the one simulated duration every fidelity
-/// covers.
-fn standard_step_s() -> f64 {
-    PRESETS
+/// The Standard fidelity preset: the middle refinement of the declared order,
+/// whose step fixes the one simulated duration every fidelity covers and whose
+/// batch is the one a caller's own Standard-fidelity batch can stand in for.
+pub fn standard_fidelity() -> Preset {
+    *PRESETS
         .iter()
         .find(|preset| preset.name == STANDARD_FIDELITY)
         .expect("PRESETS declares the standard fidelity")
-        .step_s
+}
+
+/// The Standard preset's fixed step, the one simulated duration every fidelity
+/// covers.
+fn standard_step_s() -> f64 {
+    standard_fidelity().step_s
 }
 
 /// Read three completed fidelity batches run over one seed bank into a

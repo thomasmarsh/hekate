@@ -16,9 +16,13 @@ use std::process::{Command, Output};
 
 use sha2::{Digest, Sha256};
 use tangle_cli::{
-    BATCH_MANIFEST_FILE, BatchManifest, ExperimentError, ExperimentReport, ExperimentSpec,
-    MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, REPORT_FILE, REPORT_VERSION, RUN_SLICE,
-    SECTION_ORDER, SamplingPolicy, SliceKind, run_experiment,
+    BATCH_MANIFEST_FILE, BatchManifest, CONTINUOUS_CLASS, CONVERGENCE_EVIDENCE_FILE,
+    CONVERGENCE_EVIDENCE_VERSION, CONVERGENCE_RUN_DIR, CONVERGENCE_SUMMARY_FILE, COUNT_CLASS,
+    ConvergenceVerdict, ExperimentConvergence, ExperimentError, ExperimentReport, ExperimentSpec,
+    FINDING_DIRECTION_RULE, FindingDirection, MANIFEST_FILE, METRIC_DEFINITION_VERSION,
+    METRICS_FILE, PRESETS, REPORT_FILE, REPORT_VERSION, RUN_SLICE, SECTION_ORDER, SLICE_FAMILIES,
+    SamplingPolicy, SliceKind, TOLERANCE_RULE, fidelity_ticks, render_convergence_summary,
+    run_experiment, run_experiment_convergence,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -27,6 +31,8 @@ const CLI: &str = env!("CARGO_BIN_EXE_tangle-cli");
 const EXPERIMENT: &str = "experiments/increment6_signal_timing_v1/experiment.json";
 const SEED_BANK: &str = "experiments/increment6_signal_timing_v1/seed_bank.json";
 const REPORT: &str = "experiments/increment6_signal_timing_v1/comparison_report.json";
+const EVIDENCE: &str = "experiments/increment6_signal_timing_v1/convergence_evidence.json";
+const SUMMARY: &str = "experiments/increment6_signal_timing_v1/convergence_summary.md";
 /// The run root the checked-in report was produced with, relative to the
 /// repository root. The run directories themselves are not checked in.
 const RUN_ROOT: &str = "experiments/increment6_signal_timing_v1/runs";
@@ -35,6 +41,9 @@ const RUN_ROOT: &str = "experiments/increment6_signal_timing_v1/runs";
 /// vehicle to reach the conflict region and for both variants to behave
 /// differently, and short enough to keep the suite fast.
 const SCRATCH_TICKS: u64 = 60;
+
+/// The two variants' names, in the spec's declared order.
+const VARIANTS_VARIANT_NAMES: [&str; 2] = ["ew_priority", "ns_priority"];
 
 /// The two checked-in variants, in the spec's declared order.
 const VARIANTS: [&str; 2] = [
@@ -873,5 +882,678 @@ fn the_command_writes_the_reports_library_bytes() {
         read("experiments/increment6_signal_timing_v1/.gitignore"),
         "runs/\n",
         "the run directories are large and regenerable, so they stay untracked"
+    );
+}
+
+/// The checked-in convergence evidence, as the library reads it.
+fn checked_in_evidence() -> ExperimentConvergence {
+    serde_json::from_str(&read(EVIDENCE)).expect("the convergence evidence is valid JSON")
+}
+
+/// A selected finding naming the run as a whole, which every run reports.
+const RUN_FINDING: &str = r#"[
+    {
+      "label": "Control delay over the whole run",
+      "family": "run",
+      "slice": "*",
+      "metric": "operational.run.mean_control_delay_s"
+    }
+  ]"#;
+
+/// A scratch spec with the selected findings and the run policy a test
+/// declares, written with absolute paths so the test does not depend on its
+/// working directory.
+fn write_scratch_evidence_spec(
+    scratch: &Scratch,
+    name: &str,
+    bank: &Path,
+    selected_findings: &str,
+    fidelity: &str,
+    step_s: f64,
+    ticks: u64,
+) -> PathBuf {
+    let path = scratch.path(&format!("{name}.json"));
+    let text = format!(
+        r#"{{
+  "experiment_version": 1,
+  "id": "scratch_{name}",
+  "summary": "A scratch experiment over the checked-in variants.",
+  "fidelity": "{fidelity}",
+  "step_s": {step_s},
+  "ticks": {ticks},
+  "duration_s": {},
+  "seed_bank": "{}",
+  "sampling": {},
+  "controlled": ["everything but the signal plan"],
+  "independent_variable": "the fixed-time signal plan",
+  "variants": [
+    {{ "variant": "ew_priority", "scenario": "{}" }},
+    {{ "variant": "ns_priority", "scenario": "{}" }}
+  ],
+  "selected_findings": {selected_findings}
+}}
+"#,
+        ticks as f64 * step_s,
+        bank.display(),
+        serde_json::to_string(&SamplingPolicy::default()).expect("the policy serializes"),
+        repo_path(VARIANTS[0]).display(),
+        repo_path(VARIANTS[1]).display(),
+    );
+    std::fs::write(&path, text).expect("the scratch spec is written");
+    path
+}
+
+/// Run the `experiment` command with the convergence flags from the repository
+/// root.
+fn experiment_convergence_command(
+    spec: &Path,
+    run_root: &Path,
+    jobs: u64,
+    output: &Path,
+    convergence: &Path,
+    summary: &Path,
+) -> Output {
+    Command::new(CLI)
+        .args([
+            "experiment",
+            &spec.display().to_string(),
+            "--run-root",
+            &run_root.display().to_string(),
+            "--jobs",
+            &jobs.to_string(),
+            "--output",
+            &output.display().to_string(),
+            "--convergence",
+            &convergence.display().to_string(),
+            "--summary",
+            &summary.display().to_string(),
+        ])
+        .current_dir(repo_path(""))
+        .output()
+        .expect("tangle-cli runs")
+}
+
+/// The variant's section of the summary: its per-metric tables, up to the next
+/// section.
+fn summary_block<'a>(summary: &'a str, variant: &str) -> &'a str {
+    let start = summary
+        .find(&format!("### {variant}\n"))
+        .unwrap_or_else(|| panic!("the summary has no '{variant}' section"));
+    let rest = &summary[start..];
+    let end = ["\n### ", "\n## "]
+        .into_iter()
+        .filter_map(|marker| rest.find(marker))
+        .min()
+        .expect("the summary ends a section");
+    &rest[..end]
+}
+
+/// Every verdict count of one variant's evidence, in the declared verdict
+/// order.
+fn verdict_counts(
+    evidence: &ExperimentConvergence,
+    variant: usize,
+) -> (usize, usize, usize, usize) {
+    let metrics: Vec<&tangle_cli::MetricConvergence> = evidence.variants[variant]
+        .slices
+        .iter()
+        .flat_map(|slice| slice.metrics.values())
+        .collect();
+    let count = |verdict: ConvergenceVerdict| {
+        metrics
+            .iter()
+            .filter(|record| record.verdict == verdict)
+            .count()
+    };
+    (
+        metrics.len(),
+        count(ConvergenceVerdict::Converged),
+        count(ConvergenceVerdict::MateriallySensitive),
+        count(ConvergenceVerdict::Inconclusive),
+    )
+}
+
+/// The checked-in convergence evidence is a function of the checked-in spec,
+/// bank, and variants: it judges every metric of every slice family at each
+/// fidelity, it states each selected finding's direction, and the checked-in
+/// summary is that artifact's own rendering with no metric omitted.
+#[test]
+fn the_checked_in_convergence_evidence_matches_the_checked_in_inputs() {
+    let spec = checked_in_spec();
+    let evidence = checked_in_evidence();
+    let bank: serde_json::Value =
+        serde_json::from_str(&read(SEED_BANK)).expect("the seed bank is valid JSON");
+    let seeds: Vec<u64> = bank["seeds"]
+        .as_array()
+        .expect("the bank holds seeds")
+        .iter()
+        .map(|seed| seed.as_u64().expect("a seed is a number"))
+        .collect();
+
+    assert_eq!(evidence.evidence_version, CONVERGENCE_EVIDENCE_VERSION);
+    assert_eq!(
+        evidence.metric_definition_version,
+        METRIC_DEFINITION_VERSION
+    );
+    assert_eq!(evidence.experiment.path, EXPERIMENT);
+    assert_eq!(evidence.experiment.id, spec.id);
+    assert_eq!(
+        evidence.experiment.content_sha256,
+        file_sha256(&repo_path(EXPERIMENT))
+    );
+    assert_eq!(evidence.variants.len(), 2);
+    assert!(
+        !spec.selected_findings.is_empty(),
+        "the experiment must declare the findings its conclusion rests on"
+    );
+    assert_eq!(spec.selected_findings.len(), evidence.findings.len());
+
+    for (index, variant) in evidence.variants.iter().enumerate() {
+        assert_eq!(variant.variant, spec.variants[index].variant);
+        assert_eq!(variant.scenario.source_path, spec.variants[index].scenario);
+        assert_eq!(
+            variant.scenario.content_sha256,
+            file_sha256(&repo_path(VARIANTS[index]))
+        );
+        assert_eq!(variant.seed_bank.path, spec.seed_bank);
+        assert_eq!(variant.seed_bank.path, SEED_BANK);
+        assert_eq!(
+            variant.seed_bank.content_sha256,
+            file_sha256(&repo_path(SEED_BANK))
+        );
+        assert_eq!(variant.tolerance.rule, TOLERANCE_RULE);
+
+        // The three declared fidelities over the one bank, at the tick counts
+        // the declared fidelity rule gives the spec's Standard duration. The
+        // Standard fidelity is the variant's own batch root — the batch the
+        // comparison report read — and the Fast and Fine batches are the
+        // convergence runs beside it.
+        assert_eq!(variant.fidelities.len(), PRESETS.len());
+        for (position, fidelity) in variant.fidelities.iter().enumerate() {
+            let preset = PRESETS[position];
+            assert_eq!(fidelity.fidelity, preset.name);
+            assert_eq!(fidelity.step_s, preset.step_s);
+            assert_eq!(fidelity.ticks, fidelity_ticks(preset.step_s, spec.ticks));
+            assert_eq!(
+                fidelity
+                    .seeds
+                    .iter()
+                    .map(|seed| seed.seed)
+                    .collect::<Vec<_>>(),
+                seeds
+            );
+            let expected_root = match preset.name == "standard" {
+                true => format!("{RUN_ROOT}/{}", variant.variant),
+                false => format!(
+                    "{RUN_ROOT}/{CONVERGENCE_RUN_DIR}/{}/{preset}",
+                    variant.variant,
+                    preset = preset.name
+                ),
+            };
+            assert_eq!(fidelity.root, expected_root);
+        }
+
+        // Every declared family is present, in the declared order, and every
+        // metric of every slice is judged at every fidelity.
+        let mut families: Vec<&str> = Vec::new();
+        for slice in &variant.slices {
+            if families.last() != Some(&slice.family.label()) {
+                families.push(slice.family.label());
+            }
+            assert!(!slice.metrics.is_empty(), "an empty slice is not a slice");
+        }
+        assert_eq!(
+            families,
+            SLICE_FAMILIES
+                .into_iter()
+                .map(tangle_cli::SliceFamily::label)
+                .collect::<Vec<_>>()
+        );
+        let mut judged = 0;
+        for slice in &variant.slices {
+            for (metric, record) in &slice.metrics {
+                let path = format!("{}/{metric}", slice.slice);
+                assert_eq!(record.metric_definition_version, METRIC_DEFINITION_VERSION);
+                assert_eq!(record.means.len(), PRESETS.len(), "{path}");
+                for counts in [
+                    &record.reported_seeds,
+                    &record.not_applicable_seeds,
+                    &record.not_observed_seeds,
+                ] {
+                    assert_eq!(counts.len(), PRESETS.len(), "{path}");
+                }
+                // Every seed is reported, not applicable, or not observed at
+                // each fidelity, and a mean exists exactly when a seed reported.
+                for position in 0..PRESETS.len() {
+                    assert_eq!(
+                        record.reported_seeds[position]
+                            + record.not_applicable_seeds[position]
+                            + record.not_observed_seeds[position],
+                        seeds.len(),
+                        "{path} must account for every seed at each fidelity"
+                    );
+                    assert_eq!(
+                        record.means[position].is_some(),
+                        record.reported_seeds[position] > 0,
+                        "{path} reports a mean exactly when a seed reported a value"
+                    );
+                }
+                assert_eq!(record.refinements.len(), PRESETS.len() - 1);
+                for (position, step) in record.refinements.iter().enumerate() {
+                    assert_eq!(step.from, PRESETS[position].name);
+                    assert_eq!(step.to, PRESETS[position + 1].name);
+                    assert_eq!(
+                        step.paired_seeds + step.unpaired_seeds,
+                        seeds.len(),
+                        "{path} accounts for every paired seed at each step"
+                    );
+                }
+                assert_eq!(
+                    record.verdict,
+                    ConvergenceVerdict::of(record.refinements[1].materially_sensitive),
+                    "{path}'s verdict is its standard-to-fine reading"
+                );
+                // The tolerance's class is the unit's, exactly as the
+                // convergence report reads it.
+                let countable = matches!(record.unit.as_str(), "records" | "agents");
+                assert_eq!(
+                    record.tolerance.class,
+                    match countable {
+                        true => COUNT_CLASS,
+                        false => CONTINUOUS_CLASS,
+                    },
+                    "{path} is judged against the wrong tolerance class"
+                );
+                judged += 1;
+            }
+        }
+        assert!(
+            judged > 200,
+            "the evidence must judge every family's metrics, and judged {judged} for '{}'",
+            variant.variant
+        );
+    }
+
+    // Every selected finding resolves in both variants, its sides are those
+    // variants' own means, and the direction is the one the rule gives.
+    assert_eq!(evidence.findings_method.rule, FINDING_DIRECTION_RULE);
+    assert_eq!(
+        evidence.findings_method.fidelity,
+        PRESETS[PRESETS.len() - 1].name
+    );
+    assert_eq!(evidence.findings_method.reference_fidelity, PRESETS[0].name);
+    assert_eq!(evidence.variants[0].variant, spec.variants[0].variant);
+    for (finding, selected) in evidence.findings.iter().zip(&spec.selected_findings) {
+        assert_eq!(&finding.finding, selected);
+        for (index, variant) in evidence.variants.iter().enumerate() {
+            let metric = variant
+                .slices
+                .iter()
+                .filter(|slice| slice.family == selected.family && slice.slice == selected.slice)
+                .find_map(|slice| slice.metrics.get(&selected.metric))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "'{}' must report '{}' under the {} slice '{}'",
+                        variant.variant,
+                        selected.metric,
+                        selected.family.label(),
+                        selected.slice
+                    )
+                });
+            let side = match index {
+                0 => &finding.side_a,
+                _ => &finding.side_b,
+            };
+            assert_eq!(side, &metric.means);
+        }
+        let difference: Vec<Option<f64>> = finding
+            .side_a
+            .iter()
+            .zip(&finding.side_b)
+            .map(|(a, b)| a.zip(*b).map(|(a, b)| a - b))
+            .collect();
+        for (recorded, expected) in finding.difference.iter().zip(&difference) {
+            match (recorded, expected) {
+                (Some(recorded), Some(expected)) => assert!(
+                    (recorded - expected).abs() <= 1e-9 * expected.abs().max(1.0),
+                    "{recorded} differs from the difference {expected}"
+                ),
+                (None, None) => {}
+                other => panic!("the difference is read from the two sides: {other:?}"),
+            }
+        }
+        let expected = match (difference[0], difference[PRESETS.len() - 1]) {
+            (Some(reference), Some(judged)) if reference != 0.0 && judged != 0.0 => {
+                match reference.signum() == judged.signum() {
+                    true => FindingDirection::Stable,
+                    false => FindingDirection::Flipped,
+                }
+            }
+            _ => FindingDirection::Inconclusive,
+        };
+        assert_eq!(finding.direction, expected, "'{}'", selected.label);
+    }
+    // The comparison's headline findings are the ones whose direction the gate
+    // reads, so at least one of them must survive the step refining.
+    assert!(
+        evidence
+            .findings
+            .iter()
+            .any(|finding| finding.direction == FindingDirection::Stable),
+        "no selected finding is directionally stable at Fine"
+    );
+
+    // The checked-in summary is the artifact's own rendering, it names every
+    // metric of every family of every variant exactly once, and its counts are
+    // the artifact's.
+    let summary = read(SUMMARY);
+    assert_eq!(summary, render_convergence_summary(&evidence));
+    for (index, variant) in evidence.variants.iter().enumerate() {
+        let block = summary_block(&summary, &variant.variant);
+        let mut rows = 0;
+        for slice in &variant.slices {
+            for metric in slice.metrics.keys() {
+                let row = format!("| `{}` | `{metric}` |", slice.slice);
+                assert_eq!(
+                    block.matches(&row).count(),
+                    1,
+                    "'{}/{metric}' must be one row of the '{}' summary",
+                    slice.slice,
+                    variant.variant
+                );
+                rows += 1;
+            }
+        }
+        let (metrics, converged, sensitive, inconclusive) = verdict_counts(&evidence, index);
+        assert_eq!(rows, metrics);
+        assert!(
+            converged + sensitive + inconclusive == metrics,
+            "every metric reaches exactly one verdict"
+        );
+        assert!(
+            sensitive > 0,
+            "the evidence must report material sensitivity rather than hide it"
+        );
+        assert!(
+            summary.contains(&format!(
+                "| `{}` | {metrics} | {converged} | {sensitive} | {inconclusive} |",
+                variant.variant
+            )),
+            "the summary's counts must be the artifact's"
+        );
+    }
+}
+
+/// The command runs each variant's Fast and Fine batches beside its Standard
+/// one and writes the convergence evidence and its summary: the Standard
+/// fidelity is the variant's own batch root — the comparison's own batch — the
+/// evidence and the summary are a function of the runs, and re-invoking the
+/// command changes no run artifact and rewrites both byte for byte.
+#[test]
+fn the_experiment_command_runs_the_convergence_evidence_and_summary() {
+    let scratch = Scratch::new("convergence");
+    let bank = write_scratch_bank(&scratch, "convergence", &SCRATCH_SEEDS);
+    let spec = write_scratch_evidence_spec(
+        &scratch,
+        "convergence",
+        &bank,
+        RUN_FINDING,
+        "standard",
+        0.05,
+        SCRATCH_TICKS,
+    );
+    let run_root = scratch.path("runs");
+    let report_path = scratch.path("report.json");
+    let evidence_path = scratch.path(CONVERGENCE_EVIDENCE_FILE);
+    let summary_path = scratch.path(CONVERGENCE_SUMMARY_FILE);
+
+    let written = experiment_convergence_command(
+        &spec,
+        &run_root,
+        2,
+        &report_path,
+        &evidence_path,
+        &summary_path,
+    );
+    assert_eq!(
+        written.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+
+    let evidence: ExperimentConvergence = serde_json::from_str(
+        &std::fs::read_to_string(&evidence_path).expect("the evidence is written"),
+    )
+    .expect("the evidence is JSON");
+    let report: ExperimentReport = serde_json::from_str(
+        &std::fs::read_to_string(&report_path).expect("the report is written"),
+    )
+    .expect("the report is JSON");
+
+    assert_eq!(evidence.evidence_version, CONVERGENCE_EVIDENCE_VERSION);
+    assert_eq!(
+        evidence.metric_definition_version,
+        METRIC_DEFINITION_VERSION
+    );
+    assert_eq!(evidence.experiment.id, "scratch_convergence");
+    assert_eq!(
+        evidence.experiment.content_sha256,
+        file_sha256(&spec),
+        "the evidence names the spec it was built from"
+    );
+    assert_eq!(evidence.findings.len(), 1);
+    assert_eq!(
+        evidence.findings[0].finding.label,
+        "Control delay over the whole run"
+    );
+
+    for (index, variant) in evidence.variants.iter().enumerate() {
+        assert_eq!(variant.variant, VARIANTS_VARIANT_NAMES[index]);
+        assert_eq!(variant.seed_bank.content_sha256, file_sha256(&bank));
+        assert_eq!(
+            variant
+                .fidelities
+                .iter()
+                .map(|fidelity| (
+                    fidelity.fidelity.as_str(),
+                    fidelity.step_s,
+                    fidelity.ticks,
+                    fidelity.root.clone(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "fast",
+                    0.1,
+                    fidelity_ticks(0.1, SCRATCH_TICKS),
+                    run_root
+                        .join(CONVERGENCE_RUN_DIR)
+                        .join(VARIANTS_VARIANT_NAMES[index])
+                        .join("fast")
+                        .display()
+                        .to_string(),
+                ),
+                (
+                    "standard",
+                    0.05,
+                    SCRATCH_TICKS,
+                    run_root
+                        .join(VARIANTS_VARIANT_NAMES[index])
+                        .display()
+                        .to_string(),
+                ),
+                (
+                    "fine",
+                    0.02,
+                    fidelity_ticks(0.02, SCRATCH_TICKS),
+                    run_root
+                        .join(CONVERGENCE_RUN_DIR)
+                        .join(VARIANTS_VARIANT_NAMES[index])
+                        .join("fine")
+                        .display()
+                        .to_string(),
+                ),
+            ]
+        );
+        // The Standard fidelity is the batch the comparison report read, so the
+        // two artifacts cannot disagree about it.
+        assert_eq!(
+            variant.fidelities[1].batch, report.variants[index].batch,
+            "the Standard fidelity is the comparison's own batch"
+        );
+        assert!(
+            !variant.slices.is_empty(),
+            "a variant with no slices judges nothing"
+        );
+    }
+
+    // The summary is the evidence's own rendering, and it lists every metric.
+    let summary = std::fs::read_to_string(&summary_path).expect("the summary is written");
+    assert_eq!(summary, render_convergence_summary(&evidence));
+    for variant in &evidence.variants {
+        let block = summary_block(&summary, &variant.variant);
+        for slice in &variant.slices {
+            for metric in slice.metrics.keys() {
+                assert!(
+                    block.contains(&format!("| `{}` | `{metric}` |", slice.slice)),
+                    "'{}/{metric}' must be a row of the summary",
+                    slice.slice
+                );
+            }
+        }
+    }
+
+    // Re-invoking the command resumes every batch: no run artifact changes and
+    // both artifacts are byte-identical.
+    let before = tree_hashes(&run_root);
+    let evidence_before = std::fs::read(&evidence_path).expect("readable");
+    let summary_before = std::fs::read(&summary_path).expect("readable");
+    let again = experiment_convergence_command(
+        &spec,
+        &run_root,
+        8,
+        &report_path,
+        &evidence_path,
+        &summary_path,
+    );
+    assert_eq!(
+        again.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert_eq!(tree_hashes(&run_root), before);
+    assert_eq!(
+        std::fs::read(&evidence_path).expect("readable"),
+        evidence_before
+    );
+    assert_eq!(
+        std::fs::read(&summary_path).expect("readable"),
+        summary_before
+    );
+}
+
+/// A spec that declares another fidelity than the one convergence refines, or
+/// selects a finding no variant reports, is refused rather than reported as an
+/// absent value.
+#[test]
+fn convergence_evidence_refuses_another_fidelity_or_an_absent_finding() {
+    let scratch = Scratch::new("convergence-refused");
+    let bank = write_scratch_bank(&scratch, "convergence-refused", &SCRATCH_SEEDS);
+    let run_root = scratch.path("runs");
+
+    // The evidence refines the Standard fidelity and reads the variant's own
+    // batch as that fidelity, so a spec at another fidelity has nothing to read.
+    let fine = write_scratch_evidence_spec(
+        &scratch,
+        "fine",
+        &bank,
+        RUN_FINDING,
+        "fine",
+        0.02,
+        SCRATCH_TICKS * 5,
+    );
+    match run_experiment_convergence(&fine, &run_root, 1) {
+        Err(ExperimentError::ConvergenceFidelity {
+            fidelity,
+            step_s,
+            standard,
+            ..
+        }) => {
+            assert_eq!(fidelity, "fine");
+            assert_eq!(step_s, 0.02);
+            assert_eq!(standard, "standard");
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+
+    // A finding that names no slice and metric of a variant is a spec error, not
+    // an inconclusive finding.
+    let absent = write_scratch_evidence_spec(
+        &scratch,
+        "absent",
+        &bank,
+        r#"[{ "label": "A finding nothing reports", "family": "agent_movement", "slice": "movement:nowhere", "metric": "mean_control_delay_s" }]"#,
+        "standard",
+        0.05,
+        SCRATCH_TICKS,
+    );
+    match run_experiment_convergence(&absent, &run_root, 1) {
+        Err(ExperimentError::Finding {
+            variant,
+            label,
+            detail,
+            ..
+        }) => {
+            assert_eq!(variant, "ew_priority");
+            assert_eq!(label, "A finding nothing reports");
+            assert!(detail.contains("agent_movement"), "{detail}");
+            assert!(detail.contains("movement:nowhere"), "{detail}");
+            assert!(detail.contains("mean_control_delay_s"), "{detail}");
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+
+    // The command exits non-zero and writes no evidence for the refused spec.
+    let evidence_path = scratch.path(CONVERGENCE_EVIDENCE_FILE);
+    let refused = experiment_convergence_command(
+        &absent,
+        &run_root,
+        1,
+        &scratch.path("absent-report.json"),
+        &evidence_path,
+        &scratch.path(CONVERGENCE_SUMMARY_FILE),
+    );
+    assert_eq!(refused.status.code(), Some(1), "a refusal exits 1");
+    assert!(
+        !evidence_path.exists(),
+        "a refused convergence writes no evidence"
+    );
+}
+
+/// The summary is the evidence rendered, so asking for it without asking for the
+/// evidence is a usage error rather than a summary of nothing.
+#[test]
+fn the_summary_flag_requires_the_convergence_flag() {
+    let scratch = Scratch::new("summary-requires");
+    let refused = Command::new(CLI)
+        .args([
+            "experiment",
+            "spec.json",
+            "--run-root",
+            "runs",
+            "--summary",
+            "summary.md",
+        ])
+        .current_dir(&scratch.dir)
+        .output()
+        .expect("tangle-cli runs");
+
+    assert_eq!(refused.status.code(), Some(2), "clap rejects the usage");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("--convergence"),
+        "the diagnostic names the missing flag: {stderr}"
     );
 }

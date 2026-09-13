@@ -32,5 +32,25 @@
       "variant": "ns_priority",
       "scenario": "scenarios/experiments/four_leg_pedestrian_ns_priority_v1.json5"
     }
+  ],
+  "selected_findings": [
+    {
+      "label": "Control delay of the east-west through movement",
+      "family": "agent_movement",
+      "slice": "movement:ew_through",
+      "metric": "mean_control_delay_s"
+    },
+    {
+      "label": "Control delay of the north-south through movement",
+      "family": "agent_movement",
+      "slice": "movement:ns_through",
+      "metric": "mean_control_delay_s"
+    },
+    {
+      "label": "Control delay over the whole run",
+      "family": "run",
+      "slice": "*",
+      "metric": "operational.run.mean_control_delay_s"
+    }
   ]
 }
