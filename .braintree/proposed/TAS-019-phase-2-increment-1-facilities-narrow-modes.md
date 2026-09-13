@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T19:23:19Z
+updated: 2026-09-13T19:33:16Z
 summary: Increment 1 adds continuous-width facilities and bicycle/scooter modes with longitudinal behavior and isolated fixtures.
-next: [[TAS-076-add-bicycle-and-scooter-mode-templates-narrow-bo]]
+next: [[TAS-077-wire-narrow-mode-spawning-and-shared-stage-bicyc]]
 ---
 
 # Outcome

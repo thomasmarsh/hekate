@@ -333,11 +333,15 @@ fn compiled_occupancy(occupancy: OccupancyKind) -> AgentOccupancy {
     }
 }
 
-/// Build the behavior profile from the profile map for the motion family.
+/// Build the behavior profile from the profile map for the body/motion family.
 ///
 /// Every parameter the family requires is read by name; a missing one is
 /// reported as `E_MODE_TEMPLATE_PROFILE` and returns `None`, so no bundle is
-/// built from an incomplete profile map.
+/// built from an incomplete profile map. The narrow wheeled family (a capsule
+/// body that steers) carries its steering and lateral-clearance parameters in
+/// addition to the Increment 0 wheeled set; the selection is keyed on the
+/// derived body/motion pair, exactly as [`required_profile_params`] is, never on
+/// the template id.
 fn compiled_profile(
     template: &ModeTemplateSource,
     diagnostics: &mut Vec<Diagnostic>,
@@ -367,11 +371,22 @@ fn compiled_profile(
             .expect("a required profile is present after the presence check");
         ProfileRange::new(source.min, source.max)
     };
-    Some(match template.motion {
-        MotionKind::HolonomicWalking => {
+    Some(match (&template.body, template.motion) {
+        (ModeBodySource::Capsule { .. }, MotionKind::SingleBodyWheeled) => {
+            AgentBehaviorProfile::narrow_wheeled(
+                param("speed_mps"),
+                param("time_gap_s"),
+                param("max_accel_mps2"),
+                param("comfortable_brake_mps2"),
+                param("steering_rate_max_rad_s"),
+                param("lateral_clearance_m"),
+                param("compliance"),
+            )
+        }
+        (_, MotionKind::HolonomicWalking) => {
             AgentBehaviorProfile::walking(param("speed_mps"), param("compliance"))
         }
-        MotionKind::SingleBodyWheeled => AgentBehaviorProfile::wheeled(
+        (_, MotionKind::SingleBodyWheeled) => AgentBehaviorProfile::wheeled(
             param("speed_mps"),
             param("time_gap_s"),
             param("max_accel_mps2"),

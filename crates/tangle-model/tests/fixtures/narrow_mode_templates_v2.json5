@@ -1,0 +1,131 @@
+// The Increment 1 narrow-mode fixture (TAS-076): the checked-in `bicycle` and
+// `scooter` version-2 mode templates alongside the Increment 0 `passenger_car`
+// template, in a minimal valid scenario.
+//
+// The narrow templates are the contract's normalized forms
+// (`docs/schema-v2-contract.md`, "mode_templates narrow extensions"): capsule
+// bodies, `facility` access with an authored `nominal_direction` and
+// `speed_policy`, and the narrow wheeled profile set — the Increment 0 wheeled
+// parameters plus `steering_rate_max_rad_s` and `lateral_clearance_m`. The
+// numbers are the contract's provisional engineering defaults; the model cards
+// own the calibrated values.
+//
+// The template ids are authoring handles only. The compiler must carry the
+// differences as component data and never branch on the ids, so this fixture is
+// what `narrow_mode_templates.rs` compiles and diffs, and what its no-id-branch
+// source guard searches the shared model modules for.
+{
+  schema_version: 2,
+  id: 'narrow_mode_templates_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] },
+    { id: 'bikeway_centerline', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -10.0, y: -10.0 }, { x: 210.0, y: -10.0 },
+      { x: 210.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'bikeway_band', points: [
+      { x: 0.0, y: -1.5 }, { x: 200.0, y: -1.5 },
+      { x: 200.0, y: 1.5 }, { x: 0.0, y: 1.5 },
+    ] },
+  ],
+  movements: [
+    { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+      direction: 'forward' },
+  ],
+  mode_templates: [
+    {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.0, max: 5.2 },
+        width_m: { min: 1.7, max: 2.0 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'path' ] },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 9.0, max: 15.0 },
+        max_accel_mps2: { min: 1.2, max: 2.5 },
+        comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+        time_gap_s: { min: 1.0, max: 2.0 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.6, max: 1.9 },
+        radius_m: { min: 0.30, max: 0.40 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 3.5, max: 6.5 },
+        max_accel_mps2: { min: 0.8, max: 1.5 },
+        comfortable_brake_mps2: { min: 1.5, max: 3.0 },
+        time_gap_s: { min: 0.8, max: 1.4 },
+        steering_rate_max_rad_s: { min: 0.6, max: 1.2 },
+        lateral_clearance_m: { min: 0.20, max: 0.50 },
+        compliance: { min: 0.8, max: 1.0 },
+      },
+    },
+    {
+      id: 'scooter',
+      body: { kind: 'capsule', length_m: { min: 1.0, max: 1.2 },
+        radius_m: { min: 0.25, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 4.0, max: 7.5 },
+        max_accel_mps2: { min: 1.0, max: 2.0 },
+        comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+        time_gap_s: { min: 0.8, max: 1.4 },
+        steering_rate_max_rad_s: { min: 0.8, max: 1.5 },
+        lateral_clearance_m: { min: 0.20, max: 0.50 },
+        compliance: { min: 0.6, max: 1.0 },
+      },
+    },
+  ],
+  facilities: [
+    { id: 'bikeway', region: 'bikeway_band', reference_path: 'bikeway_centerline',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'bicycle', 'scooter' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+  ],
+  permissions: [],
+  demand: [
+    { id: 'car_inflow', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'entry',
+        rate_per_hour: 300.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+    { id: 'bicycle_inflow', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'entry',
+        rate_per_hour: 120.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+    { id: 'scooter_inflow', mode: 'scooter',
+      spawn: { rate: {
+        portal: 'entry',
+        rate_per_hour: 60.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+  ],
+}

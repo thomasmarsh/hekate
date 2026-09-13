@@ -609,8 +609,11 @@ pub enum AgentLifecycle {
 /// The behavior distributions one agent samples its controller parameters from.
 ///
 /// A family reads only the parameters it uses, so walking agents carry no
-/// following time gap and wheeled agents carry no walking-specific value. Body
-/// dimensions are not here: they belong to the body component.
+/// following time gap and wheeled agents carry no walking-specific value. The
+/// narrow wheeled family (a capsule that steers) additionally carries its
+/// steering response and lateral-clearance preference; every other family
+/// leaves those absent. Body dimensions are not here: they belong to the body
+/// component.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AgentBehaviorProfile {
     desired_speed_mps: ProfileRange,
@@ -618,6 +621,8 @@ pub struct AgentBehaviorProfile {
     time_gap_s: Option<ProfileRange>,
     max_accel_mps2: Option<ProfileRange>,
     comfortable_brake_mps2: Option<ProfileRange>,
+    steering_rate_max_rad_s: Option<ProfileRange>,
+    lateral_clearance_m: Option<ProfileRange>,
 }
 
 impl AgentBehaviorProfile {
@@ -630,11 +635,17 @@ impl AgentBehaviorProfile {
             time_gap_s: None,
             max_accel_mps2: None,
             comfortable_brake_mps2: None,
+            steering_rate_max_rad_s: None,
+            lateral_clearance_m: None,
         }
     }
 
     /// A wheeled agent's behavior: desired speed, following time gap,
     /// acceleration and braking limits, and a rule-compliance propensity.
+    ///
+    /// This is the Increment 0 wheeled set; a narrow wheeled agent adds its
+    /// steering and lateral-clearance parameters through
+    /// [`Self::narrow_wheeled`].
     pub const fn wheeled(
         desired_speed_mps: ProfileRange,
         time_gap_s: ProfileRange,
@@ -648,6 +659,31 @@ impl AgentBehaviorProfile {
             time_gap_s: Some(time_gap_s),
             max_accel_mps2: Some(max_accel_mps2),
             comfortable_brake_mps2: Some(comfortable_brake_mps2),
+            steering_rate_max_rad_s: None,
+            lateral_clearance_m: None,
+        }
+    }
+
+    /// A narrow wheeled agent's behavior: the wheeled set plus the steering
+    /// response and lateral-clearance preference a capsule body steering on a
+    /// reference path uses.
+    pub const fn narrow_wheeled(
+        desired_speed_mps: ProfileRange,
+        time_gap_s: ProfileRange,
+        max_accel_mps2: ProfileRange,
+        comfortable_brake_mps2: ProfileRange,
+        steering_rate_max_rad_s: ProfileRange,
+        lateral_clearance_m: ProfileRange,
+        compliance: ProfileRange,
+    ) -> Self {
+        Self {
+            desired_speed_mps,
+            compliance,
+            time_gap_s: Some(time_gap_s),
+            max_accel_mps2: Some(max_accel_mps2),
+            comfortable_brake_mps2: Some(comfortable_brake_mps2),
+            steering_rate_max_rad_s: Some(steering_rate_max_rad_s),
+            lateral_clearance_m: Some(lateral_clearance_m),
         }
     }
 
@@ -674,6 +710,18 @@ impl AgentBehaviorProfile {
     /// Comfortable deceleration distribution, absent for a walking agent.
     pub fn comfortable_brake_mps2(&self) -> Option<ProfileRange> {
         self.comfortable_brake_mps2
+    }
+
+    /// Maximum steering/heading rate distribution in radians per second, present
+    /// only for a narrow wheeled agent (a capsule that steers).
+    pub fn steering_rate_max_rad_s(&self) -> Option<ProfileRange> {
+        self.steering_rate_max_rad_s
+    }
+
+    /// Preferred lateral clearance from the facility edge distribution in
+    /// metres, present only for a narrow wheeled agent.
+    pub fn lateral_clearance_m(&self) -> Option<ProfileRange> {
+        self.lateral_clearance_m
     }
 }
 
@@ -1102,6 +1150,38 @@ mod tests {
     #[test]
     fn derives_a_capsule_family_from_components() {
         assert_eq!(capsule_bundle().family(), AgentFamily::WheeledCapsule);
+    }
+
+    #[test]
+    fn the_narrow_wheeled_profile_carries_steering_and_clearance() {
+        let narrow = AgentBehaviorProfile::narrow_wheeled(
+            range(3.5, 6.5),
+            range(0.8, 1.4),
+            range(0.8, 1.5),
+            range(1.5, 3.0),
+            range(0.6, 1.2),
+            range(0.20, 0.50),
+            range(0.8, 1.0),
+        );
+        assert_eq!(narrow.steering_rate_max_rad_s(), Some(range(0.6, 1.2)));
+        assert_eq!(narrow.lateral_clearance_m(), Some(range(0.20, 0.50)));
+        assert_eq!(narrow.time_gap_s(), Some(range(0.8, 1.4)));
+
+        // The Increment 0 wheeled and walking profiles carry neither parameter,
+        // so their layout and values are unchanged.
+        let wheeled = AgentBehaviorProfile::wheeled(
+            range(9.0, 15.0),
+            range(1.0, 2.0),
+            range(1.2, 2.5),
+            range(2.0, 3.5),
+            range(1.0, 1.0),
+        );
+        assert_eq!(wheeled.steering_rate_max_rad_s(), None);
+        assert_eq!(wheeled.lateral_clearance_m(), None);
+        assert_eq!(
+            AgentBehaviorProfile::walking(range(1.0, 1.6), range(1.0, 1.0)).lateral_clearance_m(),
+            None
+        );
     }
 
     #[test]
