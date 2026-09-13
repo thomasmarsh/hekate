@@ -1,0 +1,226 @@
+{
+  "schema_version": 2,
+  "id": "migration_demand_v1",
+  "coordinate_system": {
+    "x": "east_m",
+    "y": "north_m"
+  },
+  "paths": [
+    {
+      "id": "guide",
+      "points": [
+        {
+          "x": 0.0,
+          "y": 0.0
+        },
+        {
+          "x": 120.0,
+          "y": 0.0
+        }
+      ]
+    }
+  ],
+  "portals": [
+    {
+      "id": "west_entry",
+      "path": "guide",
+      "end": "start",
+      "width_m": 3.5
+    },
+    {
+      "id": "east_exit",
+      "path": "guide",
+      "end": "end",
+      "width_m": 3.5
+    }
+  ],
+  "boundaries": [],
+  "regions": [],
+  "movements": [
+    {
+      "id": "eastbound",
+      "from": "west_entry",
+      "to": "east_exit",
+      "path": "guide",
+      "priority": 0,
+      "stop_line_m": 0.0,
+      "direction": "forward"
+    },
+    {
+      "id": "westbound",
+      "from": "east_exit",
+      "to": "west_entry",
+      "path": "guide",
+      "priority": 1,
+      "stop_line_m": 12.0,
+      "direction": "reverse"
+    }
+  ],
+  "crossings": [],
+  "waiting_areas": [],
+  "pedestrian_routes": [
+    {
+      "id": "crossing_walk",
+      "from": "west_entry",
+      "to": "east_exit",
+      "path": "guide",
+      "crossings": [],
+      "waiting_areas": []
+    }
+  ],
+  "conflict_regions": [],
+  "rules": [],
+  "signals": [],
+  "mode_templates": [
+    {
+      "id": "passenger_car",
+      "body": {
+        "kind": "box",
+        "length_m": {
+          "min": 4.0,
+          "max": 5.0
+        },
+        "width_m": {
+          "min": 1.8,
+          "max": 2.0
+        }
+      },
+      "motion": "single_body_wheeled",
+      "tactics": [
+        "follow",
+        "stop",
+        "yield"
+      ],
+      "access": {
+        "facility_kinds": [
+          "path"
+        ]
+      },
+      "occupancy": "operator_only",
+      "profiles": {
+        "comfortable_brake_mps2": {
+          "min": 2.0,
+          "max": 3.0
+        },
+        "compliance": {
+          "min": 0.5,
+          "max": 1.0
+        },
+        "max_accel_mps2": {
+          "min": 1.5,
+          "max": 2.5
+        },
+        "speed_mps": {
+          "min": 10.0,
+          "max": 14.0
+        },
+        "time_gap_s": {
+          "min": 1.2,
+          "max": 1.8
+        }
+      }
+    },
+    {
+      "id": "pedestrian",
+      "body": {
+        "kind": "circle",
+        "radius_m": {
+          "min": 0.2,
+          "max": 0.3
+        }
+      },
+      "motion": "holonomic_walking",
+      "tactics": [
+        "follow",
+        "stop",
+        "yield"
+      ],
+      "access": {
+        "facility_kinds": [
+          "path",
+          "crossing",
+          "waiting_area"
+        ]
+      },
+      "occupancy": "operator_only",
+      "profiles": {
+        "compliance": {
+          "min": 0.8,
+          "max": 1.0
+        },
+        "speed_mps": {
+          "min": 1.1,
+          "max": 1.5
+        }
+      }
+    }
+  ],
+  "demand": [
+    {
+      "id": "eastbound_inflow",
+      "mode": "passenger_car",
+      "spawn": {
+        "rate": {
+          "portal": "west_entry",
+          "rate_per_hour": 600.0,
+          "interval_s": {
+            "start_s": 0.0,
+            "end_s": null
+          },
+          "choice": {
+            "movements": [
+              {
+                "movement": "eastbound",
+                "weight": 1.0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "westbound_inflow",
+      "mode": "passenger_car",
+      "spawn": {
+        "rate": {
+          "portal": "east_exit",
+          "rate_per_hour": 300.0,
+          "interval_s": {
+            "start_s": 0.0,
+            "end_s": null
+          },
+          "choice": {
+            "movements": [
+              {
+                "movement": "westbound",
+                "weight": 1.0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "crossing_footfall",
+      "mode": "pedestrian",
+      "spawn": {
+        "rate": {
+          "portal": "west_entry",
+          "rate_per_hour": 180.0,
+          "interval_s": {
+            "start_s": 0.0,
+            "end_s": null
+          },
+          "choice": {
+            "routes": [
+              {
+                "route": "crossing_walk",
+                "weight": 1.0
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

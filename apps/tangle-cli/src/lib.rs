@@ -25,7 +25,10 @@ mod validate;
 
 use std::path::{Path, PathBuf};
 
-use tangle_model::{CompiledScenario, Diagnostic, ParseError, parse_scenario_source};
+use tangle_model::{
+    CompiledScenario, Diagnostic, DocumentReadError, ParseError, ScenarioDocument,
+    migrate_v1_to_v2, parse_scenario_document, parse_scenario_source, to_canonical_v2_json,
+};
 
 pub use aggregate::{
     AGGREGATION_FILE, AGGREGATION_VERSION, AggregateError, AggregatedBatch, AggregatedSeed,
@@ -91,6 +94,62 @@ pub use trajectories::{
     TrajectorySample, read_trajectories, write_trajectories,
 };
 pub use validate::{ValidationSummary, render_validation_failure, validate_scenario};
+
+/// Failure to migrate a version-1 scenario source.
+#[derive(Debug, thiserror::Error)]
+pub enum MigrateError {
+    /// The scenario file could not be read.
+    #[error("cannot read scenario '{path}': {source}")]
+    Read {
+        /// The path that was read.
+        path: PathBuf,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The document did not match its declared schema version.
+    #[error("scenario '{path}' is not a version-1 scenario source: {source}")]
+    Document {
+        /// The path that was read.
+        path: PathBuf,
+        /// The structural parse or version-negotiation failure.
+        #[source]
+        source: DocumentReadError,
+    },
+    /// The document already declares the supported version, so nothing migrates.
+    #[error(
+        "scenario '{path}' already declares schema_version 2; migrate rewrites only a \
+         version-1 source"
+    )]
+    AlreadyVersion2 {
+        /// The path that was read.
+        path: PathBuf,
+    },
+}
+
+/// Read a version-1 JSON5 scenario file and return the canonical normalized
+/// version-2 document.
+///
+/// The transform is a pure function of the document, so the only file read is
+/// the scenario named; an unchanged source always produces the same bytes. A
+/// document that is not version 1 is rejected rather than re-emitted, so the
+/// result is always the product of the version-1 to version-2 transform.
+pub fn migrate_scenario(path: &Path) -> Result<String, MigrateError> {
+    let text = std::fs::read_to_string(path).map_err(|source| MigrateError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let document = parse_scenario_document(&text).map_err(|source| MigrateError::Document {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    match document {
+        ScenarioDocument::V1(source) => Ok(to_canonical_v2_json(&migrate_v1_to_v2(&source))),
+        ScenarioDocument::V2(_) => Err(MigrateError::AlreadyVersion2 {
+            path: path.to_path_buf(),
+        }),
+    }
+}
 
 /// Failure to load and compile a scenario file.
 #[derive(Debug, thiserror::Error)]

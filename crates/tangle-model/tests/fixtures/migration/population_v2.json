@@ -1,0 +1,148 @@
+{
+  "schema_version": 2,
+  "id": "migration_population_v1",
+  "coordinate_system": {
+    "x": "east_m",
+    "y": "north_m"
+  },
+  "paths": [
+    {
+      "id": "guide",
+      "points": [
+        {
+          "x": 0.0,
+          "y": 0.0
+        },
+        {
+          "x": 60.0,
+          "y": 0.0
+        },
+        {
+          "x": 120.0,
+          "y": 0.0
+        }
+      ]
+    }
+  ],
+  "portals": [
+    {
+      "id": "west_entry",
+      "path": "guide",
+      "end": "start",
+      "width_m": 3.5
+    },
+    {
+      "id": "east_exit",
+      "path": "guide",
+      "end": "end",
+      "width_m": 3.5
+    }
+  ],
+  "boundaries": [],
+  "regions": [],
+  "movements": [],
+  "crossings": [],
+  "waiting_areas": [],
+  "pedestrian_routes": [],
+  "conflict_regions": [],
+  "rules": [],
+  "signals": [],
+  "mode_templates": [
+    {
+      "id": "passenger_car",
+      "body": {
+        "kind": "box",
+        "length_m": {
+          "min": 4.5,
+          "max": 4.5
+        },
+        "width_m": {
+          "min": 1.8,
+          "max": 1.8
+        }
+      },
+      "motion": "single_body_wheeled",
+      "tactics": [
+        "follow",
+        "stop",
+        "yield"
+      ],
+      "access": {
+        "facility_kinds": [
+          "path"
+        ]
+      },
+      "occupancy": "operator_only",
+      "profiles": {
+        "comfortable_brake_mps2": {
+          "min": 2.0,
+          "max": 3.5
+        },
+        "compliance": {
+          "min": 1.0,
+          "max": 1.0
+        },
+        "max_accel_mps2": {
+          "min": 1.2,
+          "max": 2.5
+        },
+        "speed_mps": {
+          "min": 12.0,
+          "max": 12.0
+        },
+        "time_gap_s": {
+          "min": 1.0,
+          "max": 2.0
+        }
+      }
+    },
+    {
+      "id": "pedestrian",
+      "body": {
+        "kind": "circle",
+        "radius_m": {
+          "min": 0.2,
+          "max": 0.3
+        }
+      },
+      "motion": "holonomic_walking",
+      "tactics": [
+        "follow",
+        "stop",
+        "yield"
+      ],
+      "access": {
+        "facility_kinds": [
+          "path",
+          "crossing",
+          "waiting_area"
+        ]
+      },
+      "occupancy": "operator_only",
+      "profiles": {
+        "compliance": {
+          "min": 1.0,
+          "max": 1.0
+        },
+        "speed_mps": {
+          "min": 1.0,
+          "max": 1.6
+        }
+      }
+    }
+  ],
+  "demand": [
+    {
+      "id": "population",
+      "mode": "passenger_car",
+      "spawn": {
+        "population": {
+          "path": "guide",
+          "count": 6,
+          "speed_mps": 12.0,
+          "spacing_m": 20.0
+        }
+      }
+    }
+  ]
+}

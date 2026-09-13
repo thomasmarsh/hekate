@@ -15,6 +15,11 @@
 //! non-zero on any invalid input, and advances no tick or run artifact. It is
 //! the check a CI job or a pre-batch step runs.
 //!
+//! `migrate` rewrites a version-1 scenario source as canonical normalized
+//! version 2, to stdout or a file, so a version-1 document can be inspected in
+//! the form the version-2 reader consumes. The transform is a pure function of
+//! the document, so an unchanged source always rewrites to the same bytes.
+//!
 //! `batch` runs one scenario once per seed, each seed into its own immutable run
 //! directory under an output root, and writes the batch manifest `batch.json`
 //! linking every run in ascending seed order. It is resumable — a run directory
@@ -90,10 +95,11 @@ use tangle_cli::{
     CONVERGENCE_TOLERANCE, CaptureRequest, PRESETS, REPORT_FILE, RunDirectoryRequest,
     SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch,
     canonical_run, canonical_run_captured, capture, compare_batches, converge_batches,
-    fidelity_ticks, load_scenario_hashed, read_seed_bank, render_convergence_summary,
-    render_validation_failure, replay_run_directory, run_batch, run_experiment,
-    run_experiment_convergence, validate_scenario, write_run_directory,
+    fidelity_ticks, load_scenario_hashed, migrate_scenario, read_seed_bank,
+    render_convergence_summary, render_validation_failure, replay_run_directory, run_batch,
+    run_experiment, run_experiment_convergence, validate_scenario, write_run_directory,
 };
+use tangle_model::MIGRATION_VERSION;
 use tangle_sim::RunConfig;
 
 /// Fixed steps run by `run` when `--ticks` is omitted.
@@ -148,6 +154,9 @@ enum Command {
     /// Check a scenario source and report diagnostics without running it.
     #[command(long_about = VALIDATE_LONG_ABOUT)]
     Validate(ValidateArgs),
+    /// Rewrite a version-1 scenario source as canonical normalized version 2.
+    #[command(long_about = MIGRATE_LONG_ABOUT)]
+    Migrate(MigrateArgs),
     /// Capture the deterministic Phase 1 baseline and a performance report.
     Baseline(BaselineArgs),
 }
@@ -441,6 +450,38 @@ Exit codes:
      fails semantic validation
   2  command-line usage error";
 
+/// The `migrate` contract shown by `--help`: usage, inputs, output, exit codes.
+const MIGRATE_LONG_ABOUT: &str = "\
+Rewrite a version-1 scenario document as canonical normalized version 2. The
+transform is a pure function of the document: it reads no clock, no randomness,
+and no file other than the scenario named, so an unchanged source always
+rewrites to the same bytes. Only a version-1 source is accepted; a source that
+already declares version 2 is reported rather than silently re-emitted.
+
+Usage:
+  tangle-cli migrate <SCENARIO> [--output <FILE>]
+
+Inputs:
+  <SCENARIO>  Path to a JSON5 scenario source document declaring schema_version 1.
+  --output    Destination for the normalized document; `-` writes it to stdout
+              (the default).
+
+Output:
+  The canonical normalized version-2 document: 2-space indentation, the
+  version-2 field order, and a trailing newline. Vehicle and pedestrian
+  profiles and the walking-skeleton population become mode_templates, both
+  version-1 demand generators become mode-tagged demand, and every movement
+  gains the explicit direction its from portal fixes on its reference path.
+  The SHA-256 of exactly these bytes is a run's normalized hash, so writing the
+  same source twice produces identical output.
+
+Exit codes:
+  0  the document was migrated and written
+  1  the scenario cannot be read, is not valid JSON5 for the source schema,
+     declares a schema_version other than 1, or the destination cannot be
+     written
+  2  command-line usage error";
+
 #[derive(Args)]
 struct RunArgs {
     /// Path to the JSON5 scenario.
@@ -489,6 +530,7 @@ fn main() -> ExitCode {
         Command::Experiment(args) => experiment(args),
         Command::Replay(args) => replay(args),
         Command::Validate(args) => validate(args),
+        Command::Migrate(args) => migrate(args),
         Command::Baseline(args) => baseline(args),
     }
 }
@@ -1146,6 +1188,48 @@ fn validate(args: ValidateArgs) -> ExitCode {
         }
         Err(error) => fail(render_validation_failure(&error)),
     }
+}
+
+/// Arguments for `migrate`.
+#[derive(Args)]
+struct MigrateArgs {
+    /// Path to the JSON5 scenario source; it must declare schema_version 1.
+    scenario: PathBuf,
+
+    /// Destination for the normalized version-2 document; `-` writes stdout.
+    #[arg(long, short, default_value = "-")]
+    output: PathBuf,
+}
+
+/// Rewrite a version-1 scenario source as canonical normalized version 2.
+///
+/// The normalized bytes are the migration's whole product: nothing is validated
+/// or compiled, and no run artifact is written.
+fn migrate(args: MigrateArgs) -> ExitCode {
+    let document = match migrate_scenario(&args.scenario) {
+        Ok(document) => document,
+        Err(error) => return fail(error),
+    };
+
+    if args.output.as_os_str() == "-" {
+        if let Err(error) = io::stdout().write_all(document.as_bytes()) {
+            return fail(format_args!(
+                "cannot write normalized version 2 to stdout: {error}"
+            ));
+        }
+    } else if let Err(error) = fs::write(&args.output, document.as_bytes()) {
+        return fail(format_args!(
+            "cannot write normalized version 2 to '{}': {error}",
+            args.output.display()
+        ));
+    }
+
+    eprintln!(
+        "migrated {} (migration version {})",
+        args.scenario.display(),
+        MIGRATION_VERSION
+    );
+    ExitCode::SUCCESS
 }
 
 /// Arguments for `baseline`.

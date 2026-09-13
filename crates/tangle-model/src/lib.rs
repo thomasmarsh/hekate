@@ -12,6 +12,7 @@
 //!    representation the kernel consumes.
 
 mod compiled;
+mod migrate;
 mod schema;
 mod source;
 mod validate;
@@ -26,6 +27,7 @@ pub use compiled::{
     DemandId, IdMap, MovementId, PathId, PedestrianDemandId, PedestrianRouteId, PortalId,
     ProfileRange, RegionId, RuleId, SignalId, WaitingAreaId,
 };
+pub use migrate::{MIGRATION_VERSION, migrate_v1_to_v2, to_canonical_v2_json};
 pub use schema::{
     scenario_schema, scenario_schema_json, scenario_schema_v1, scenario_schema_v1_json,
 };

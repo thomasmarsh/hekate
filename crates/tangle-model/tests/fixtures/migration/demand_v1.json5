@@ -1,0 +1,66 @@
+// Golden migration fixture: a version-1 flow with vehicle demand, pedestrian
+// demand, and both movement directions on one guide path, so the migration's
+// demand, pedestrian-template, and `movements[].direction` mappings are all
+// exercised. `demand_v2.json` is its normalized version-2 form.
+{
+  schema_version: 1,
+  id: 'migration_demand_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 120.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'east_exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  movements: [
+    { id: 'eastbound', from: 'west_entry', to: 'east_exit', path: 'guide', priority: 0 },
+    {
+      id: 'westbound',
+      from: 'east_exit',
+      to: 'west_entry',
+      path: 'guide',
+      priority: 1,
+      stop_line_m: 12.0,
+    },
+  ],
+  pedestrian_routes: [
+    { id: 'crossing_walk', from: 'west_entry', to: 'east_exit', path: 'guide' },
+  ],
+  demand: [
+    {
+      id: 'eastbound_inflow',
+      portal: 'west_entry',
+      rate_vph: 600.0,
+      routes: [ { movement: 'eastbound', weight: 1.0 } ],
+    },
+    {
+      id: 'westbound_inflow',
+      portal: 'east_exit',
+      rate_vph: 300.0,
+      routes: [ { movement: 'westbound', weight: 1.0 } ],
+    },
+  ],
+  pedestrian_demand: [
+    {
+      id: 'crossing_footfall',
+      portal: 'west_entry',
+      rate_pph: 180.0,
+      routes: [ { route: 'crossing_walk', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 10.0, max: 14.0 },
+    length_m: { min: 4.0, max: 5.0 },
+    width_m: { min: 1.8, max: 2.0 },
+    time_gap_s: { min: 1.2, max: 1.8 },
+    max_accel_mps2: { min: 1.5, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.0 },
+    compliance: { min: 0.5, max: 1.0 },
+  },
+  pedestrian_profiles: {
+    radius_m: { min: 0.2, max: 0.3 },
+    speed_mps: { min: 1.1, max: 1.5 },
+    compliance: { min: 0.8, max: 1.0 },
+  },
+}
