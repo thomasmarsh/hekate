@@ -18,10 +18,10 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_FILE,
-    MANIFEST_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest, SUMMARY_FILE,
-    SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryRetention,
-    TrajectorySample, TrajectorySampling, canonical_run_sampled, load_scenario_hashed,
-    read_trajectories, write_run_directory,
+    MANIFEST_FILE, METRICS_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest, RunMetrics,
+    SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT,
+    TrajectoryRetention, TrajectorySample, TrajectorySampling, canonical_run_captured,
+    load_scenario_hashed, read_trajectories, write_run_directory,
 };
 use tangle_model::CompiledScenario;
 use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
@@ -88,18 +88,19 @@ fn golden_run(
     tangle_cli::Trace,
     tangle_sim::RunSummary,
     Vec<TrajectorySample>,
+    RunMetrics,
 ) {
     let (scenario, content_sha256) = walking();
     let provenance = provenance(&content_sha256);
-    let (trace, summary, trajectories) =
-        canonical_run_sampled(scenario, RunConfig::new(GOLDEN_SEED), GOLDEN_TICKS, policy)
+    let (trace, summary, trajectories, metrics) =
+        canonical_run_captured(scenario, RunConfig::new(GOLDEN_SEED), GOLDEN_TICKS, policy)
             .expect("run completes");
-    (provenance, trace, summary, trajectories)
+    (provenance, trace, summary, trajectories, metrics)
 }
 
 /// Write the golden walking run into `directory` under `policy`.
 fn write_golden_run(directory: &Path, policy: SamplingPolicy) {
-    let (scenario, trace, summary, trajectories) = golden_run(&policy.trajectories);
+    let (scenario, trace, summary, trajectories, metrics) = golden_run(&policy.trajectories);
     write_run_directory(
         directory,
         RunDirectoryRequest {
@@ -110,6 +111,7 @@ fn write_golden_run(directory: &Path, policy: SamplingPolicy) {
             trace: &trace,
             trajectories: &trajectories,
             summary: &summary,
+            metrics: &metrics,
         },
     )
     .expect("run directory is written");
@@ -279,7 +281,7 @@ fn a_bounded_cap_writes_exactly_the_declared_maximum() {
         frames[..5].to_vec(),
         "the artifact must hold the first rows in canonical order"
     );
-    assert_eq!(entries(&run_dir).len(), 4);
+    assert_eq!(entries(&run_dir).len(), 5);
 }
 
 /// Full trajectories are opt-in through the command line, and a policy that
@@ -385,7 +387,7 @@ fn the_manifest_links_the_trajectory_artifact_to_its_run() {
         TrajectoryRetention::Sampled
     );
     // The manifest names the artifact, so the run directory reproduces the rows.
-    let (_, _, _, expected) = golden_run(&manifest.sampling.trajectories);
+    let (_, _, _, expected, _) = golden_run(&manifest.sampling.trajectories);
     assert_eq!(samples, expected);
 }
 
@@ -404,7 +406,7 @@ fn a_completed_run_with_trajectories_is_never_rewritten() {
         .len();
 
     let error = {
-        let (scenario, trace, summary, trajectories) =
+        let (scenario, trace, summary, trajectories, metrics) =
             golden_run(&SamplingPolicy::full_trajectories().trajectories);
         write_run_directory(
             &run_dir,
@@ -416,6 +418,7 @@ fn a_completed_run_with_trajectories_is_never_rewritten() {
                 trace: &trace,
                 trajectories: &trajectories,
                 summary: &summary,
+                metrics: &metrics,
             },
         )
         .expect_err("a completed run directory rejects a rerun")
@@ -457,6 +460,7 @@ fn a_policy_that_retains_no_trajectories_writes_no_artifact() {
         vec![
             EVENT_STREAM_FILE.to_owned(),
             MANIFEST_FILE.to_owned(),
+            METRICS_FILE.to_owned(),
             SUMMARY_FILE.to_owned()
         ]
     );
@@ -477,7 +481,7 @@ fn a_run_shorter_than_the_stride_writes_an_empty_artifact() {
     let (scenario, content_sha256) = walking();
     let provenance = provenance(&content_sha256);
     let policy = SamplingPolicy::default();
-    let (trace, summary, trajectories) = canonical_run_sampled(
+    let (trace, summary, trajectories, metrics) = canonical_run_captured(
         scenario,
         RunConfig::new(GOLDEN_SEED),
         5,
@@ -496,6 +500,7 @@ fn a_run_shorter_than_the_stride_writes_an_empty_artifact() {
             trace: &trace,
             trajectories: &trajectories,
             summary: &summary,
+            metrics: &metrics,
         },
     )
     .expect("run directory is written");

@@ -24,6 +24,7 @@ use tangle_sim::{
 };
 
 use crate::run_dir::TrajectorySampling;
+use crate::run_metrics::{RunMetrics, RunMetricsRecorder};
 use crate::trajectories::{TrajectoryRecorder, TrajectorySample};
 
 /// A canonical trace plus the hash of its exact bytes.
@@ -153,18 +154,44 @@ pub fn canonical_run_sampled(
     ticks: u64,
     sampling: &TrajectorySampling,
 ) -> Result<(Trace, RunSummary, Vec<TrajectorySample>), InitError> {
+    canonical_run_captured(scenario, config, ticks, sampling)
+        .map(|(trace, summary, trajectories, _)| (trace, summary, trajectories))
+}
+
+/// Run a compiled scenario for exactly `ticks` fixed steps, also capturing the
+/// versioned metric values the run reports.
+///
+/// The trace, summary, and trajectory bytes are the ones [`canonical_run_sampled`]
+/// produces: both entry points drive the same loop, so capturing metrics cannot
+/// change the canonical trace or its hash. The returned [`RunMetrics`] is read
+/// from the live simulation before it is consumed, so it observes exactly the
+/// run the trace records.
+pub fn canonical_run_captured(
+    scenario: CompiledScenario,
+    config: RunConfig,
+    ticks: u64,
+    sampling: &TrajectorySampling,
+) -> Result<(Trace, RunSummary, Vec<TrajectorySample>, RunMetrics), InitError> {
     let mut sim = Simulation::new(scenario, config)?;
     let mut recorder = TraceRecorder::new(&sim, &config, ticks);
     let mut trajectories = TrajectoryRecorder::new(*sampling);
+    let mut metrics = RunMetricsRecorder::new();
 
     for _ in 0..ticks {
-        recorder.record(&sim.step());
+        let output = sim.step();
+        recorder.record(&output);
+        metrics.record(&output);
+        // The step's borrow ends with its last use, so the trajectory recorder
+        // observes the same completed tick through an immutable borrow.
         trajectories.observe(&sim);
     }
 
+    // The metric capture reads the live simulation, so it closes before
+    // `finish` consumes the simulation.
+    let metrics = metrics.finish(&sim);
     let summary = sim.finish();
     let trace = recorder.finish(summary.clone());
-    Ok((trace, summary, trajectories.finish()))
+    Ok((trace, summary, trajectories.finish(), metrics))
 }
 
 fn write_line<T: Serialize>(bytes: &mut Vec<u8>, record: &T) {

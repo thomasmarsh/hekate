@@ -36,7 +36,8 @@ use crate::run_dir::{
     EVENT_STREAM_FILE, MANIFEST_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest,
     SUMMARY_FILE, SamplingPolicy, fidelity, write_run_directory,
 };
-use crate::trace::{canonical_run_sampled, sha256_hex};
+use crate::run_metrics::METRICS_FILE;
+use crate::trace::{canonical_run_captured, sha256_hex};
 use crate::trajectories::TRAJECTORY_FILE;
 
 /// Version of the batch manifest format.
@@ -306,7 +307,10 @@ fn holds_only_run_artifacts(directory: &Path) -> Result<bool, BatchError> {
         })?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        let known = name == EVENT_STREAM_FILE || name == SUMMARY_FILE || name == TRAJECTORY_FILE;
+        let known = name == EVENT_STREAM_FILE
+            || name == SUMMARY_FILE
+            || name == TRAJECTORY_FILE
+            || name == METRICS_FILE;
         if !known {
             return Ok(false);
         }
@@ -409,7 +413,7 @@ fn drain_queue(
 fn execute_run(request: &BatchRequest, seed: u64) -> Result<BatchRun, BatchError> {
     let directory = run_directory_path(&request.root, seed);
     clear_partial_run(&directory)?;
-    let (trace, summary, trajectories) = canonical_run_sampled(
+    let (trace, summary, trajectories, metrics) = canonical_run_captured(
         request.scenario.clone(),
         RunConfig::new(seed),
         request.ticks,
@@ -426,6 +430,7 @@ fn execute_run(request: &BatchRequest, seed: u64) -> Result<BatchRun, BatchError
             trace: &trace,
             trajectories: &trajectories,
             summary: &summary,
+            metrics: &metrics,
         },
     )?;
     read_run(&directory, seed)

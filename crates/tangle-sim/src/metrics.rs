@@ -476,6 +476,10 @@ pub struct InteractionMetrics {
     pairs: Vec<(AgentId, AgentId)>,
     /// Least recorded separation in metres of each observed pair.
     pair_minimum_separation_m: BTreeMap<(AgentId, AgentId), f64>,
+    /// Least recorded time to collision in seconds of each observed closing
+    /// pair. A candidate pair that never closes records no entry, so this map is
+    /// a subset of the one above; see [`Self::pair_minimum_ttc_s`].
+    pair_minimum_ttc_s: BTreeMap<(AgentId, AgentId), f64>,
     /// Least recorded separation in metres of each mode pair.
     mode_pair_minimum_separation_m: [Option<MetricMinimum>; ModePair::COUNT],
     /// Least recorded separation in metres over the run.
@@ -505,6 +509,7 @@ impl Default for InteractionMetrics {
             grid: SweptBroadPhase::default(),
             pairs: Vec::new(),
             pair_minimum_separation_m: BTreeMap::new(),
+            pair_minimum_ttc_s: BTreeMap::new(),
             mode_pair_minimum_separation_m: [None; ModePair::COUNT],
             minimum_separation_m: None,
             minimum_ttc_s: None,
@@ -549,6 +554,25 @@ impl InteractionMetrics {
     /// closing pair has been observed.
     pub fn minimum_ttc_s(&self) -> Option<MetricMinimum> {
         self.minimum_ttc_s
+    }
+
+    /// Least recorded time to collision in seconds of one observed pair over
+    /// the run so far, in either argument order.
+    ///
+    /// Mirrors [`Self::pair_minimum_separation_m`]: the pair set is the same
+    /// swept candidate set and the minimum keeps the first value on a tie. The
+    /// applicability differs, because a time to collision is not defined for
+    /// every candidate pair: `None` for a pair that has never been a candidate,
+    /// whose surfaces never came within [`INTERACTION_RANGE_M`], and for a
+    /// candidate pair that never closed with a predicted contact inside
+    /// [`TTC_HORIZON_S`], even though such a pair still records a separation.
+    pub fn pair_minimum_ttc_s(&self, agent: AgentId, other: AgentId) -> Option<f64> {
+        let key = if agent <= other {
+            (agent, other)
+        } else {
+            (other, agent)
+        };
+        self.pair_minimum_ttc_s.get(&key).copied()
     }
 
     /// The last observed tick's least surface separation in metres.
@@ -684,6 +708,13 @@ impl InteractionMetrics {
             );
             keep_minimum(&mut self.minimum_separation_m, separation);
             if let Some(seconds) = time_to_collision(&first_body, &second_body, step) {
+                let recorded = self
+                    .pair_minimum_ttc_s
+                    .entry((first, second))
+                    .or_insert(seconds);
+                if seconds < *recorded {
+                    *recorded = seconds;
+                }
                 let ttc = MetricMinimum {
                     value: seconds,
                     ..separation
@@ -1089,6 +1120,66 @@ mod tests {
             metrics.pair_minimum_separation_m(first, AgentId::from_index(9)),
             None
         );
+    }
+
+    /// The per-pair time to collision mirrors the per-pair separation
+    /// accessor's pair set and symmetry, but only records a value for a closing
+    /// pair; a candidate pair that never closes records a separation and no
+    /// time to collision.
+    #[test]
+    fn the_pass_records_each_observed_pairs_least_time_to_collision() {
+        let step = Seconds::from_secs(1.0);
+        let first = AgentId::from_index(0);
+        let second = AgentId::from_index(1);
+        let mut crossing = InteractionMetrics::default();
+        observe_pair(
+            &mut crossing,
+            (
+                first,
+                AgentMode::Pedestrian,
+                swept(circle(-4.0, 0.0, 0.5), DVec2::new(1.0, 0.0)),
+            ),
+            (
+                second,
+                AgentMode::Pedestrian,
+                swept(circle(0.0, -4.0, 0.5), DVec2::new(0.0, 1.0)),
+            ),
+            1,
+            step,
+        );
+        let expected = 3.0 - std::f64::consts::FRAC_1_SQRT_2;
+        let seconds = crossing
+            .pair_minimum_ttc_s(first, second)
+            .expect("the crossing pair is closing");
+        assert!((seconds - expected).abs() <= TIME_TOLERANCE_S);
+        // Symmetric in its arguments, as the separation accessor is.
+        assert_eq!(crossing.pair_minimum_ttc_s(second, first), Some(seconds));
+        // A pair that never came within the candidate range has no value.
+        assert_eq!(
+            crossing.pair_minimum_ttc_s(first, AgentId::from_index(9)),
+            None
+        );
+
+        // A candidate pair in parallel motion is recorded as a separation but
+        // never as a time to collision.
+        let mut parallel = InteractionMetrics::default();
+        observe_pair(
+            &mut parallel,
+            (
+                first,
+                AgentMode::Vehicle,
+                swept(circle(0.0, 0.0, 1.0), DVec2::new(1.0, 0.0)),
+            ),
+            (
+                second,
+                AgentMode::Vehicle,
+                swept(circle(4.0, 0.0, 1.0), DVec2::new(1.0, 0.0)),
+            ),
+            1,
+            step,
+        );
+        assert_eq!(parallel.pair_minimum_ttc_s(first, second), None);
+        assert_eq!(parallel.pair_minimum_separation_m(first, second), Some(2.0));
     }
 
     #[test]

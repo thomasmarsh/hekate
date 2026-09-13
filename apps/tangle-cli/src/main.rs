@@ -41,7 +41,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
     BATCH_MANIFEST_FILE, BatchRequest, CaptureRequest, RunDirectoryRequest, SamplingPolicy,
-    ScenarioProvenance, canonical_run, canonical_run_sampled, capture, load_scenario_hashed,
+    ScenarioProvenance, canonical_run, canonical_run_captured, capture, load_scenario_hashed,
     render_validation_failure, replay_run_directory, run_batch, validate_scenario,
     write_run_directory,
 };
@@ -229,16 +229,18 @@ fn run(args: RunArgs) -> ExitCode {
 
     let config = RunConfig::new(args.seed);
     let sampling = sampling_policy(args.full_trajectories);
-    // Without a run directory nothing consumes the trajectories, so the run
-    // takes the plain path and pays no sampling cost.
-    let (trace, summary, trajectories) = if args.run_dir.is_some() {
-        match canonical_run_sampled(scenario, config, args.ticks, &sampling.trajectories) {
-            Ok(sampled) => sampled,
+    // Without a run directory nothing consumes the trajectories or the metric
+    // capture, so the run takes the plain path and pays neither cost.
+    let (trace, summary, trajectories, metrics) = if args.run_dir.is_some() {
+        match canonical_run_captured(scenario, config, args.ticks, &sampling.trajectories) {
+            Ok((trace, summary, trajectories, metrics)) => {
+                (trace, summary, trajectories, Some(metrics))
+            }
             Err(error) => return fail(error),
         }
     } else {
         match canonical_run(scenario, config, args.ticks) {
-            Ok((trace, summary)) => (trace, summary, Vec::new()),
+            Ok((trace, summary)) => (trace, summary, Vec::new(), None),
             Err(error) => return fail(error),
         }
     };
@@ -246,8 +248,11 @@ fn run(args: RunArgs) -> ExitCode {
     // The run directory is written before the trace output: a completed run
     // directory rejects the rerun, and that rejection must not also emit a
     // trace to the caller's destination.
-    if let Some(directory) = &args.run_dir
-        && let Err(error) = write_run_directory(
+    if let Some(directory) = &args.run_dir {
+        let metrics = metrics
+            .as_ref()
+            .expect("a run directory always captures metrics");
+        if let Err(error) = write_run_directory(
             directory,
             RunDirectoryRequest {
                 scenario: &provenance,
@@ -257,10 +262,11 @@ fn run(args: RunArgs) -> ExitCode {
                 trace: &trace,
                 trajectories: &trajectories,
                 summary: &summary,
+                metrics,
             },
-        )
-    {
-        return fail(error);
+        ) {
+            return fail(error);
+        }
     }
 
     if args.output.as_os_str() == "-" {

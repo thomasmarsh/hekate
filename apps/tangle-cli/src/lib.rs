@@ -13,6 +13,7 @@ mod baseline;
 mod batch;
 mod replay;
 mod run_dir;
+mod run_metrics;
 mod trace;
 mod trajectories;
 mod validate;
@@ -38,7 +39,14 @@ pub use run_dir::{
     SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy, TrajectoryRetention, TrajectorySampling,
     write_run_directory,
 };
-pub use trace::{Trace, TraceRecorder, canonical_run, canonical_run_sampled, canonical_trace};
+pub use run_metrics::{
+    EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue,
+    MovementMinima, RunMetrics, RunMetricsArtifact, RunMetricsRecorder,
+};
+pub use trace::{
+    Trace, TraceRecorder, canonical_run, canonical_run_captured, canonical_run_sampled,
+    canonical_trace,
+};
 pub use trajectories::{
     TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryArtifact, TrajectoryError, TrajectoryRecorder,
     TrajectorySample, read_trajectories, write_trajectories,

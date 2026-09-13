@@ -22,7 +22,7 @@ use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     BATCH_MANIFEST_FILE, BATCH_MANIFEST_VERSION, BatchError, BatchManifest, BatchRequest,
-    EVENT_STREAM_FILE, MANIFEST_FILE, RunManifest, SUMMARY_FILE, SamplingPolicy,
+    EVENT_STREAM_FILE, MANIFEST_FILE, METRICS_FILE, RunManifest, SUMMARY_FILE, SamplingPolicy,
     ScenarioProvenance, TRAJECTORY_FILE, load_scenario_hashed, run_batch,
 };
 use tangle_model::CompiledScenario;
@@ -179,6 +179,7 @@ fn run_artifacts() -> Vec<String> {
     vec![
         EVENT_STREAM_FILE.to_owned(),
         MANIFEST_FILE.to_owned(),
+        METRICS_FILE.to_owned(),
         SUMMARY_FILE.to_owned(),
         TRAJECTORY_FILE.to_owned(),
     ]

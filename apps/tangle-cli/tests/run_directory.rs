@@ -19,11 +19,11 @@ use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_COMPRESSION,
-    EVENT_STREAM_FILE, EventRetention, MANIFEST_FILE, RUN_MANIFEST_VERSION, RUN_SUMMARY_VERSION,
-    RunDirectoryError, RunDirectoryRequest, RunManifest, RunSummary, SAMPLING_POLICY_VERSION,
-    SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT,
-    TrajectoryRetention, TrajectorySample, canonical_run, canonical_run_sampled,
-    load_scenario_hashed, write_run_directory,
+    EVENT_STREAM_FILE, EventRetention, MANIFEST_FILE, METRICS_FILE, RUN_MANIFEST_VERSION,
+    RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest, RunMetrics,
+    RunSummary, SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy, ScenarioProvenance,
+    TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryRetention, TrajectorySample, canonical_run,
+    canonical_run_captured, load_scenario_hashed, write_run_directory,
 };
 use tangle_sim::{EVENT_VERSION, RunConfig};
 
@@ -131,6 +131,7 @@ fn request<'a>(
     trace: &'a tangle_cli::Trace,
     summary: &'a tangle_sim::RunSummary,
     trajectories: &'a [TrajectorySample],
+    metrics: &'a RunMetrics,
 ) -> RunDirectoryRequest<'a> {
     RunDirectoryRequest {
         scenario,
@@ -140,6 +141,7 @@ fn request<'a>(
         trace,
         trajectories,
         summary,
+        metrics,
     }
 }
 
@@ -149,25 +151,26 @@ fn golden_run() -> (
     tangle_cli::Trace,
     tangle_sim::RunSummary,
     Vec<TrajectorySample>,
+    RunMetrics,
 ) {
     let (scenario, content_sha256) = walking();
     let provenance = provenance(&content_sha256);
-    let (trace, summary, trajectories) = canonical_run_sampled(
+    let (trace, summary, trajectories, metrics) = canonical_run_captured(
         scenario,
         RunConfig::new(GOLDEN_SEED),
         GOLDEN_TICKS,
         &SamplingPolicy::default().trajectories,
     )
     .expect("run completes");
-    (provenance, trace, summary, trajectories)
+    (provenance, trace, summary, trajectories, metrics)
 }
 
 /// Write the golden walking run into `directory` and return the run directory.
 fn write_golden_run(directory: &Path) {
-    let (provenance, trace, summary, trajectories) = golden_run();
+    let (provenance, trace, summary, trajectories, metrics) = golden_run();
     write_run_directory(
         directory,
-        request(&provenance, &trace, &summary, &trajectories),
+        request(&provenance, &trace, &summary, &trajectories, &metrics),
     )
     .expect("run directory is written");
 }
@@ -215,6 +218,7 @@ fn run_writes_the_manifest_summary_stream_and_sampled_trajectories() {
         vec![
             EVENT_STREAM_FILE.to_owned(),
             MANIFEST_FILE.to_owned(),
+            METRICS_FILE.to_owned(),
             SUMMARY_FILE.to_owned(),
             TRAJECTORY_FILE.to_owned()
         ]
@@ -369,10 +373,10 @@ fn a_completed_run_directory_is_never_rewritten() {
     write_golden_run(&run_dir);
     let before = content_hashes(&run_dir);
 
-    let (provenance, trace, summary, trajectories) = golden_run();
+    let (provenance, trace, summary, trajectories, metrics) = golden_run();
     let error = write_run_directory(
         &run_dir,
-        request(&provenance, &trace, &summary, &trajectories),
+        request(&provenance, &trace, &summary, &trajectories, &metrics),
     )
     .expect_err("a completed run directory rejects a rerun");
 
@@ -396,10 +400,10 @@ fn a_run_directory_holding_foreign_content_is_not_clobbered() {
     std::fs::create_dir_all(&run_dir).expect("directory is created");
     std::fs::write(run_dir.join("notes.txt"), "hand-written\n").expect("file is written");
 
-    let (provenance, trace, summary, trajectories) = golden_run();
+    let (provenance, trace, summary, trajectories, metrics) = golden_run();
     let error = write_run_directory(
         &run_dir,
-        request(&provenance, &trace, &summary, &trajectories),
+        request(&provenance, &trace, &summary, &trajectories, &metrics),
     )
     .expect_err("a non-empty directory rejects the write");
 
@@ -467,6 +471,7 @@ fn run_writes_the_run_directory_and_keeps_the_trace_output() {
         vec![
             EVENT_STREAM_FILE.to_owned(),
             MANIFEST_FILE.to_owned(),
+            METRICS_FILE.to_owned(),
             SUMMARY_FILE.to_owned(),
             TRAJECTORY_FILE.to_owned()
         ]

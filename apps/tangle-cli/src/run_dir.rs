@@ -43,6 +43,7 @@ use tangle_model::MODEL_VERSION;
 use tangle_sim::{EVENT_VERSION, RunSummary as KernelRunSummary};
 
 use crate::baseline::{PRESETS, ScenarioProvenance};
+use crate::run_metrics::{METRICS_FILE, RunMetrics, RunMetricsArtifact};
 use crate::trace::{Trace, sha256_hex};
 use crate::trajectories::{
     TrajectoryArtifact, TrajectoryError, TrajectorySample, write_trajectories,
@@ -346,6 +347,8 @@ pub struct RunDirectoryRequest<'a> {
     pub trajectories: &'a [TrajectorySample],
     /// The kernel's summary of the completed run.
     pub summary: &'a KernelRunSummary,
+    /// The run's captured metric values, written as `metrics.json`.
+    pub metrics: &'a RunMetrics,
 }
 
 /// Write the immutable run directory for a completed run.
@@ -376,10 +379,13 @@ pub fn write_run_directory(
     let manifest_json = to_pretty_json(&manifest);
     let summary = RunSummary::new(&manifest_json, request.summary);
     let summary_json = to_pretty_json(&summary);
+    let metrics = RunMetricsArtifact::new(&manifest_json, request.metrics);
+    let metrics_json = to_pretty_json(&metrics);
     let stream = gzip(request.trace.bytes());
 
     write_file(&directory.join(EVENT_STREAM_FILE), &stream)?;
     write_file(&directory.join(SUMMARY_FILE), summary_json.as_bytes())?;
+    write_file(&directory.join(METRICS_FILE), metrics_json.as_bytes())?;
     write_file(&directory.join(MANIFEST_FILE), manifest_json.as_bytes())?;
     Ok(())
 }
