@@ -12,6 +12,7 @@
 mod aggregate;
 mod baseline;
 mod batch;
+mod compare;
 mod replay;
 mod run_dir;
 mod run_metrics;
@@ -38,6 +39,11 @@ pub use baseline::{
 pub use batch::{
     BATCH_MANIFEST_FILE, BATCH_MANIFEST_VERSION, BatchError, BatchManifest, BatchRequest, BatchRun,
     BatchSpec, run_batch,
+};
+pub use compare::{
+    COMPARISON_FILE, COMPARISON_VERSION, CompareError, ComparedBatch, ComparedMovementSlice,
+    ComparedPair, ComparedRun, Comparison, PAIRED_DIFFERENCE, PAIRED_INTERVAL_METHOD,
+    PairedDistribution, PairedMethod, Side, UnpairedSeed, compare_batches,
 };
 pub use replay::{ReplayError, replay_run_directory};
 pub use run_dir::{

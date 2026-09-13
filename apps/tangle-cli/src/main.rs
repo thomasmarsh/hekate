@@ -38,6 +38,15 @@
 //! counts them per seed rather than reading them as zero, and it mutates no run
 //! artifact.
 //!
+//! `compare` reads two completed batches (`--a` and `--b`) and the seed bank
+//! both ran, proves both sides used that one bank in that one order, pairs the
+//! runs by seed, and writes `comparison.json`: the per-seed paired difference of
+//! every reported metric with its mean and a paired 95% Student-t confidence
+//! interval, disaggregated by mode pair and by movement and linked to both run
+//! manifests. Pairing by seed cancels the between-seed variance both sides
+//! share, which the unpaired per-side interval cannot. It refuses unpaired or
+//! mismatched inputs and mutates no run artifact.
+//!
 //! `replay` reproduces a completed run directory from its manifest: it re-loads
 //! the recorded scenario source, checks the recorded content hash, and re-runs
 //! the kernel with the recorded seed, step, and tick count, emitting the
@@ -56,11 +65,11 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
-    AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, CaptureRequest, RunDirectoryRequest,
-    SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch,
-    canonical_run, canonical_run_captured, capture, load_scenario_hashed, read_seed_bank,
-    render_validation_failure, replay_run_directory, run_batch, validate_scenario,
-    write_run_directory,
+    AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, COMPARISON_FILE, CaptureRequest,
+    RunDirectoryRequest, SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference,
+    aggregate_batch, canonical_run, canonical_run_captured, capture, compare_batches,
+    load_scenario_hashed, read_seed_bank, render_validation_failure, replay_run_directory,
+    run_batch, validate_scenario, write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -100,6 +109,9 @@ enum Command {
     /// Aggregate a completed batch into a machine-readable metric distribution file.
     #[command(long_about = AGGREGATE_LONG_ABOUT)]
     Aggregate(AggregateArgs),
+    /// Compare two batches run from one seed bank, pairing runs by seed.
+    #[command(long_about = COMPARE_LONG_ABOUT)]
+    Compare(CompareArgs),
     /// Reproduce a completed run directory's canonical event stream.
     #[command(long_about = REPLAY_LONG_ABOUT)]
     Replay(ReplayArgs),
@@ -211,6 +223,51 @@ Exit codes:
      could not be written
   2  command-line usage error";
 
+/// The `compare` contract shown by `--help`: inputs, output, method, exits.
+const COMPARE_LONG_ABOUT: &str = "\
+Compare two completed batches that ran one common-random-number seed bank. The
+comparison proves both sides used that bank in that one seed order, pairs the
+runs by seed, and for every reported metric computes the per-seed difference
+d_i = A(seed_i) - B(seed_i) with its mean and a paired two-sided 95% Student-t
+confidence interval, disaggregated by mode pair and by movement and linked to
+both run manifests and to metric_definition_version 1.
+
+Usage:
+  tangle-cli compare --a <BATCH_ROOT> --b <BATCH_ROOT> --seed-bank <FILE> [--output <PATH>]
+
+Inputs:
+  --a          Batch root of side A: its values are the minuend of every
+               difference, so a positive mean difference means A is greater.
+  --b          Batch root of side B: its values are the subtrahend.
+  --seed-bank  The bank both batches ran; it must hash to the bank content hash
+               each batch manifest recorded.
+  --output     Destination for the comparison; `-` writes it to stdout.
+               Defaults to comparison.json in the current directory.
+
+Method:
+  The interval is the two-sided Student-t interval on the mean of the per-seed
+differences, mean_difference +/- t(0.975, n - 1) * s_d / sqrt(n), with the n - 1
+sample standard deviation of the differences. Pairing by seed removes the
+between-seed variance both variants share, so the paired interval is narrower
+than either side's unpaired across-seed interval; the unpaired interval contains
+the seed-to-seed spread that cancels in the paired difference. A pair with a
+not-applicable or not-observed value on either side is excluded from the
+statistic and counted with both sides' statuses.
+
+Output:
+  comparison.json names the seed bank and both batch manifests, the paired runs,
+the documented method, and one distribution per metric, mode-pair slice, and
+movement slice. Metrics, slices, and seeds are ordered deterministically. No run
+artifact is created, changed, or removed.
+
+Exit codes:
+  0  the two batches were proven to share one bank and compared
+  1  a batch names no bank, the batches name different banks or orders, the bank
+     file disagrees with what they recorded, a seed is missing, duplicated, or
+     unpaired, a run disagrees with what its batch recorded, a metric is
+     reported by one side only, or the comparison could not be written
+  2  command-line usage error";
+
 /// The `replay` contract shown by `--help`: usage, inputs, output, exit codes.
 const REPLAY_LONG_ABOUT: &str = "\
 Reproduce a completed run directory's canonical event stream. The manifest
@@ -302,6 +359,7 @@ fn main() -> ExitCode {
         Command::Batch(args) => batch(args),
         Command::SeedBank(args) => seed_bank(args),
         Command::Aggregate(args) => aggregate(args),
+        Command::Compare(args) => compare(args),
         Command::Replay(args) => replay(args),
         Command::Validate(args) => validate(args),
         Command::Baseline(args) => baseline(args),
@@ -581,6 +639,57 @@ fn aggregate(args: AggregateArgs) -> ExitCode {
         output.display(),
         aggregation.metrics.len(),
         aggregation.seeds.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Arguments for `compare`.
+#[derive(Args)]
+struct CompareArgs {
+    /// Batch root of side A, whose values are the minuend of every difference.
+    #[arg(long)]
+    a: PathBuf,
+
+    /// Batch root of side B, whose values are the subtrahend.
+    #[arg(long)]
+    b: PathBuf,
+
+    /// The seed bank both batches ran; it must hash to what they recorded.
+    #[arg(long)]
+    seed_bank: PathBuf,
+
+    /// Destination for the comparison; `-` writes it to stdout.
+    ///
+    /// Defaults to `comparison.json` in the current directory. The comparison is
+    /// derived and deterministic, so writing it again is a no-op in content; no
+    /// run artifact is ever written.
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+/// Compare two batches run from one seed bank into one machine-readable file of
+/// paired per-metric differences and confidence intervals.
+fn compare(args: CompareArgs) -> ExitCode {
+    let comparison = match compare_batches(&args.a, &args.b, &args.seed_bank) {
+        Ok(comparison) => comparison,
+        Err(error) => return fail(error),
+    };
+
+    let output = args
+        .output
+        .unwrap_or_else(|| PathBuf::from(COMPARISON_FILE));
+    if let Err(error) = write_json(&output, &comparison) {
+        return fail(format_args!(
+            "cannot write comparison to '{}': {error}",
+            output.display()
+        ));
+    }
+
+    eprintln!(
+        "comparison: {} ({} metrics over {} paired seeds)",
+        output.display(),
+        comparison.metrics.len(),
+        comparison.pairs.len()
     );
     ExitCode::SUCCESS
 }

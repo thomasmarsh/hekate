@@ -159,13 +159,13 @@ pub const T_CRITICAL_975: [f64; 30] = [
 pub const NORMAL_CRITICAL_975: f64 = 1.959_963_984_540_054;
 
 /// The metric a mode-pair slice reports.
-const MODE_PAIR_METRIC: &str = "minimum_separation_m";
+pub(crate) const MODE_PAIR_METRIC: &str = "minimum_separation_m";
 
 /// The unit of a time metric, as metric definition v1 fixes it.
 const SECONDS: &str = "seconds";
 
 /// The unit of a distance metric, as metric definition v1 fixes it.
-const METRES: &str = "metres";
+pub(crate) const METRES: &str = "metres";
 
 /// The unit of a countable event metric, as metric definition v1 fixes it.
 const RECORDS: &str = "records";
@@ -357,7 +357,7 @@ pub struct Spread {
 
 impl Spread {
     /// The spread of the reported values.
-    fn of(values: &[f64], variance: Option<f64>) -> Self {
+    pub(crate) fn of(values: &[f64], variance: Option<f64>) -> Self {
         let minimum = values.iter().copied().reduce(f64::min);
         let maximum = values.iter().copied().reduce(f64::max);
         Self {
@@ -397,6 +397,21 @@ impl ConfidenceInterval {
     /// The interval of the reported values, or `None` when fewer than
     /// [`LEAST_INTERVAL_SEEDS`] were reported.
     fn of(values: &[f64], mean: Option<f64>, variance: Option<f64>) -> Option<Self> {
+        Self::labelled(INTERVAL_METHOD, values, mean, variance)
+    }
+
+    /// The same two-sided Student-t interval, labelled with `method`.
+    ///
+    /// The arithmetic is [`INTERVAL_METHOD`]'s in every case; only the method
+    /// name a consumer reads differs, so `compare` reports the interval of its
+    /// per-seed paired differences through this one construction instead of a
+    /// second spelling of the critical-value lookup.
+    pub(crate) fn labelled(
+        method: &str,
+        values: &[f64],
+        mean: Option<f64>,
+        variance: Option<f64>,
+    ) -> Option<Self> {
         let (mean, variance) = mean.zip(variance)?;
         let count = values.len();
         let standard_error = variance.sqrt() / (count as f64).sqrt();
@@ -404,7 +419,7 @@ impl ConfidenceInterval {
         let critical_value = critical_value(degrees_of_freedom);
         let half_width = critical_value * standard_error;
         Some(Self {
-            method: INTERVAL_METHOD.to_owned(),
+            method: method.to_owned(),
             confidence_level: CONFIDENCE_LEVEL,
             degrees_of_freedom,
             critical_value,
@@ -589,13 +604,13 @@ fn critical_value(degrees_of_freedom: u32) -> f64 {
 }
 
 /// The mean of the reported values, `None` when none were reported.
-fn sample_mean(values: &[f64]) -> Option<f64> {
+pub(crate) fn sample_mean(values: &[f64]) -> Option<f64> {
     (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
 }
 
 /// The sample variance of the reported values with the `n - 1` denominator,
 /// `None` below two reported values.
-fn sample_variance(values: &[f64], mean: Option<f64>) -> Option<f64> {
+pub(crate) fn sample_variance(values: &[f64], mean: Option<f64>) -> Option<f64> {
     match (values.len(), mean) {
         (count, Some(mean)) if count >= 2 => Some(
             values
@@ -610,7 +625,7 @@ fn sample_variance(values: &[f64], mean: Option<f64>) -> Option<f64> {
 
 /// One seed's reading of a run-level metric: a status-bearing value, or a count
 /// the run artifact always reports (zero when the family is absent).
-enum Reading<'a> {
+pub(crate) enum Reading<'a> {
     /// A metric value with its reporting status.
     Value(&'a MetricValue),
     /// An always-reported count.
@@ -622,7 +637,9 @@ enum Reading<'a> {
 ///
 /// The metric set is the artifact's own: the three interaction minima, the
 /// total, every counted event family, and every counted variant kind.
-fn run_level_readings(artifact: &RunMetricsArtifact) -> Vec<(String, &'static str, Reading<'_>)> {
+pub(crate) fn run_level_readings(
+    artifact: &RunMetricsArtifact,
+) -> Vec<(String, &'static str, Reading<'_>)> {
     let mut readings = vec![
         (
             "minimum_ttc_s".to_owned(),
@@ -665,7 +682,9 @@ fn run_level_readings(artifact: &RunMetricsArtifact) -> Vec<(String, &'static st
 }
 
 /// The three metrics one movement bucket reports, each with its unit.
-fn movement_readings(minima: &MovementMinima) -> [(&'static str, &'static str, &MetricValue); 3] {
+pub(crate) fn movement_readings(
+    minima: &MovementMinima,
+) -> [(&'static str, &'static str, &MetricValue); 3] {
     [
         ("minimum_separation_m", METRES, &minima.minimum_separation_m),
         ("minimum_ttc_s", SECONDS, &minima.minimum_ttc_s),
