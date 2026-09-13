@@ -429,6 +429,84 @@ fn parallel_and_serial_batches_produce_identical_trace_hashes_and_streams() {
     }
 }
 
+/// A batch runs at the fixed step its specification declares rather than the
+/// kernel default: the run manifest, the canonical event stream's own header,
+/// and the summary's elapsed time all state that step, and `replay --verify`
+/// reproduces the recorded stream from the manifest the batch wrote.
+///
+/// A run that ignored the requested step would record one step in its manifest
+/// and another in its stream, which is what this pins: the batch at a
+/// non-default step is the Fast fidelity's 100 ms.
+#[test]
+fn a_batch_runs_at_its_declared_step_and_replays_at_it() {
+    let scratch = Scratch::new("step");
+    let out_root = scratch.path("batch");
+    let step_s = 0.1;
+    let ticks = 30;
+
+    let mut request = request(&out_root, &[0], ticks, 1);
+    request.step_s = step_s;
+    let manifest = run_batch(request).expect("the batch runs");
+
+    let directory = out_root.join(&manifest.runs[0].directory);
+    let run_manifest = read_run_manifest(&directory);
+    assert_eq!(run_manifest.step_s, step_s, "the manifest records the step");
+    assert_eq!(run_manifest.ticks, ticks);
+    assert_eq!(run_manifest.fidelity, "fast");
+
+    // The stream's own run header is the kernel's record of the step it ran at.
+    let stream = decompressed_stream(&directory);
+    let header: serde_json::Value = serde_json::from_slice(
+        stream
+            .split(|byte| *byte == b'\n')
+            .next()
+            .expect("the stream starts with its run header"),
+    )
+    .expect("the run header is JSON");
+    assert_eq!(
+        header["step_s"].as_f64(),
+        Some(step_s),
+        "the stream header must record the step the kernel ran at"
+    );
+    assert_eq!(header["ticks"].as_u64(), Some(ticks));
+
+    // And the summary's simulated time is the duration those steps cover, which
+    // a run at another step cannot produce.
+    let summary: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.join(SUMMARY_FILE)).expect("summary is written"),
+    )
+    .expect("summary is JSON");
+    assert_eq!(
+        summary["elapsed_s"].as_f64(),
+        Some(ticks as f64 * step_s),
+        "the run covers the duration its declared step and tick count name"
+    );
+    assert_eq!(
+        manifest.runs[0].trace_sha256,
+        run_manifest.stream.uncompressed_sha256
+    );
+
+    // The recorded run reproduces, which is the property a mis-recorded step
+    // breaks: replay re-runs the recorded step and compares the stream.
+    let replayed = Command::new(CLI)
+        .arg("replay")
+        .arg(&directory)
+        .arg("--verify")
+        .current_dir(repo_path(""))
+        .output()
+        .expect("tangle-cli runs");
+    assert_eq!(
+        replayed.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&replayed)
+    );
+    assert_eq!(
+        replayed.stdout, stream,
+        "replay must emit the recorded canonical event stream"
+    );
+}
+
 /// `--jobs` counts whole runs, so zero is a usage error rather than a batch
 /// that silently runs nothing.
 #[test]

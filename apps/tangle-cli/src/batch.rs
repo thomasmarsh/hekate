@@ -31,7 +31,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tangle_model::{CompiledScenario, MODEL_VERSION};
-use tangle_sim::{EVENT_VERSION, InitError, RunConfig};
+use tangle_sim::{EVENT_VERSION, InitError, RunConfig, Seconds};
 
 use crate::baseline::ScenarioProvenance;
 use crate::run_dir::{
@@ -437,7 +437,7 @@ fn execute_run(request: &BatchRequest, seed: u64) -> Result<BatchRun, BatchError
     clear_partial_run(&directory)?;
     let (trace, summary, trajectories, metrics) = canonical_run_captured(
         request.scenario.clone(),
-        RunConfig::new(seed),
+        RunConfig::new(seed).with_step(Seconds::from_secs(request.step_s)),
         request.ticks,
         &request.sampling.trajectories,
     )

@@ -1604,6 +1604,7 @@ fn the_converge_command_runs_three_fidelities_over_one_bank_and_mutates_nothing(
     // reported is a status rather than a zero.
     let mut sensitive = 0;
     let mut inconclusive = 0;
+    let mut converged = 0;
     for (key, sensitivity) in every_sensitivity(&report) {
         assert_eq!(
             sensitivity.verdict,
@@ -1613,7 +1614,7 @@ fn the_converge_command_runs_three_fidelities_over_one_bank_and_mutates_nothing(
         match sensitivity.verdict {
             ConvergenceVerdict::MateriallySensitive => sensitive += 1,
             ConvergenceVerdict::Inconclusive => inconclusive += 1,
-            ConvergenceVerdict::Converged => {}
+            ConvergenceVerdict::Converged => converged += 1,
         }
         for value in &sensitivity.fidelities {
             let Some(distribution) = &value.value else {
@@ -1633,14 +1634,37 @@ fn the_converge_command_runs_three_fidelities_over_one_bank_and_mutates_nothing(
             }
         }
     }
-    assert!(
-        sensitive > 0,
-        "the benchmark's refinement must flag a material sensitivity"
+    assert_eq!(
+        sensitive + inconclusive + converged,
+        every_sensitivity(&report).len(),
+        "every metric reaches exactly one verdict"
     );
     assert!(
         inconclusive > 0,
         "a metric no seed reports at both steps must be inconclusive"
     );
+
+    // Whether a metric is materially sensitive is a property of the scenario and
+    // the horizon, not of the command: at this three-second horizon the
+    // refinement converges. What the command owes a reader is the declared rule
+    // itself, and the runs behind the report must have followed it — each
+    // fidelity's runs cover one simulated duration at that fidelity's own step,
+    // which is what the summary the run wrote records.
+    for fidelity in &report.fidelities {
+        let run = scratch
+            .path(&fidelity.root)
+            .join(&fidelity.seeds[0].directory);
+        let summary: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run.join("summary.json")).expect("the run summary is written"),
+        )
+        .expect("the run summary is JSON");
+        assert_eq!(
+            summary["elapsed_s"].as_f64(),
+            Some(fidelity.ticks as f64 * fidelity.step_s),
+            "the {} fidelity's runs must cover the declared duration at its declared step",
+            fidelity.fidelity
+        );
+    }
 
     // Re-invoking the command resumes the batches: no run artifact changes and
     // the report is byte-identical.
