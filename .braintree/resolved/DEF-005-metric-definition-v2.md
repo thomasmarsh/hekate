@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T13:40:00Z
+updated: 2026-09-13T12:14:45Z
 summary: The settled versioned metric definition v2 (metric_definition_version 2) carries every v1 metric forward unchanged and names the operational families v1 deferred - throughput, travel time, stopped delay, control delay, queue length, and queue duration - each with formula, unit, applicability status, tie-break, mode and movement disaggregation, and its exact source location, leaving level of service deferred.
 ---
 
@@ -27,8 +27,8 @@ This document is **metric definition v2**: `metric_definition_version: 2`. The
 single constant that fixes it is `apps/tangle-cli/src/run_metrics.rs:87`
 (`METRIC_DEFINITION_VERSION`), and it is what the run summary
 (`apps/tangle-cli/src/run_dir.rs:440`), the run metrics artifact
-(`run_metrics.rs:482`), the aggregation
-(`apps/tangle-cli/src/aggregate.rs:797`, `:940`), the comparison
+(`run_metrics.rs:472`), the aggregation
+(`apps/tangle-cli/src/aggregate.rs:875`, `:1018`), the comparison
 (`apps/tangle-cli/src/compare.rs:704`, `:1215`), and the convergence report
 (`apps/tangle-cli/src/converge.rs:569`, `:677`) each write. An artifact already
 written at v1 is never relabelled; `DEF-004` remains its definition.
@@ -79,14 +79,14 @@ admission and its `Event::Spawned` records are untouched.
 
 **Served agent.** An agent whose `Event::Despawned` completed its trip inside
 the run. `DespawnReason::ExitedPath` is the only despawn reason the kernel
-reports (`crates/tangle-sim/src/event.rs:73`), so every despawn is a completed
+reports (`crates/tangle-sim/src/event.rs:70`), so every despawn is a completed
 trip.
 
 **Elapsed time.** `elapsed_s` is the end of the last observed tick
 (`metrics.rs:1057`), so a run of `t` ticks of step `s` reports `t * s`.
 
 1. **Throughput — `throughput_agents_per_s`, unit agents per second**
-   (`OperationValues::throughput_agents_per_s`, `metrics.rs:963`; computed at
+   (`OperationValues::throughput_agents_per_s`, `metrics.rs:961`; computed at
    `metrics.rs:1299`; written at `run_metrics.rs:389`). Formula:
    `served_agents / elapsed_s`, the agents whose trip completed inside the run
    divided by the run's elapsed simulated seconds. Disaggregated by mode and by
@@ -99,7 +99,7 @@ trip.
    accumulate in tick order and, within a tick, in ascending `AgentId` order.
 
 2. **Travel time — `mean_travel_time_s` and `total_travel_time_s`, unit seconds**
-   (`metrics.rs:965`-`:968`; computed at `metrics.rs:1293`; written at
+   (`metrics.rs:964`, `:967`; computed at `metrics.rs:1301`; written at
    `run_metrics.rs:390`). Formula: `travel_time_s(agent) = despawn_s - spawn_s`
    per served agent, with `spawn_s` the admission time above; the bucket reports
    the mean over its served agents and their total. `despawn_s` is the end of
@@ -111,7 +111,7 @@ trip.
    in tick order and within a tick in ascending `AgentId` order.
 
 3. **Stopped delay — `mean_stopped_delay_s` and `total_stopped_delay_s`, unit
-   seconds** (`metrics.rs:969`-`:972`; computed at `metrics.rs:1294`; written
+   seconds** (`metrics.rs:970`, `:973`; computed at `metrics.rs:1303`; written
    at `run_metrics.rs:391`). Formula: the sum over a served agent's stopped
    states of `depart_s - join_s`, where a stopped state opens on
    `Event::Queue { joined: true }` and closes on `Event::Queue { joined: false }`
@@ -126,12 +126,12 @@ trip.
    within a tick, ascending `AgentId` order.
 
 4. **Control delay — `mean_control_delay_s` and `total_control_delay_s`, unit
-   seconds** (`metrics.rs:973`-`:976`; computed at `metrics.rs:1295`; written
+   seconds** (`metrics.rs:976`, `:979`; computed at `metrics.rs:1305`; written
    at `run_metrics.rs:392`). Formula: the sum over a served agent's control
    states of `end_s - start_s`, where the state opens on
    `Event::ControlTransition { active: true }` and closes on
    `Event::ControlTransition { active: false }` (the same pass,
-   `metrics.rs:1090`-`:1107`), for either kind — `signal_stop` for a vehicle and
+   `metrics.rs:1070`-`:1107`), for either kind — `signal_stop` for a vehicle and
    `crossing_wait` for a pedestrian (`event.rs:178`). The state follows the
    agent's recorded signal-compliance decision, so it begins when that decision
    turns to wait, while the body may still be braking, and ends when the
@@ -143,7 +143,7 @@ trip.
    Tie-break: no selection, as for stopped delay.
 
 5. **Queue length — `maximum_queue_length_agents`, unit agents**
-   (`OperationValues::maximum_queue_length`, `metrics.rs:985`; snapshot at
+   (`OperationValues::maximum_queue_length`, `metrics.rs:982`; snapshot at
    `Bucket::observe_length`, `metrics.rs:1264`; written at `run_metrics.rs:393`).
    Derivation: after each observed tick, the number of the bucket's agents
    holding an open stopped state at that tick end; the reported value is the
@@ -156,7 +156,7 @@ trip.
    tick that held the maximum.
 
 6. **Queue duration — `maximum_queue_duration_s` and `mean_queue_duration_s`,
-   unit seconds** (`OperationValues::maximum_queue_duration`, `metrics.rs:988`;
+   unit seconds** (`OperationValues::maximum_queue_duration`, `metrics.rs:984`;
    `Bucket::close_stop`, `metrics.rs:1278`; written at `run_metrics.rs:394`).
    Derivation: `depart_s - join_s` of one stopped state, exactly the interval
    stopped delay accumulates. The bucket reports the longest state it closed,
@@ -176,7 +176,7 @@ trip.
 ## Disaggregation of the operational families
 
 - **Run level** — `RunMetricsArtifact::operational.run`
-  (`run_metrics.rs:460`, `:487`).
+  (`run_metrics.rs:464`, `:490`).
 - **Mode** — `operational.by_mode`, keyed by `AgentMode::label()`
   (`vehicle`, `pedestrian`; `crates/tangle-sim/src/agent.rs:30`), always
   carrying both modes (`run_metrics.rs:886`). The kernel's per-mode buckets are
@@ -197,12 +197,12 @@ trip.
 
 `metric_definition_version: 2` is written beside every reported metric value in
 the run summary (`run_dir.rs:440`), the run metrics artifact
-(`run_metrics.rs:482`), the batch aggregation (`aggregate.rs:797`), the paired
+(`run_metrics.rs:472`), the batch aggregation (`aggregate.rs:875`), the paired
 comparison (`compare.rs:704`), and the convergence report
 (`converge.rs:569`). Every aggregated and compared distribution repeats it
 (`aggregate.rs:940`, `compare.rs:1215`, `converge.rs:677`). The aggregation and
 comparison refuse an artifact from another revision rather than mixing
-revisions (`aggregate.rs:548`, `compare.rs:893`).
+revisions (`aggregate.rs:556`, `compare.rs:894`).
 
 ## Version-bump rule
 
@@ -277,6 +277,6 @@ batch-level operational movement slices with the F6 event-family slices
 ([[TAS-048-increment-6-run-and-comparison-report]]).
 
 `DEF-004-metric-definition-v1` records `disposition: superseded` and
-`Superseded by [[DEF-005-metric-definition-v2]]`; the pinned-consumer search
-`rg -n -F 'Depends on [[DEF-004-metric-definition-v1]] at context_rev ' .braintree`
-returns zero, so no consumer is stale.
+`Superseded by [[DEF-005-metric-definition-v2]]`; the exact pinned-consumer
+search TAS-045 records in its context returns no pinned consumer — the only line
+it matches is that search text itself — so no consumer is stale.

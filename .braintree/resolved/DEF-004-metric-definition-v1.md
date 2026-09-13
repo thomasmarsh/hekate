@@ -1,11 +1,18 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T00:58:42Z
-summary: The settled versioned metric definition v1 (metric_definition_version 1) names every metric Increment 5 reports - time to collision, minimum surface separation, post-encroachment time, region occupancy, and the countable event families - with formula, unit, applicability status, tie-break, and mode and movement disaggregation keys, and defers throughput, delay, and level of service.
+disposition: superseded
+updated: 2026-09-13T12:14:45Z
+summary: The settled versioned metric definition v1 (metric_definition_version 1) names every metric Increment 5 reports - time to collision, minimum surface separation, post-encroachment time, region occupancy, and the countable event families - with formula, unit, applicability status, tie-break, and mode and movement disaggregation keys, and defers throughput, delay, and level of service. Superseded by [[DEF-005-metric-definition-v2]].
 ---
 
 # Context
+
+Superseded by [[DEF-005-metric-definition-v2]]: metric definition v2 carries
+every definition below forward unchanged and adds the operational families this
+revision deferred (throughput, delay, and queue length and duration). This node
+stays the authority for artifacts already reported at
+`metric_definition_version: 1`; DEF-005 is the definition new work cites.
 
 Parent [[TAS-031-phase-1-increment-5-experiments-outputs-convergence]].
 
