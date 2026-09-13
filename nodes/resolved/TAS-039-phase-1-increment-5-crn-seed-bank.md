@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T01:47:16Z
+updated: 2026-09-13T01:52:00Z
 summary: Slice C2a of Phase 1 Increment 5 adds a versioned common-random-number seed-bank artifact and a `seed-bank` CLI command, and lets `batch` run a batch from a seed bank so two variants share the same aligned seeds.
-next: Rerun the five gates on the final tree and record the per-criterion resolution evidence.
 ---
 
 # Outcome
@@ -165,3 +164,69 @@ No scenario schema, event record, run manifest, or run directory artifact
 changed; `EVENT_VERSION` stays 2. An explicit-seed batch writes exactly the
 bytes it wrote before this slice, and the golden, hash-golden, and Phase 1
 baseline tests are untouched and still pass.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (implementation in
+`33e301a`), verified by rerunning the five gates on that tree:
+
+1. **A `seed-bank` command writes a versioned, deterministic seed bank, covered
+   by a byte-reproducibility test.** `main.rs:518` (`seed_bank`) builds the bank
+   from `--seeds` (`SeedBank::from_seeds`, `seed_bank.rs:153`) or
+   `--start`/`--count`/`--stride` (`SeedBank::from_range`, `seed_bank.rs:167`)
+   and writes it through the crate's JSON writer (`main.rs:711`), which reads no
+   clock and no randomness; `main.rs:491` (`SeedBankArgs`) pins the request
+   shape and `seed_bank.rs:52` (`SEED_BANK_VERSION = 1`) the artifact version.
+   `tests/seed_bank.rs:137`
+   (`seed_bank_output_is_byte_reproducible_across_invocations`) compares the
+   bytes of repeated invocations, and `tests/seed_bank.rs:181`
+   (`a_seed_bank_round_trips_through_a_file`) round-trips the file through
+   `read_seed_bank` and checks the recorded content hash against the file bytes.
+2. **`batch` can run from a seed bank, records the bank's path and content hash
+   in its manifest, and preserves existing `--seeds` behavior, covered by a
+   test.** `main.rs:444` reads and validates the bank before any run starts and
+   builds the `SeedBankReference` from the path as given and the bank's content
+   hash; `batch.rs:205` is the manifest field and `batch.rs:258` is where
+   `run_batch` records it. `tests/seed_bank.rs:292`
+   (`batch_runs_a_seed_bank_and_records_its_identity`) asserts the manifest's
+   `seed_bank`, `seeds`, run directories, and run manifests, and that the same
+   seeds given explicitly produce the same per-run trace hashes;
+   `tests/seed_bank.rs:409` (`batch_still_runs_an_explicit_seed_list`) pins that
+   `--seeds` still writes an ascending manifest with no `seed_bank` field at all.
+3. **Two batches from one bank share the same seeds in the same order, covered
+   by a test.** `batch.rs:274` (`normalize_seeds`) keeps the manifest ascending
+   and `batch.rs:205` records the bank, so two batches over one bank name the
+   same bank hash and the same seed list. `tests/seed_bank.rs:361`
+   (`two_batches_from_one_bank_share_the_same_seeds_in_the_same_order`) runs two
+   batches over one bank and compares the bank identity, the seed order, and
+   every per-position trace hash.
+4. **The documentation of the kernel seed-to-stream derivation and the CRN
+   assumption is in the node result.** The `# Result` section "Kernel
+   seed-to-stream derivation (read only)" names
+   `derive_stream(root_seed, name, id)` (`crates/tangle-sim/src/rng.rs`), the
+   four derived streams (`crates/tangle-sim/src/sim.rs:279`, `:290`, `:1526`,
+   `:1527`, `:1596`, `:1597`), the conclusion that one root seed already
+   determines every stream so no per-stream sub-seed is needed, and the limit
+   that the alignment is positional and identifier-keyed, so a variant that
+   changes the number, order, or naming of draws breaks the pairing at the same
+   seed.
+5. **The canonical trace, trace golden, trace hash golden, Phase 1 baseline,
+   and all goldens are unchanged; `EVENT_VERSION` stays 2.** `33e301a` touches
+   only `apps/tangle-cli/src/{batch.rs,lib.rs,main.rs,seed_bank.rs}`,
+   `apps/tangle-cli/tests/{aggregate.rs,batch.rs,seed_bank.rs}`, and this node;
+   no file under `tests/golden/`, `baselines/`, `scenarios/`, or `schemas/`, and
+   no kernel crate, changed. `EVENT_VERSION` stays 2
+   (`crates/tangle-sim/src/event.rs:66`), no dependency was added
+   (`apps/tangle-cli/Cargo.toml` and `Cargo.lock` are untouched), and the golden,
+   hash-golden, and baseline guards (`tests/golden_trace.rs`, `tests/baseline.rs`)
+   passed in the gate run below.
+6. **The five gates pass on the final tree** (rerun on `33e301a`, 2026-09-13:
+   `cargo test --workspace --all-features` passed with 523 tests and 0 failures;
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean;
+   `cargo fmt --all --check` clean; `./scripts/check-dependency-direction.sh`
+   printed `dependency direction OK`; `braintree check nodes` printed
+   `graph check: passed (68 nodes)`).
+
+Outcome complete: the seed bank artifact, its `seed-bank` writer, the
+`batch --seed-bank` consumer that records the bank's identity, and the kernel
+derivation note are on the committed tree.
