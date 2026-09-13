@@ -63,6 +63,11 @@ use crate::rng::{
 use crate::safety::SafetyMonitor;
 use crate::signal::{self, PedestrianSignalColor, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
+use crate::stage::{
+    AbortCondition, Commitment, MotionCommand, MotionControl, Observation, PedestrianObservation,
+    PhysicalAdvance, RelevantWorldQuery, Tactic, TacticReason, TacticTarget, TacticalChoice,
+    VehicleObservation,
+};
 use crate::time::SimTime;
 use crate::units::Seconds;
 
@@ -723,10 +728,7 @@ impl Simulation {
             if !self.agents.alive[index] {
                 continue;
             }
-            match self.agents.mode[index] {
-                AgentMode::Pedestrian => self.step_pedestrian(index, dt),
-                AgentMode::Vehicle => self.step_vehicle(index, dt),
-            }
+            self.step_agent(index, dt);
         }
 
         // Observe the integrated tick once, before new demand is admitted, so
@@ -752,162 +754,19 @@ impl Simulation {
         self.events.sort_by_key(|event| event.order_key());
     }
 
-    /// Advance one vehicle under IDM or, without a sampled profile, at the
-    /// static walking skeleton's constant speed.
-    fn step_vehicle(&mut self, index: usize, dt: f64) {
-        let path_id = self.agents.path[index];
-        // Recompute the agent's signal decision before integrating its
-        // speed, so the stop-line constraint the controller sees is exactly
-        // the recorded decision.
-        self.update_signal_decision(index);
-        // Recompute the crossing-yield state from the shared index before
-        // integrating the speed, so the yield constraint the controller sees
-        // is exactly the recorded state and the transition is emitted once.
-        self.update_yield_state(index);
-        let direction = self.agents.direction[index];
-        // Profile vehicles drive under IDM; the walking skeleton's static
-        // population keeps its constant speed and is byte-identical.
-        let profile = self.agents.profile[index];
-        let speed_mps = match profile {
-            Some(profile) => self.controlled_speed(index, &profile, dt),
-            None => self.agents.speed_mps[index],
-        };
-        let Some(path) = self.scenario.path(path_id) else {
-            return;
-        };
-        let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
-        let length = path.length();
-        let distance_m = if direction < 0.0 {
-            travelled.max(0.0)
-        } else {
-            travelled.min(length)
-        };
-
-        self.agents.speed_mps[index] = speed_mps;
-        self.agents.distance_m[index] = distance_m;
-        self.agents.position[index] = path.position_at(distance_m);
-        self.agents.heading_rad[index] = path.heading_at(distance_m);
-
-        let exited = if direction < 0.0 {
-            travelled <= 0.0
-        } else {
-            travelled >= length
-        };
-        if exited {
-            self.agents.alive[index] = false;
-            self.despawned_total += 1;
-            self.events.push(Event::Despawned {
-                agent: AgentId::from_index(index),
-                path: path_id,
-                reason: DespawnReason::ExitedPath,
-            });
-        }
-    }
-
-    /// Advance one pedestrian under the documented waypoint controller.
+    /// Advance one agent through the four explicit controller stages.
     ///
-    /// A pedestrian is steered in world space rather than integrated along its
-    /// path: it seeks the next derived waypoint, deflects around the nearby
-    /// bodies ahead of it, and reports route progress as the projection of its
-    /// world position onto the route path. See [`crate::pedestrian`] for the
-    /// model card, its bounds, and its emergency spacing cap.
-    ///
-    /// When the route's upcoming crossing is signal-controlled, the pedestrian
-    /// first makes the contextual choice in [`crate::PedestrianComplianceDecision`]. A
-    /// `Wait` decision only reduces the commanded speed toward a bounded
-    /// stopping profile at the crossing, so a compliant wait and a
-    /// non-compliant crossing are both ordinary controller motion: nothing is
-    /// teleported and no step bypasses the controller's bounds.
-    fn step_pedestrian(&mut self, index: usize, dt: f64) {
-        let (Some(route_id), Some(profile)) = (
-            self.agents.pedestrian_route[index],
-            self.agents.pedestrian_profile[index],
-        ) else {
-            // A pedestrian slot without a demand route has no waypoint plan; it
-            // keeps the walking skeleton's constant-speed path.
-            self.step_vehicle(index, dt);
-            return;
-        };
-        let path_id = self.agents.path[index];
-        let direction = self.agents.direction[index];
-        let path_length_m = self
-            .scenario
-            .path(path_id)
-            .map_or(0.0, |path| path.length());
-
-        // Advance the cursor past every waypoint already reached, so the target
-        // is always ahead and the cursor is monotone.
-        let progress_m =
-            pedestrian::route_progress_m(self.agents.distance_m[index], direction, path_length_m);
-        self.advance_waypoint(index, progress_m);
-        let cursor = self.agents.pedestrian_waypoint_index[index];
-
-        // The pedestrian signal compliance decision is a pure function of the
-        // upcoming crossing's signal state and the pedestrian's state, so it is
-        // recomputed here and recorded before the step integrates.
-        let decision = self.pedestrian_signal_decision(index, route_id, cursor, progress_m);
-        self.agents.pedestrian_decision[index] = decision;
-
-        let Some(target) = self.route_waypoints(route_id).get(cursor).copied() else {
-            return;
-        };
-
-        self.collect_conflicts(index);
-        let state = PedestrianState {
-            agent: AgentId::from_index(index),
-            position: self.agents.position[index],
-            heading_rad: self.agents.heading_rad[index],
-            speed_mps: self.agents.speed_mps[index],
-            target: target.position(),
-        };
-        let mut steering = self
-            .controllers
-            .pedestrian
-            .steer(&profile, &state, &self.conflicts, dt);
-        if let Some(decision) = decision
-            && decision.action == PedestrianSignalAction::Wait
-        {
-            // Obey the signal with a bounded stopping profile toward the
-            // crossing; the speed-change bound is still applied downstream.
-            let stop_target = pedestrian_compliance::wait_speed_target_mps(
-                decision.crossing_gap_m,
-                profile.compliance,
-                pedestrian::MAX_DECEL_MPS2,
-            );
-            steering.speed_target_mps = steering.speed_target_mps.min(stop_target);
-        }
-        let (speed_mps, capped) = self.controllers.pedestrian.advance_speed(
-            state.speed_mps,
-            steering.speed_target_mps,
-            steering.spacing_cap_mps,
-            dt,
-        );
-        if capped {
-            self.pedestrian_cap_steps += 1;
-        }
-        let heading_rad = steering.heading_rad;
-        let position = state.position + DVec2::from_angle(heading_rad) * (speed_mps * dt);
-
-        let Some(path) = self.scenario.path(path_id) else {
-            return;
-        };
-        let arc_m = pedestrian::closest_arc(path, position);
-        let progress_m = pedestrian::route_progress_m(arc_m, direction, path_length_m);
-
-        self.agents.speed_mps[index] = speed_mps;
-        self.agents.heading_rad[index] = heading_rad;
-        self.agents.position[index] = position;
-        self.agents.distance_m[index] = arc_m;
-
-        if progress_m >= path_length_m {
-            self.agents.alive[index] = false;
-            self.despawned_total += 1;
-            self.events.push(Event::Despawned {
-                agent: AgentId::from_index(index),
-                path: path_id,
-                reason: DespawnReason::ExitedPath,
-            });
-        }
+    /// The kernel drives every live agent through the four stages in order —
+    /// relevant-world query, tactical choice, motion control, and physical
+    /// advance — so the Phase 1 vehicle update and the Phase 1 pedestrian
+    /// update share the same boundaries and the motion model is reached only
+    /// through [`crate::controller`]. See [`crate::stage`] for the interfaces
+    /// and the interaction decisions the kernel keeps.
+    fn step_agent(&mut self, index: usize, dt: f64) {
+        let observation = self.query_world(index);
+        let tactic = self.choose_tactic(index, &observation);
+        let command = self.command_motion(index, &observation, &tactic, dt);
+        self.advance_physics(index, observation, &command, dt);
     }
 
     /// Move a pedestrian's waypoint cursor past every waypoint it has reached.
@@ -1034,71 +893,6 @@ impl Simulation {
                 speed_mps: self.agents.speed_mps[other],
             });
         }
-    }
-
-    /// Speed for one profile vehicle after IDM, its bounds, and safety caps.
-    ///
-    /// The controller is the documented IDM in [`crate::control`]. Three hard
-    /// caps keep the bounded model collision-free without an extra collision
-    /// resolver: the next speed may not pass the nearest leader's rear, a stop
-    /// line whose control requires a stop, or an occupied crossing the vehicle
-    /// is obliged to yield to. Each cap can force a deceleration beyond the
-    /// profile's comfortable value, so a step where it does is counted in
-    /// [`Self::emergency_cap_steps`].
-    fn controlled_speed(&mut self, index: usize, profile: &VehicleProfile, dt: f64) -> f64 {
-        let leader = self.nearest_leader(index);
-        let stop_line = self.stop_line_constraint(index);
-        let crossing_yield = self.crossing_yield_constraint(index);
-
-        let mut constraints = [Constraint {
-            gap_m: f64::INFINITY,
-            speed_mps: 0.0,
-            standstill_m: 0.0,
-        }; 3];
-        let mut count = 0;
-        for constraint in [leader, stop_line, crossing_yield].into_iter().flatten() {
-            constraints[count] = constraint;
-            count += 1;
-        }
-
-        let speed_mps = self.agents.speed_mps[index];
-        let accel = self.controllers.vehicle.desired_acceleration(
-            profile,
-            speed_mps,
-            &constraints[..count],
-        );
-        let mut new_speed = (speed_mps + accel * dt).clamp(0.0, profile.desired_speed_mps);
-
-        if let Some(leader) = leader {
-            // The follower's front bumper must not pass the leader's rear this
-            // step. The gap already reflects the leader's post-step position
-            // (lower-index leaders integrate first), so the reachable speed is
-            // `gap / dt`. This binds only when IDM's bounded braking is
-            // insufficient.
-            new_speed = new_speed.min(leader.gap_m / dt);
-        }
-        if let Some(stop_line) = stop_line {
-            // A required stop holds the front bumper at the authored line.
-            new_speed = new_speed.min(stop_line.gap_m / dt);
-        }
-        if let Some(crossing_yield) = crossing_yield {
-            // Yielding holds the front bumper at the yield stop point short of
-            // the crossing entry, so a vehicle never drives onto a
-            // pedestrian-occupied crossing. The occupancy appears while the
-            // vehicle is still far enough away for IDM's bounded braking in
-            // the normal regime, so this cap is a backstop rather than the
-            // usual way a vehicle stops.
-            new_speed = new_speed.min(crossing_yield.gap_m / dt);
-        }
-        let new_speed = new_speed.max(0.0);
-
-        // Comfortable braking alone would leave the vehicle at this speed, so
-        // anything below it was forced by a cap rather than by the controller.
-        let comfort_floor = (speed_mps - profile.comfortable_brake_mps2 * dt).max(0.0);
-        if new_speed < comfort_floor - 1e-9 {
-            self.emergency_cap_steps += 1;
-        }
-        new_speed
     }
 
     /// Whether an authored `yield` rule obliges a movement to yield to the
@@ -1241,18 +1035,21 @@ impl Simulation {
     /// authored line: IDM sees a stationary constraint with a zero standstill
     /// gap, and the kernel adds a position cap. `None` when the vehicle is not
     /// yielding.
-    fn crossing_yield_constraint(&self, index: usize) -> Option<Constraint> {
+    fn crossing_yield_constraint(&self, index: usize) -> Option<(CrossingId, Constraint)> {
         let crossing = self.agents.yield_crossing[index]?;
         let path = self.scenario.path(self.agents.path[index])?;
         let direction = self.agents.direction[index];
         let own_front =
             direction * self.agents.distance_m[index] + self.agents.body_length_m[index] * 0.5;
         let entry = self.crossing_entry_progress(crossing, path, direction)?;
-        Some(Constraint {
-            gap_m: (entry - YIELD_STOP_MARGIN_M - own_front).max(0.0),
-            speed_mps: 0.0,
-            standstill_m: 0.0,
-        })
+        Some((
+            crossing,
+            Constraint {
+                gap_m: (entry - YIELD_STOP_MARGIN_M - own_front).max(0.0),
+                speed_mps: 0.0,
+                standstill_m: 0.0,
+            },
+        ))
     }
 
     /// Whether any live pedestrian body overlaps a crossing region.
@@ -1299,7 +1096,7 @@ impl Simulation {
     /// order means the lowest agent id wins a tie, which keeps tie-breaking
     /// stable across runs. Opposite-direction and crossing-path interaction is
     /// later work.
-    fn nearest_leader(&self, index: usize) -> Option<Constraint> {
+    fn nearest_leader(&self, index: usize) -> Option<(AgentId, Constraint)> {
         let direction = self.agents.direction[index];
         let own_progress = direction * self.agents.distance_m[index];
         let own_front = own_progress + self.agents.body_length_m[index] * 0.5;
@@ -1322,10 +1119,15 @@ impl Simulation {
                 best = Some((other, gap));
             }
         }
-        best.map(|(other, gap)| Constraint {
-            gap_m: gap.max(0.0),
-            speed_mps: self.agents.speed_mps[other],
-            standstill_m: IDM_STANDSTILL_GAP_M,
+        best.map(|(other, gap)| {
+            (
+                AgentId::from_index(other),
+                Constraint {
+                    gap_m: gap.max(0.0),
+                    speed_mps: self.agents.speed_mps[other],
+                    standstill_m: IDM_STANDSTILL_GAP_M,
+                },
+            )
         })
     }
 
@@ -1706,6 +1508,405 @@ impl Simulation {
     }
 }
 
+impl RelevantWorldQuery for Simulation {
+    /// Stage 1: collect the immutable relevant world one agent sees this step.
+    ///
+    /// The kernel selects every constraint, leader, control, route target, and
+    /// nearby body here; no model participates. A pedestrian carrying both a
+    /// demand route and a sampled profile uses the world-steering observation;
+    /// every other live slot — a vehicle, or the walking skeleton's scripted
+    /// body — uses the path-following one.
+    fn query_world(&mut self, index: usize) -> Observation {
+        if self.agents.mode[index] == AgentMode::Pedestrian
+            && self.agents.pedestrian_route[index].is_some()
+            && self.agents.pedestrian_profile[index].is_some()
+        {
+            self.query_pedestrian_world(index)
+        } else {
+            self.query_vehicle_world(index)
+        }
+    }
+}
+
+impl Simulation {
+    /// The path-following observation: the profile, speed, and the constraints
+    /// the kernel selected ahead.
+    ///
+    /// The signal decision and the crossing-yield state are recomputed first,
+    /// so the stop-line and yield constraints are exactly the recorded state
+    /// and the yield transition is emitted once.
+    fn query_vehicle_world(&mut self, index: usize) -> Observation {
+        // Recompute the signal decision before reading it, so the stop-line
+        // constraint is exactly the recorded decision.
+        self.update_signal_decision(index);
+        // Recompute the crossing-yield state from the shared index before
+        // reading it, so the yield constraint is exactly the recorded state.
+        self.update_yield_state(index);
+
+        let profile = self.agents.profile[index];
+        // Profile vehicles select their constraints; the walking skeleton's
+        // scripted population has none and keeps its constant speed.
+        let (leader, stop_line, crossing_yield) = match profile {
+            Some(_) => (
+                self.nearest_leader(index),
+                self.stop_line_constraint(index),
+                self.crossing_yield_constraint(index),
+            ),
+            None => (None, None, None),
+        };
+        Observation::Vehicle(VehicleObservation {
+            profile,
+            speed_mps: self.agents.speed_mps[index],
+            leader,
+            stop_line,
+            crossing_yield,
+        })
+    }
+
+    /// The world-steering observation: the waypoint cursor, the signal
+    /// decision, the target waypoint, and the ordered nearby bodies.
+    fn query_pedestrian_world(&mut self, index: usize) -> Observation {
+        let route_id = self.agents.pedestrian_route[index]
+            .expect("the pedestrian stage is entered only with a demand route");
+        let profile = self.agents.pedestrian_profile[index]
+            .expect("the pedestrian stage is entered only with a sampled profile");
+        let direction = self.agents.direction[index];
+        let path_length_m = self
+            .scenario
+            .path(self.agents.path[index])
+            .map_or(0.0, |path| path.length());
+
+        // Advance the cursor past every waypoint already reached, so the target
+        // is always ahead and the cursor is monotone.
+        let progress_m =
+            pedestrian::route_progress_m(self.agents.distance_m[index], direction, path_length_m);
+        self.advance_waypoint(index, progress_m);
+        let cursor = self.agents.pedestrian_waypoint_index[index];
+
+        // The pedestrian signal compliance decision is a pure function of the
+        // upcoming crossing's signal state and the pedestrian's state, so it is
+        // recomputed here and recorded before the step integrates.
+        let decision = self.pedestrian_signal_decision(index, route_id, cursor, progress_m);
+        self.agents.pedestrian_decision[index] = decision;
+
+        let target = self.route_waypoints(route_id).get(cursor).copied();
+        let state = PedestrianState {
+            agent: AgentId::from_index(index),
+            position: self.agents.position[index],
+            heading_rad: self.agents.heading_rad[index],
+            speed_mps: self.agents.speed_mps[index],
+            target: target.map_or(self.agents.position[index], PedestrianWaypoint::position),
+        };
+
+        // The nearby bodies are collected only when a waypoint remains to steer
+        // toward; without a target the update is a no-op and the query stays
+        // empty. The reused scan buffer moves into the observation and the
+        // advance stage returns it, so the scan does not allocate per step.
+        let conflicts = if target.is_some() {
+            self.collect_conflicts(index);
+            std::mem::take(&mut self.conflicts)
+        } else {
+            Vec::new()
+        };
+
+        Observation::Pedestrian(PedestrianObservation {
+            profile,
+            state,
+            target,
+            decision,
+            conflicts,
+        })
+    }
+}
+
+impl TacticalChoice for Simulation {
+    /// Stage 2: record the one maneuver the agent executes this step.
+    fn choose_tactic(&self, _index: usize, observation: &Observation) -> Tactic {
+        let (reason, target, commitment, abort) = match observation {
+            Observation::Vehicle(vehicle) => {
+                if vehicle.stop_line.is_some() {
+                    (
+                        TacticReason::StopLine,
+                        TacticTarget::StopLine,
+                        Commitment::Committed,
+                        AbortCondition::ConstraintClears,
+                    )
+                } else if let Some((crossing, _)) = vehicle.crossing_yield {
+                    (
+                        TacticReason::YieldCrossing,
+                        TacticTarget::Crossing(crossing),
+                        Commitment::Committed,
+                        AbortCondition::ConstraintClears,
+                    )
+                } else if let Some((leader, _)) = vehicle.leader {
+                    (
+                        TacticReason::Follow,
+                        TacticTarget::Leader(leader),
+                        Commitment::Preparing,
+                        AbortCondition::ConstraintClears,
+                    )
+                } else {
+                    (
+                        TacticReason::FreeFlow,
+                        TacticTarget::Route,
+                        Commitment::Preparing,
+                        AbortCondition::RouteComplete,
+                    )
+                }
+            }
+            Observation::Pedestrian(pedestrian) => {
+                if pedestrian
+                    .decision
+                    .is_some_and(|decision| decision.action == PedestrianSignalAction::Wait)
+                {
+                    let target = pedestrian
+                        .target
+                        .map_or(TacticTarget::Route, TacticTarget::Waypoint);
+                    (
+                        TacticReason::SignalWait,
+                        target,
+                        Commitment::Committed,
+                        AbortCondition::ConstraintClears,
+                    )
+                } else if let Some(target) = pedestrian.target {
+                    (
+                        TacticReason::SeekWaypoint,
+                        TacticTarget::Waypoint(target),
+                        Commitment::Preparing,
+                        AbortCondition::WaypointReached,
+                    )
+                } else {
+                    (
+                        TacticReason::SeekWaypoint,
+                        TacticTarget::Route,
+                        Commitment::Preparing,
+                        AbortCondition::RouteComplete,
+                    )
+                }
+            }
+        };
+        Tactic {
+            reason,
+            target,
+            commitment,
+            abort,
+            started_at: self.time(),
+        }
+    }
+}
+
+impl MotionControl for Simulation {
+    /// Stage 3: convert the tactic into a bounded command.
+    ///
+    /// The raw command comes from the replaceable model through
+    /// [`crate::controller`]; the profile bounds, the three kernel safety caps
+    /// (leader rear, stop line, crossing yield), and the emergency counter are
+    /// applied here, outside the model.
+    fn command_motion(
+        &mut self,
+        _index: usize,
+        observation: &Observation,
+        tactic: &Tactic,
+        dt: f64,
+    ) -> MotionCommand {
+        match observation {
+            Observation::Vehicle(vehicle) => {
+                let Some(profile) = vehicle.profile else {
+                    // The walking skeleton's scripted population has no model to
+                    // command and keeps its constant speed.
+                    return MotionCommand::Longitudinal {
+                        speed_mps: vehicle.speed_mps,
+                    };
+                };
+                let leader = vehicle.leader.map(|(_, constraint)| constraint);
+                let stop_line = vehicle.stop_line;
+                let crossing_yield = vehicle.crossing_yield.map(|(_, constraint)| constraint);
+
+                let mut constraints = [Constraint {
+                    gap_m: f64::INFINITY,
+                    speed_mps: 0.0,
+                    standstill_m: 0.0,
+                }; 3];
+                let mut count = 0;
+                for constraint in [leader, stop_line, crossing_yield].into_iter().flatten() {
+                    constraints[count] = constraint;
+                    count += 1;
+                }
+
+                let accel = self.controllers.vehicle.desired_acceleration(
+                    &profile,
+                    vehicle.speed_mps,
+                    &constraints[..count],
+                );
+                let mut new_speed =
+                    (vehicle.speed_mps + accel * dt).clamp(0.0, profile.desired_speed_mps);
+
+                if let Some(leader) = leader {
+                    // The follower's front bumper must not pass the leader's
+                    // rear this step. The gap already reflects the leader's
+                    // post-step position (lower-index leaders integrate first),
+                    // so the reachable speed is `gap / dt`.
+                    new_speed = new_speed.min(leader.gap_m / dt);
+                }
+                if let Some(stop_line) = stop_line {
+                    // A required stop holds the front bumper at the line.
+                    new_speed = new_speed.min(stop_line.gap_m / dt);
+                }
+                if let Some(crossing_yield) = crossing_yield {
+                    // Yielding holds the front bumper short of the crossing
+                    // entry, so a vehicle never drives onto a pedestrian-occupied
+                    // crossing. In the normal regime IDM's bounded braking stops
+                    // it; this cap is the backstop.
+                    new_speed = new_speed.min(crossing_yield.gap_m / dt);
+                }
+                let new_speed = new_speed.max(0.0);
+
+                // Comfortable braking alone would leave the vehicle at this
+                // speed, so anything below it was forced by a cap rather than
+                // by the controller.
+                let comfort_floor =
+                    (vehicle.speed_mps - profile.comfortable_brake_mps2 * dt).max(0.0);
+                if new_speed < comfort_floor - 1e-9 {
+                    self.emergency_cap_steps += 1;
+                }
+                MotionCommand::Longitudinal {
+                    speed_mps: new_speed,
+                }
+            }
+            Observation::Pedestrian(pedestrian) => {
+                if pedestrian.target.is_none() {
+                    return MotionCommand::Idle;
+                }
+                let mut steering = self.controllers.pedestrian.steer(
+                    &pedestrian.profile,
+                    &pedestrian.state,
+                    &pedestrian.conflicts,
+                    dt,
+                );
+                if tactic.reason == TacticReason::SignalWait
+                    && let Some(decision) = pedestrian.decision
+                {
+                    // Obey the signal with a bounded stopping profile toward
+                    // the crossing; the speed-change bound still applies.
+                    let stop_target = pedestrian_compliance::wait_speed_target_mps(
+                        decision.crossing_gap_m,
+                        pedestrian.profile.compliance,
+                        pedestrian::MAX_DECEL_MPS2,
+                    );
+                    steering.speed_target_mps = steering.speed_target_mps.min(stop_target);
+                }
+                let (speed_mps, capped) = self.controllers.pedestrian.advance_speed(
+                    pedestrian.state.speed_mps,
+                    steering.speed_target_mps,
+                    steering.spacing_cap_mps,
+                    dt,
+                );
+                if capped {
+                    self.pedestrian_cap_steps += 1;
+                }
+                MotionCommand::Steering {
+                    heading_rad: steering.heading_rad,
+                    speed_mps,
+                }
+            }
+        }
+    }
+}
+
+impl PhysicalAdvance for Simulation {
+    /// Stage 4: integrate the pose the command implies and emit the step's
+    /// diagnostics.
+    fn advance_physics(
+        &mut self,
+        index: usize,
+        observation: Observation,
+        command: &MotionCommand,
+        dt: f64,
+    ) {
+        match observation {
+            Observation::Vehicle(_) => {
+                let MotionCommand::Longitudinal { speed_mps } = *command else {
+                    return;
+                };
+                let path_id = self.agents.path[index];
+                let direction = self.agents.direction[index];
+                let Some(path) = self.scenario.path(path_id) else {
+                    return;
+                };
+                let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
+                let length = path.length();
+                let distance_m = if direction < 0.0 {
+                    travelled.max(0.0)
+                } else {
+                    travelled.min(length)
+                };
+
+                self.agents.speed_mps[index] = speed_mps;
+                self.agents.distance_m[index] = distance_m;
+                self.agents.position[index] = path.position_at(distance_m);
+                self.agents.heading_rad[index] = path.heading_at(distance_m);
+
+                let exited = if direction < 0.0 {
+                    travelled <= 0.0
+                } else {
+                    travelled >= length
+                };
+                if exited {
+                    self.agents.alive[index] = false;
+                    self.despawned_total += 1;
+                    self.events.push(Event::Despawned {
+                        agent: AgentId::from_index(index),
+                        path: path_id,
+                        reason: DespawnReason::ExitedPath,
+                    });
+                }
+            }
+            Observation::Pedestrian(mut pedestrian) => {
+                let MotionCommand::Steering {
+                    heading_rad,
+                    speed_mps,
+                } = *command
+                else {
+                    return;
+                };
+                // Return the reused conflict buffer the query stage borrowed, so
+                // the next pedestrian scan reuses its capacity.
+                std::mem::swap(&mut self.conflicts, &mut pedestrian.conflicts);
+
+                let path_id = self.agents.path[index];
+                let direction = self.agents.direction[index];
+                let path_length_m = self
+                    .scenario
+                    .path(path_id)
+                    .map_or(0.0, |path| path.length());
+                let position =
+                    pedestrian.state.position + DVec2::from_angle(heading_rad) * (speed_mps * dt);
+
+                let Some(path) = self.scenario.path(path_id) else {
+                    return;
+                };
+                let arc_m = pedestrian::closest_arc(path, position);
+                let progress_m = pedestrian::route_progress_m(arc_m, direction, path_length_m);
+
+                self.agents.speed_mps[index] = speed_mps;
+                self.agents.heading_rad[index] = heading_rad;
+                self.agents.position[index] = position;
+                self.agents.distance_m[index] = arc_m;
+
+                if progress_m >= path_length_m {
+                    self.agents.alive[index] = false;
+                    self.despawned_total += 1;
+                    self.events.push(Event::Despawned {
+                        agent: AgentId::from_index(index),
+                        path: path_id,
+                        reason: DespawnReason::ExitedPath,
+                    });
+                }
+            }
+        }
+    }
+}
+
 /// Axis-aligned bounding box of a polygon ring, as `(min, max)`.
 ///
 /// An empty ring falls back to the origin, so a caller can always pass the box
@@ -1781,6 +1982,7 @@ fn portal_end(scenario: &CompiledScenario, portal: PortalId) -> PathEnd {
 mod tests {
     use super::*;
     use crate::config::DEFAULT_STEP;
+    use crate::controller::{VehicleController, WaypointController};
     use crate::units::Seconds;
     use tangle_model::{CompiledScenario, parse_scenario_source};
 
@@ -2035,7 +2237,7 @@ mod tests {
             (gap_to_first - gap_to_second).abs() < 1e-12,
             "the constructed state must be a genuine tie"
         );
-        let leader = sim.nearest_leader(0).expect("a tied leader");
+        let (_, leader) = sim.nearest_leader(0).expect("a tied leader");
         assert_eq!(
             leader.speed_mps, 5.0,
             "the lowest tied id must win, even when it is the slower candidate"
@@ -2044,7 +2246,7 @@ mod tests {
         // Swapping which tied candidate moves faster must not move the winner.
         sim.agents.speed_mps[1] = 9.0;
         sim.agents.speed_mps[2] = 5.0;
-        let leader = sim.nearest_leader(0).expect("a tied leader");
+        let (_, leader) = sim.nearest_leader(0).expect("a tied leader");
         assert_eq!(
             leader.speed_mps, 9.0,
             "the tie-break follows agent id, not the candidate's speed"
@@ -2202,5 +2404,269 @@ mod tests {
             sim.crossing_occupied(CrossingId::from_index(0)),
             "a far over-large pedestrian body reaching into the crossing must be a candidate"
         );
+    }
+
+    /// A road and a separate walking path, each with demand, so both modes are
+    /// live and independent.
+    const MIXED_MODES: &str = r#"
+    {
+      schema_version: 1,
+      id: 'stage_contract',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [
+        { id: 'road', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] },
+        { id: 'walk', points: [ { x: 0.0, y: 40.0 }, { x: 0.0, y: 80.0 } ] },
+      ],
+      portals: [
+        { id: 'road_entry', path: 'road', end: 'start', width_m: 7.0 },
+        { id: 'road_exit', path: 'road', end: 'end', width_m: 7.0 },
+        { id: 'walk_entry', path: 'walk', end: 'start', width_m: 3.0 },
+        { id: 'walk_exit', path: 'walk', end: 'end', width_m: 3.0 },
+      ],
+      movements: [
+        { id: 'through', from: 'road_entry', to: 'road_exit', path: 'road', priority: 0 },
+      ],
+      pedestrian_routes: [
+        { id: 'walk_through', from: 'walk_entry', to: 'walk_exit', path: 'walk' },
+      ],
+      demand: [
+        { id: 'road_inflow', portal: 'road_entry', rate_vph: 1200.0,
+          routes: [ { movement: 'through', weight: 1.0 } ] },
+      ],
+      pedestrian_demand: [
+        { id: 'footfall', portal: 'walk_entry', rate_pph: 900.0,
+          routes: [ { route: 'walk_through', weight: 1.0 } ] },
+      ],
+      profiles: {
+        speed_mps: { min: 10.0, max: 10.0 },
+        length_m: { min: 4.0, max: 4.0 },
+        width_m: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.5, max: 1.5 },
+        max_accel_mps2: { min: 2.0, max: 2.0 },
+        comfortable_brake_mps2: { min: 3.0, max: 3.0 },
+      },
+      pedestrian_profiles: {
+        radius_m: { min: 0.25, max: 0.25 },
+        speed_mps: { min: 1.25, max: 1.25 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    }
+    "#;
+
+    fn mixed_sim(seed: u64) -> Simulation {
+        let source = parse_scenario_source(MIXED_MODES).expect("scenario parses");
+        let scenario = CompiledScenario::compile(source).expect("scenario compiles");
+        Simulation::new(scenario, RunConfig::new(seed)).expect("simulation builds")
+    }
+
+    fn constant_vehicle_profile(desired_speed_mps: f64) -> VehicleProfile {
+        VehicleProfile {
+            desired_speed_mps,
+            length_m: 4.5,
+            width_m: 1.8,
+            time_gap_s: 1.5,
+            max_accel_mps2: 2.0,
+            comfortable_brake_mps2: 3.0,
+            compliance: 1.0,
+        }
+    }
+
+    /// Stage 1 and stage 2 on a vehicle: the query selects the leader, and the
+    /// tactic records a follow with its target and lifecycle fields.
+    #[test]
+    fn the_query_and_tactic_stages_select_the_vehicle_leader() {
+        let mut sim = walking_sim(1);
+        let profile = constant_vehicle_profile(12.0);
+        sim.agents.profile[0] = Some(profile);
+        sim.agents.profile[1] = Some(profile);
+
+        let observation = sim.query_world(0);
+        let Observation::Vehicle(vehicle) = &observation else {
+            panic!("a vehicle slot yields a vehicle observation");
+        };
+        assert_eq!(vehicle.profile, Some(profile));
+        assert_eq!(vehicle.stop_line, None, "the guide path has no stop line");
+        assert_eq!(
+            vehicle.crossing_yield, None,
+            "the guide path crosses no crossing"
+        );
+        let (leader, _) = vehicle.leader.expect("the follower sees the leader ahead");
+        assert_eq!(leader, AgentId::from_index(1));
+
+        let tactic = sim.choose_tactic(0, &observation);
+        assert_eq!(tactic.reason, TacticReason::Follow);
+        assert_eq!(tactic.target, TacticTarget::Leader(AgentId::from_index(1)));
+        assert_eq!(tactic.commitment, Commitment::Preparing);
+        assert_eq!(tactic.abort, AbortCondition::ConstraintClears);
+        assert_eq!(tactic.started_at, sim.time());
+    }
+
+    /// Stage 2 and stage 3 on an observation that carries a required stop: the
+    /// tactic is the committed stop-line maneuver, and the motion stage bounds
+    /// the command to the stop-line cap the kernel selected.
+    #[test]
+    fn the_tactic_stage_commits_the_stop_line_maneuver() {
+        let mut sim = walking_sim(1);
+        let profile = constant_vehicle_profile(12.0);
+        let dt = sim.config().step().as_secs();
+
+        // A required stop is an observation input: the kernel already recorded
+        // the decision to stop, and this test pins how stages 2 and 3 map it.
+        let gap_m = 0.5;
+        let observation = Observation::Vehicle(VehicleObservation {
+            profile: Some(profile),
+            speed_mps: 12.0,
+            leader: None,
+            stop_line: Some(Constraint {
+                gap_m,
+                speed_mps: 0.0,
+                standstill_m: 0.0,
+            }),
+            crossing_yield: None,
+        });
+        let tactic = sim.choose_tactic(0, &observation);
+        assert_eq!(tactic.reason, TacticReason::StopLine);
+        assert_eq!(tactic.target, TacticTarget::StopLine);
+        assert_eq!(tactic.commitment, Commitment::Committed);
+        assert_eq!(tactic.abort, AbortCondition::ConstraintClears);
+        assert_eq!(tactic.started_at, sim.time());
+
+        let command = sim.command_motion(0, &observation, &tactic, dt);
+        let MotionCommand::Longitudinal { speed_mps } = command else {
+            panic!("a required stop still commands a longitudinal speed");
+        };
+        assert!(
+            (0.0..=profile.desired_speed_mps).contains(&speed_mps),
+            "the stop command must stay within the profile's speed bounds"
+        );
+        assert!(
+            speed_mps <= gap_m / dt + 1e-9,
+            "the stop-line cap must bound the command so the bumper reaches the line this step"
+        );
+    }
+
+    /// Stage 3 and stage 4 on a vehicle: the motion stage bounds the command to
+    /// the profile, and the advance stage integrates exactly that command.
+    #[test]
+    fn the_motion_and_advance_stages_command_and_integrate_the_vehicle() {
+        let mut sim = walking_sim(1);
+        let profile = constant_vehicle_profile(12.0);
+        sim.agents.profile[0] = Some(profile);
+        sim.agents.profile[1] = Some(profile);
+        let dt = sim.config().step().as_secs();
+
+        let observation = sim.query_world(0);
+        let tactic = sim.choose_tactic(0, &observation);
+        let command = sim.command_motion(0, &observation, &tactic, dt);
+        let MotionCommand::Longitudinal { speed_mps } = command else {
+            panic!("a path-following agent commands a longitudinal speed");
+        };
+        assert!(
+            (0.0..=profile.desired_speed_mps).contains(&speed_mps),
+            "the command must stay within the profile's speed bounds"
+        );
+
+        let before = sim.agents.distance_m[0];
+        sim.advance_physics(0, observation, &command, dt);
+        assert!((sim.agents.distance_m[0] - (before + speed_mps * dt)).abs() < 1e-12);
+        assert_eq!(sim.agents.speed_mps[0], speed_mps);
+    }
+
+    /// A vehicle model that always commands a 1 m/s² brake, so the stage's
+    /// command is unmistakably not IDM's.
+    #[derive(Debug)]
+    struct FixedBrakeModel;
+
+    impl VehicleController for FixedBrakeModel {
+        fn name(&self) -> &'static str {
+            "fixed-brake stage test double"
+        }
+
+        fn desired_acceleration(
+            &self,
+            _profile: &VehicleProfile,
+            _speed_mps: f64,
+            _constraints: &[Constraint],
+        ) -> f64 {
+            -1.0
+        }
+    }
+
+    /// The motion stage reaches the replaceable vehicle model through the
+    /// interface: the installed stub, not IDM, sets the command.
+    #[test]
+    fn the_motion_stage_reaches_the_vehicle_model_through_the_interface() {
+        let mut sim = walking_sim(1);
+        sim.agents.profile[0] = Some(constant_vehicle_profile(12.0));
+        sim.set_controller_models(ControllerModels {
+            vehicle: Box::new(FixedBrakeModel),
+            pedestrian: Box::new(WaypointController),
+        });
+        let dt = sim.config().step().as_secs();
+
+        let observation = sim.query_world(0);
+        let tactic = sim.choose_tactic(0, &observation);
+        let command = sim.command_motion(0, &observation, &tactic, dt);
+        let MotionCommand::Longitudinal { speed_mps } = command else {
+            panic!("a path-following agent commands a longitudinal speed");
+        };
+        // IDM at the desired speed of 12 m/s would hold it; the stub's fixed
+        // brake slows the vehicle, so the model really is reached.
+        assert!(speed_mps < 12.0 - 1e-9);
+    }
+
+    /// All four stages on a demand pedestrian: the waypoint observation, the
+    /// seek tactic, the steering command, and the world-space integration.
+    #[test]
+    fn the_four_stages_drive_a_demand_pedestrian() {
+        let mut sim = mixed_sim(3);
+        let mut pedestrian = None;
+        for _ in 0..1500 {
+            sim.step();
+            pedestrian = (0..sim.agents.len()).find(|&index| {
+                sim.agents.alive[index] && sim.agents.mode[index] == AgentMode::Pedestrian
+            });
+            if pedestrian.is_some() {
+                break;
+            }
+        }
+        let index = pedestrian.expect("a pedestrian arrives within 75 s");
+        let dt = sim.config().step().as_secs();
+
+        let observation = sim.query_world(index);
+        let Observation::Pedestrian(pedestrian) = &observation else {
+            panic!("a demand pedestrian yields a pedestrian observation");
+        };
+        assert_eq!(pedestrian.state.agent, AgentId::from_index(index));
+        assert!(pedestrian.profile.desired_speed_mps > 0.0);
+        assert!(
+            pedestrian.decision.is_none(),
+            "the walking path reaches no signal-controlled crossing"
+        );
+        let target = pedestrian.target.expect("the route has a waypoint ahead");
+        assert_eq!(pedestrian.state.target, target.position());
+
+        let tactic = sim.choose_tactic(index, &observation);
+        assert_eq!(tactic.reason, TacticReason::SeekWaypoint);
+        assert_eq!(tactic.target, TacticTarget::Waypoint(target));
+        assert_eq!(tactic.commitment, Commitment::Preparing);
+        assert_eq!(tactic.abort, AbortCondition::WaypointReached);
+
+        let command = sim.command_motion(index, &observation, &tactic, dt);
+        let MotionCommand::Steering {
+            heading_rad,
+            speed_mps,
+        } = command
+        else {
+            panic!("a pedestrian commands a steering heading and speed");
+        };
+
+        let before = pedestrian.state.position;
+        sim.advance_physics(index, observation, &command, dt);
+        assert_eq!(
+            sim.agents.position[index],
+            before + DVec2::from_angle(heading_rad) * (speed_mps * dt)
+        );
+        assert_eq!(sim.agents.speed_mps[index], speed_mps);
     }
 }

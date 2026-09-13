@@ -51,6 +51,7 @@ mod safety;
 mod signal;
 mod sim;
 mod snapshot;
+mod stage;
 mod swept;
 mod time;
 mod units;
