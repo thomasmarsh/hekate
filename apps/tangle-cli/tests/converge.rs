@@ -28,9 +28,9 @@ use tangle_cli::{
     COUNT_CLASS, COUNT_UNITS, ConvergenceError, ConvergenceReport, ConvergenceVerdict, EventCounts,
     MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricSensitivity, MetricStatus,
     MetricTolerance, MetricValue, MovementMinima, OperationalMetrics, OperationalValues, PRESETS,
-    Preset, RunMetricsArtifact, SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference,
-    TOLERANCE_MEASURE, TOLERANCE_RULE, VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
-    read_seed_bank,
+    Preset, RunMetricsArtifact, SLICE_FAMILIES, SLICE_KEY_RUN, SamplingPolicy, ScenarioProvenance,
+    SeedBank, SeedBankReference, SliceFamily, TOLERANCE_MEASURE, TOLERANCE_RULE,
+    VERDICT_REFINEMENT, converge_batches, fidelity_ticks, read_seed_bank,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -227,13 +227,14 @@ fn movement_bucket(
 }
 
 /// Event counts with every family present and `collisions` set, so the always
-/// reported counts are identical across the fidelities of a fixture.
-fn event_counts(collisions: u64) -> EventCounts {
+/// reported counts are identical across the fidelities of a fixture, plus the
+/// per-mode and per-movement counts the seed supplies.
+fn event_counts(seed: &SyntheticSeed) -> EventCounts {
     let mut by_family: BTreeMap<String, u64> = FAMILIES
         .into_iter()
         .map(|family| (family.to_owned(), 0))
         .collect();
-    by_family.insert("collisions".to_owned(), collisions);
+    by_family.insert("collisions".to_owned(), seed.collisions);
     let by_family_kind = KINDS
         .into_iter()
         .map(|(family, kinds)| {
@@ -247,8 +248,17 @@ fn event_counts(collisions: u64) -> EventCounts {
         total: by_family.values().sum(),
         by_family,
         by_family_kind,
-        by_family_mode: BTreeMap::new(),
-        by_family_movement: BTreeMap::new(),
+        by_family_mode: seed.mode_events.clone(),
+        by_family_movement: seed.movement_events.clone(),
+    }
+}
+
+/// An operational bucket reporting one mean control delay and observing nothing
+/// else, so a movement slice carries one value and nine statuses.
+fn operational(mean_control_delay_s: f64) -> OperationalValues {
+    OperationalValues {
+        mean_control_delay_s: reported(mean_control_delay_s),
+        ..OperationalValues::not_observed()
     }
 }
 
@@ -261,6 +271,12 @@ struct SyntheticSeed {
     mode_pairs: BTreeMap<String, MetricValue>,
     movements: BTreeMap<String, MovementMinima>,
     collisions: u64,
+    /// Counted records per event family and subject-agent mode.
+    mode_events: BTreeMap<String, BTreeMap<String, u64>>,
+    /// Counted records per event family and subject-agent movement key.
+    movement_events: BTreeMap<String, BTreeMap<String, u64>>,
+    /// The operational values of one agent's own movement.
+    movement_operational: BTreeMap<String, OperationalValues>,
 }
 
 impl Default for SyntheticSeed {
@@ -276,6 +292,9 @@ impl Default for SyntheticSeed {
             ),
             movements: BTreeMap::new(),
             collisions: 0,
+            mode_events: BTreeMap::new(),
+            movement_events: BTreeMap::new(),
+            movement_operational: BTreeMap::new(),
         }
     }
 }
@@ -355,14 +374,14 @@ fn write_side(
                 minimum_post_encroachment_s: values.pet.clone(),
                 mode_pair_minimum_separation_m: values.mode_pairs.clone(),
                 movement_minima: values.movements.clone(),
-                event_counts: event_counts(values.collisions),
+                event_counts: event_counts(values),
                 operational: OperationalMetrics {
                     run: OperationalValues::not_observed(),
                     by_mode: ["vehicle", "pedestrian"]
                         .into_iter()
                         .map(|mode| (mode.to_owned(), OperationalValues::not_observed()))
                         .collect(),
-                    by_movement: BTreeMap::new(),
+                    by_movement: values.movement_operational.clone(),
                 },
             },
         );
@@ -492,21 +511,13 @@ fn assert_close(actual: f64, expected: f64) {
 
 /// Every sensitivity in the report, with the key path it lives under.
 fn every_sensitivity(report: &ConvergenceReport) -> Vec<(String, &MetricSensitivity)> {
-    let mut all = Vec::new();
-    for (key, sensitivity) in &report.metrics {
-        all.push((format!("metrics.{key}"), sensitivity));
-    }
-    for (label, slice) in &report.mode_pair_slices {
-        for (key, sensitivity) in slice {
-            all.push((format!("mode_pair_slices.{label}.{key}"), sensitivity));
-        }
-    }
-    for (bucket, slice) in &report.movement_slices {
-        for (key, sensitivity) in &slice.metrics {
-            all.push((format!("movement_slices.{bucket}.{key}"), sensitivity));
-        }
-    }
-    all
+    report
+        .sensitivities()
+        .into_iter()
+        .map(|(family, slice, metric, sensitivity)| {
+            (format!("{}.{slice}.{metric}", family.label()), sensitivity)
+        })
+        .collect()
 }
 
 /// The failure a report attempt produced.
@@ -961,6 +972,135 @@ fn the_report_is_disaggregated_by_mode_and_by_movement() {
     assert_eq!(lone.refinements[1].paired, None);
     assert_eq!(lone.refinements[1].relative_change, None);
     assert_eq!(lone.verdict, ConvergenceVerdict::Inconclusive);
+}
+
+/// The mode event slices and the agent movement slices carry their counted
+/// families and operational values too, so every family the comparison reports
+/// is judged per metric at each fidelity rather than only the pair families.
+#[test]
+fn the_mode_event_and_agent_movement_slices_are_reported_per_metric() {
+    let scratch = Scratch::new("event-families");
+    let movement = "movement:through";
+    let with_families = |records: u64, control_delay: f64| SyntheticSeed {
+        movements: BTreeMap::from([movement_bucket(
+            [movement, movement],
+            reported(2.0),
+            absent(MetricStatus::NotApplicable),
+            absent(MetricStatus::NotObserved),
+        )]),
+        mode_events: BTreeMap::from([(
+            "collisions".to_owned(),
+            BTreeMap::from([("vehicle".to_owned(), records)]),
+        )]),
+        movement_events: BTreeMap::from([(
+            "queue_events".to_owned(),
+            BTreeMap::from([(movement.to_owned(), records)]),
+        )]),
+        movement_operational: BTreeMap::from([(movement.to_owned(), operational(control_delay))]),
+        ..SyntheticSeed::default()
+    };
+    let fixture = fixture(
+        &scratch,
+        "event-families",
+        [
+            &two(with_families(0, 1.0)),
+            &two(with_families(0, 1.0)),
+            &two(with_families(3, 2.0)),
+        ],
+    );
+    let report = fixture
+        .report()
+        .expect("three fidelities over one bank converge");
+
+    // The mode slice carries the counted family, with the count class's absolute
+    // part: three records past a zero reference is material, and the 0 -> 0 step
+    // before it is noise.
+    let collisions = &report.mode_event_slices["vehicle"]["event_counts.collisions"];
+    assert_eq!(
+        collisions
+            .fidelities
+            .iter()
+            .map(|value| value.value.as_ref().expect("reported").mean)
+            .collect::<Vec<_>>(),
+        vec![Some(0.0), Some(0.0), Some(3.0)]
+    );
+    assert_eq!(collisions.tolerance.class, COUNT_CLASS);
+    assert_eq!(collisions.refinements[1].materially_sensitive, Some(true));
+    assert_eq!(collisions.verdict, ConvergenceVerdict::MateriallySensitive);
+    // The other mode reported no record: a count of an absent family is a
+    // reported zero, which is converged rather than inconclusive.
+    let pedestrian = &report.mode_event_slices["pedestrian"]["event_counts.collisions"];
+    assert_eq!(
+        pedestrian.fidelities[2]
+            .value
+            .as_ref()
+            .expect("reported")
+            .mean,
+        Some(0.0)
+    );
+    assert_eq!(pedestrian.verdict, ConvergenceVerdict::Converged);
+
+    // The agent movement slice carries the movement's operational value at the
+    // continuous class's tolerance and its counted family at the count class's.
+    let slice = &report.agent_movement_slices[movement];
+    let delay = &slice["mean_control_delay_s"];
+    assert_eq!(delay.tolerance.class, CONTINUOUS_CLASS);
+    assert_eq!(
+        delay
+            .fidelities
+            .iter()
+            .map(|value| value.value.as_ref().expect("reported").mean)
+            .collect::<Vec<_>>(),
+        vec![Some(1.0), Some(1.0), Some(2.0)]
+    );
+    assert_close(delay.refinements[1].relative_change.unwrap(), 1.0);
+    assert_eq!(delay.verdict, ConvergenceVerdict::MateriallySensitive);
+    let queue = &slice["event_counts.queue_events"];
+    assert_eq!(queue.tolerance.class, COUNT_CLASS);
+    assert_eq!(queue.verdict, ConvergenceVerdict::MateriallySensitive);
+    // The operational metrics the fixture observed nothing for are reported as
+    // statuses with no value, never as zeros.
+    let throughput = &slice["throughput_agents_per_s"];
+    assert_eq!(throughput.verdict, ConvergenceVerdict::Inconclusive);
+    for value in &throughput.fidelities {
+        let distribution = value.value.as_ref().expect("not observed is reported");
+        assert_eq!(distribution.count, 0);
+        assert_eq!(distribution.mean, None);
+        assert_eq!(distribution.not_observed_seeds, vec![0, 1]);
+    }
+    // A movement no run carried is not invented.
+    assert!(!report.agent_movement_slices.contains_key("movement:absent"));
+
+    // Every declared family is in the report, once each, in the declared order.
+    let sensitivities = report.sensitivities();
+    let families: Vec<&str> = sensitivities
+        .iter()
+        .map(|(family, ..)| family.label())
+        .collect();
+    let declared: Vec<&str> = SLICE_FAMILIES.into_iter().map(SliceFamily::label).collect();
+    let mut seen: Vec<&str> = Vec::new();
+    for family in &families {
+        if seen.last() != Some(family) {
+            seen.push(family);
+        }
+    }
+    assert_eq!(seen, declared);
+    for family in SLICE_FAMILIES {
+        assert!(
+            families.contains(&family.label()),
+            "the report must carry the '{}' family",
+            family.label()
+        );
+    }
+    let run_slices: Vec<&str> = sensitivities
+        .iter()
+        .filter(|(family, ..)| *family == SliceFamily::Run)
+        .map(|(_, slice, ..)| slice.as_str())
+        .collect();
+    assert!(
+        !run_slices.is_empty() && run_slices.iter().all(|slice| *slice == SLICE_KEY_RUN),
+        "the run family is keyed by the run slice key"
+    );
 }
 
 /// Every reported metric links to the manifests of every fidelity it reports and
@@ -1448,6 +1588,16 @@ fn the_converge_command_runs_three_fidelities_over_one_bank_and_mutates_nothing(
             .movement_slices
             .contains_key("movement:through|movement:through"),
         "the benchmark's movement slice is reported"
+    );
+    assert!(
+        report.mode_event_slices.contains_key("vehicle"),
+        "the benchmark's mode event slice is reported"
+    );
+    assert!(
+        report
+            .agent_movement_slices
+            .contains_key("movement:through"),
+        "the benchmark's agent movement slice is reported"
     );
 
     // Every metric's verdict is its standard-to-fine reading, and a value no run

@@ -7,9 +7,15 @@
 //! duration, and this module turns their artifacts into `convergence.json`: for
 //! every metric the across-seed value at each fidelity, the refinement change
 //! from Fast to Standard and from Standard to Fine, and a convergence verdict
-//! against one declared tolerance, disaggregated by mode pair (`ModePair`) and
-//! by movement — the `MovementId` / `PedestrianRouteId` union
-//! [[DEF-004-metric-definition-v1]] chose — wherever the metric supports it.
+//! against one declared tolerance, disaggregated into every slice family the
+//! aggregation and the comparison report, wherever the metric supports it: the
+//! run as a whole, one `AgentMode` label, one `ModePair` label, one pair of
+//! movement keys — the `MovementId` / `PedestrianRouteId` union
+//! [[DEF-004-metric-definition-v1]] chose — and one agent's own movement key.
+//!
+//! Every family the comparison reports is therefore judged per metric at each
+//! fidelity too, so a mode's event family or a movement's queue duration cannot
+//! be materially sensitive in the comparison and silent here.
 //!
 //! ## The declared tolerance
 //!
@@ -118,7 +124,7 @@ use crate::aggregate::{
 };
 use crate::baseline::{PRESETS, Preset, ScenarioProvenance};
 use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest, BatchSpec};
-use crate::compare::{CompareError, PairedDistribution, compare_batches};
+use crate::compare::{CompareError, Comparison, PairedDistribution, compare_batches};
 use crate::run_metrics::METRIC_DEFINITION_VERSION;
 use crate::seed_bank::{SeedBankError, SeedBankReference, read_seed_bank};
 
@@ -172,6 +178,55 @@ pub const CONVERGENCE_COUNT_TOLERANCE: f64 = 1.0;
 /// The Standard fidelity preset's name, whose step fixes the one simulated
 /// duration every fidelity covers.
 const STANDARD_FIDELITY: &str = "standard";
+
+/// One family of single-key slices: each slice's sensitivities, keyed by the
+/// slice key and then by metric name.
+///
+/// The label a slice is keyed by differs per family — a `ModePair` label, an
+/// `AgentMode` label, or one movement key — so the type is one shape for every
+/// family the run artifact disaggregates that way.
+pub type SliceSensitivities = BTreeMap<String, BTreeMap<String, MetricSensitivity>>;
+
+/// The slice families a convergence report disaggregates by, in the order it
+/// writes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SliceFamily {
+    /// The run as a whole.
+    Run,
+    /// One `AgentMode` label and the counted event families its own agents
+    /// produced.
+    Mode,
+    /// One `ModePair` label.
+    ModePair,
+    /// One pair of movement keys.
+    MovementPair,
+    /// One agent's own movement key, with its operational values and its
+    /// counted event families.
+    AgentMovement,
+}
+
+impl SliceFamily {
+    /// The family's stable artifact key.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Mode => "mode",
+            Self::ModePair => "mode_pair",
+            Self::MovementPair => "movement_pair",
+            Self::AgentMovement => "agent_movement",
+        }
+    }
+}
+
+/// The declared family order the report writes and its summary reads.
+pub const SLICE_FAMILIES: [SliceFamily; 5] = [
+    SliceFamily::Run,
+    SliceFamily::Mode,
+    SliceFamily::ModePair,
+    SliceFamily::MovementPair,
+    SliceFamily::AgentMovement,
+];
 
 /// The convergence verdict for one metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -372,12 +427,80 @@ pub struct ConvergenceReport {
     pub seed_bank: SeedBankReference,
     /// The fidelities, in the declared Fast, Standard, Fine order.
     pub fidelities: Vec<FidelityBatch>,
-    /// The whole-batch sensitivities, keyed by metric name.
+    /// The whole-batch sensitivities, keyed by metric name: the
+    /// [`SliceFamily::Run`] family.
     pub metrics: BTreeMap<String, MetricSensitivity>,
-    /// The mode slices, keyed by `ModePair` label.
-    pub mode_pair_slices: BTreeMap<String, BTreeMap<String, MetricSensitivity>>,
-    /// The movement slices, keyed by the pair's two movement keys.
+    /// The mode event slices, keyed by one `AgentMode` label, holding
+    /// `event_counts.<family>` for every counted family: the
+    /// [`SliceFamily::Mode`] family.
+    pub mode_event_slices: SliceSensitivities,
+    /// The mode-pair slices, keyed by `ModePair` label: the
+    /// [`SliceFamily::ModePair`] family.
+    pub mode_pair_slices: SliceSensitivities,
+    /// The movement slices, keyed by the pair's two movement keys: the
+    /// [`SliceFamily::MovementPair`] family.
     pub movement_slices: BTreeMap<String, MovementSensitivity>,
+    /// The agent-movement slices, keyed by one movement key, holding that
+    /// movement's operational values plus `event_counts.<family>` for every
+    /// counted family: the [`SliceFamily::AgentMovement`] family.
+    pub agent_movement_slices: SliceSensitivities,
+}
+
+impl ConvergenceReport {
+    /// Every sensitivity in the report, in the declared family order
+    /// ([`SLICE_FAMILIES`]) and ascending key order within a family: the
+    /// family, the slice key, the metric key, and the record.
+    pub fn sensitivities(&self) -> Vec<(SliceFamily, String, String, &MetricSensitivity)> {
+        let mut all = Vec::new();
+        for (metric, sensitivity) in &self.metrics {
+            all.push((
+                SliceFamily::Run,
+                SLICE_KEY_RUN.to_owned(),
+                metric.clone(),
+                sensitivity,
+            ));
+        }
+        all.extend(single_key_family(
+            SliceFamily::Mode,
+            &self.mode_event_slices,
+        ));
+        all.extend(single_key_family(
+            SliceFamily::ModePair,
+            &self.mode_pair_slices,
+        ));
+        for (bucket, slice) in &self.movement_slices {
+            for (metric, sensitivity) in &slice.metrics {
+                all.push((
+                    SliceFamily::MovementPair,
+                    bucket.clone(),
+                    metric.clone(),
+                    sensitivity,
+                ));
+            }
+        }
+        all.extend(single_key_family(
+            SliceFamily::AgentMovement,
+            &self.agent_movement_slices,
+        ));
+        all
+    }
+}
+
+/// The slice key of the run as a whole.
+pub const SLICE_KEY_RUN: &str = "*";
+
+/// One single-key slice family's sensitivities, in ascending key order.
+fn single_key_family(
+    family: SliceFamily,
+    slices: &SliceSensitivities,
+) -> Vec<(SliceFamily, String, String, &MetricSensitivity)> {
+    let mut all = Vec::new();
+    for (slice, metrics) in slices {
+        for (metric, sensitivity) in metrics {
+            all.push((family, slice.clone(), metric.clone(), sensitivity));
+        }
+    }
+    all
 }
 
 /// Failure to build a convergence report.
@@ -555,51 +678,27 @@ pub fn converge_batches(
         metrics.insert(key.clone(), sensitivity(values, paired, tolerance));
     }
 
-    let mut mode_pair_slices = BTreeMap::new();
-    let mut labels: BTreeSet<&String> = BTreeSet::new();
-    for reading in &readings {
-        labels.extend(reading.aggregation.mode_pair_slices.keys());
-    }
-    for label in labels {
-        let mut slice_keys: BTreeSet<&String> = BTreeSet::new();
-        for reading in &readings {
-            if let Some(slice) = reading.aggregation.mode_pair_slices.get(label) {
-                slice_keys.extend(slice.keys());
-            }
-        }
-        let mut slice = BTreeMap::new();
-        for key in slice_keys {
-            let values = [
-                readings[0]
-                    .aggregation
-                    .mode_pair_slices
-                    .get(label)
-                    .and_then(|slice| slice.get(key)),
-                readings[1]
-                    .aggregation
-                    .mode_pair_slices
-                    .get(label)
-                    .and_then(|slice| slice.get(key)),
-                readings[2]
-                    .aggregation
-                    .mode_pair_slices
-                    .get(label)
-                    .and_then(|slice| slice.get(key)),
-            ];
-            let paired = [
-                steps[0]
-                    .mode_pair_slices
-                    .get(label)
-                    .and_then(|slice| slice.get(key)),
-                steps[1]
-                    .mode_pair_slices
-                    .get(label)
-                    .and_then(|slice| slice.get(key)),
-            ];
-            slice.insert(key.clone(), sensitivity(values, paired, tolerance));
-        }
-        mode_pair_slices.insert(label.clone(), slice);
-    }
+    let mode_event_slices = single_key_slices(
+        &readings,
+        steps,
+        |aggregation| &aggregation.mode_event_slices,
+        |comparison| &comparison.mode_event_slices,
+        tolerance,
+    );
+    let mode_pair_slices = single_key_slices(
+        &readings,
+        steps,
+        |aggregation| &aggregation.mode_pair_slices,
+        |comparison| &comparison.mode_pair_slices,
+        tolerance,
+    );
+    let agent_movement_slices = single_key_slices(
+        &readings,
+        steps,
+        |aggregation| &aggregation.agent_movement_slices,
+        |comparison| &comparison.agent_movement_slices,
+        tolerance,
+    );
 
     let mut movement_slices = BTreeMap::new();
     let mut buckets: BTreeSet<&String> = BTreeSet::new();
@@ -677,9 +776,63 @@ pub fn converge_batches(
             })
             .collect(),
         metrics,
+        mode_event_slices,
         mode_pair_slices,
         movement_slices,
+        agent_movement_slices,
     })
+}
+
+/// The sensitivities of one family of single-key slices, read from three
+/// fidelities and the two refinement steps between them.
+///
+/// The family is the union of every fidelity's slice keys and, within a slice,
+/// the union of every fidelity's metric keys, so a slice one fidelity does not
+/// carry is reported there as a status rather than dropped. `aggregated` and
+/// `paired` project one family out of the aggregation and out of the paired
+/// comparison, so the three families that are keyed by one label — a `ModePair`
+/// label, an `AgentMode` label, or one movement key — share this one walk.
+fn single_key_slices(
+    readings: &[FidelityReading; 3],
+    steps: [&Comparison; 2],
+    aggregated: fn(&Aggregation) -> &BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    paired: fn(&Comparison) -> &BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    tolerance: f64,
+) -> SliceSensitivities {
+    let mut slices: SliceSensitivities = BTreeMap::new();
+    let mut labels: BTreeSet<&String> = BTreeSet::new();
+    for reading in readings {
+        labels.extend(aggregated(&reading.aggregation).keys());
+    }
+    for label in labels {
+        let mut slice_keys: BTreeSet<&String> = BTreeSet::new();
+        for reading in readings {
+            if let Some(slice) = aggregated(&reading.aggregation).get(label) {
+                slice_keys.extend(slice.keys());
+            }
+        }
+        let mut slice = BTreeMap::new();
+        for key in slice_keys {
+            let values = [
+                aggregated(&readings[0].aggregation)
+                    .get(label)
+                    .and_then(|slice| slice.get(key)),
+                aggregated(&readings[1].aggregation)
+                    .get(label)
+                    .and_then(|slice| slice.get(key)),
+                aggregated(&readings[2].aggregation)
+                    .get(label)
+                    .and_then(|slice| slice.get(key)),
+            ];
+            let paired = [
+                paired(steps[0]).get(label).and_then(|slice| slice.get(key)),
+                paired(steps[1]).get(label).and_then(|slice| slice.get(key)),
+            ];
+            slice.insert(key.clone(), sensitivity(values, paired, tolerance));
+        }
+        slices.insert(label.clone(), slice);
+    }
+    slices
 }
 
 /// One fidelity's batch as read: its preset, its aggregation, and the

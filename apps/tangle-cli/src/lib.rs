@@ -51,8 +51,9 @@ pub use converge::{
     CONTINUOUS_CLASS, CONVERGENCE_COUNT_TOLERANCE, CONVERGENCE_FILE, CONVERGENCE_TOLERANCE,
     CONVERGENCE_VERSION, COUNT_CLASS, COUNT_UNITS, ConvergenceError, ConvergenceReport,
     ConvergenceVerdict, FidelityBatch, FidelityValue, MetricSensitivity, MetricTolerance,
-    MovementSensitivity, RefinementStep, TOLERANCE_MEASURE, TOLERANCE_REFERENCE, TOLERANCE_RULE,
-    Tolerance, VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
+    MovementSensitivity, RefinementStep, SLICE_FAMILIES, SLICE_KEY_RUN, SliceFamily,
+    SliceSensitivities, TOLERANCE_MEASURE, TOLERANCE_REFERENCE, TOLERANCE_RULE, Tolerance,
+    VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
 };
 pub use experiment::{
     EXPERIMENT_VERSION, ExperimentError, ExperimentReference, ExperimentReport, ExperimentSpec,
