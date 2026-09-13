@@ -190,7 +190,7 @@ const SECONDS: &str = "seconds";
 pub(crate) const METRES: &str = "metres";
 
 /// The countable event families' unit, as metric definition v2 fixes it.
-const RECORDS: &str = "records";
+pub(crate) const RECORDS: &str = "records";
 
 /// The metric-key prefix a slice's counted event family carries.
 pub(crate) const EVENT_COUNT_PREFIX: &str = "event_counts.";
@@ -199,7 +199,7 @@ pub(crate) const EVENT_COUNT_PREFIX: &str = "event_counts.";
 const AGENTS_PER_SECOND: &str = "agents_per_second";
 
 /// The unit of a standing-agent count, as metric definition v2 fixes it.
-const AGENTS: &str = "agents";
+pub(crate) const AGENTS: &str = "agents";
 
 /// Failure to aggregate a completed batch.
 #[derive(Debug, thiserror::Error)]

@@ -47,10 +47,11 @@ pub use compare::{
     PairedDistribution, PairedMethod, Side, UnpairedSeed, compare_batches,
 };
 pub use converge::{
-    CONVERGENCE_FILE, CONVERGENCE_TOLERANCE, CONVERGENCE_VERSION, ConvergenceError,
-    ConvergenceReport, ConvergenceVerdict, FidelityBatch, FidelityValue, MetricSensitivity,
-    MovementSensitivity, RefinementStep, TOLERANCE_MEASURE, TOLERANCE_REFERENCE, Tolerance,
-    VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
+    CONTINUOUS_CLASS, CONVERGENCE_COUNT_TOLERANCE, CONVERGENCE_FILE, CONVERGENCE_TOLERANCE,
+    CONVERGENCE_VERSION, COUNT_CLASS, COUNT_UNITS, ConvergenceError, ConvergenceReport,
+    ConvergenceVerdict, FidelityBatch, FidelityValue, MetricSensitivity, MetricTolerance,
+    MovementSensitivity, RefinementStep, TOLERANCE_MEASURE, TOLERANCE_REFERENCE, TOLERANCE_RULE,
+    Tolerance, VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
 };
 pub use replay::{ReplayError, replay_run_directory};
 pub use run_dir::{

@@ -23,13 +23,14 @@ use std::process::{Command, Output};
 
 use sha2::{Digest, Sha256};
 use tangle_cli::{
-    BATCH_MANIFEST_FILE, BatchManifest, BatchRun, BatchSpec, CONVERGENCE_FILE,
-    CONVERGENCE_TOLERANCE, CONVERGENCE_VERSION, ConvergenceError, ConvergenceReport,
-    ConvergenceVerdict, EventCounts, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE,
-    MetricSensitivity, MetricStatus, MetricValue, MovementMinima, OperationalMetrics,
-    OperationalValues, PRESETS, Preset, RunMetricsArtifact, SamplingPolicy, ScenarioProvenance,
-    SeedBank, SeedBankReference, TOLERANCE_MEASURE, VERDICT_REFINEMENT, converge_batches,
-    fidelity_ticks, read_seed_bank,
+    BATCH_MANIFEST_FILE, BatchManifest, BatchRun, BatchSpec, CONTINUOUS_CLASS,
+    CONVERGENCE_COUNT_TOLERANCE, CONVERGENCE_FILE, CONVERGENCE_TOLERANCE, CONVERGENCE_VERSION,
+    COUNT_CLASS, COUNT_UNITS, ConvergenceError, ConvergenceReport, ConvergenceVerdict, EventCounts,
+    MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricSensitivity, MetricStatus,
+    MetricTolerance, MetricValue, MovementMinima, OperationalMetrics, OperationalValues, PRESETS,
+    Preset, RunMetricsArtifact, SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference,
+    TOLERANCE_MEASURE, TOLERANCE_RULE, VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
+    read_seed_bank,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -542,7 +543,8 @@ fn an_engineered_refinement_change_above_the_tolerance_is_flagged() {
         ttc: reported(1.01),
         ..SyntheticSeed::default()
     };
-    // Collisions 0 -> 0 -> 1 gives the declared rule a zero reference to judge.
+    // Collisions 0 -> 0 -> 1 gives the count class's absolute part a zero
+    // reference to judge: one record of drift is inside it.
     fine.collisions = 1;
 
     let fixture = fixture(
@@ -606,8 +608,9 @@ fn an_engineered_refinement_change_above_the_tolerance_is_flagged() {
         0.01,
     );
 
-    // A zero coarser value has no relative scale: a zero change is converged, any
-    // other change is an unbounded relative change and is materially sensitive.
+    // A zero coarser count has no relative scale, so the count class's absolute
+    // part decides: one record of drift is noise, not an unbounded relative
+    // change. The relative change is still absent, because the ratio has none.
     let collisions = &report.metrics["event_counts.by_family.collisions"];
     assert_eq!(
         collisions.fidelities[1]
@@ -621,15 +624,123 @@ fn an_engineered_refinement_change_above_the_tolerance_is_flagged() {
         collisions.refinements[1].relative_change, None,
         "a zero reference has no relative change"
     );
-    assert_eq!(collisions.refinements[1].materially_sensitive, Some(true));
-    assert_eq!(collisions.verdict, ConvergenceVerdict::MateriallySensitive);
+    assert_eq!(collisions.refinements[1].materially_sensitive, Some(false));
+    assert_eq!(collisions.verdict, ConvergenceVerdict::Converged);
     assert_eq!(collisions.refinements[0].materially_sensitive, Some(false));
 
-    // The report declares the tolerance its verdicts used.
+    // The report declares the tolerance its verdicts used, and each metric
+    // carries the one it was read against.
     assert_eq!(report.convergence_version, CONVERGENCE_VERSION);
     assert_eq!(report.tolerance.measure, TOLERANCE_MEASURE);
-    assert_eq!(report.tolerance.value, CONVERGENCE_TOLERANCE);
+    assert_eq!(report.tolerance.rule, TOLERANCE_RULE);
+    assert_eq!(report.tolerance.relative, CONVERGENCE_TOLERANCE);
+    assert_eq!(report.tolerance.count_absolute, CONVERGENCE_COUNT_TOLERANCE);
+    assert_eq!(report.tolerance.count_units, COUNT_UNITS);
     assert_eq!(report.tolerance.verdict_refinement, VERDICT_REFINEMENT);
+    assert_eq!(
+        separation.tolerance,
+        MetricTolerance {
+            class: CONTINUOUS_CLASS.to_owned(),
+            relative: CONVERGENCE_TOLERANCE,
+            absolute: 0.0,
+        }
+    );
+    assert_eq!(
+        collisions.tolerance,
+        MetricTolerance {
+            class: COUNT_CLASS.to_owned(),
+            relative: CONVERGENCE_TOLERANCE,
+            absolute: CONVERGENCE_COUNT_TOLERANCE,
+        }
+    );
+}
+
+/// The tolerance is per metric: a count metric adds one whole unit of absolute
+/// tolerance, so one record of drift from any coarser value is noise while more
+/// than that still has to clear the relative part; a continuous metric keeps the
+/// relative part alone, so a zero coarser value stays unbounded there.
+#[test]
+fn the_tolerance_is_per_metric_because_a_count_has_an_absolute_part() {
+    let scratch = Scratch::new("per-metric");
+    let collisions = |collisions: u64| SyntheticSeed {
+        collisions,
+        ..SyntheticSeed::default()
+    };
+    let engineered = |name: &str, fast: u64, standard: u64, fine: u64| {
+        fixture(
+            &scratch,
+            name,
+            [
+                &two(collisions(fast)),
+                &two(collisions(standard)),
+                &two(collisions(fine)),
+            ],
+        )
+        .report()
+        .expect("three fidelities over one bank converge")
+    };
+
+    // 0 -> 0 -> 1: one record of drift, inside the count class's absolute part.
+    let noise = engineered("count-noise", 0, 0, 1);
+    let collisions = &noise.metrics["event_counts.by_family.collisions"];
+    assert_eq!(collisions.tolerance.class, COUNT_CLASS);
+    assert_eq!(collisions.tolerance.absolute, CONVERGENCE_COUNT_TOLERANCE);
+    assert_eq!(collisions.refinements[1].relative_change, None);
+    assert_eq!(collisions.refinements[1].materially_sensitive, Some(false));
+    assert_eq!(collisions.verdict, ConvergenceVerdict::Converged);
+
+    // 0 -> 0 -> 3: three records is more than the absolute part, so the zero
+    // reference is still a material change rather than an unbounded one.
+    let material = engineered("count-material", 0, 0, 3);
+    let collisions = &material.metrics["event_counts.by_family.collisions"];
+    assert_eq!(collisions.refinements[1].relative_change, None);
+    assert_eq!(collisions.refinements[1].materially_sensitive, Some(true));
+    assert_eq!(collisions.verdict, ConvergenceVerdict::MateriallySensitive);
+
+    // 20 -> 21 is one record inside the absolute part; 20 -> 23 is three, past
+    // both the absolute part and 5% of twenty.
+    let inside = engineered("count-relative-inside", 0, 20, 21);
+    let collisions = &inside.metrics["event_counts.by_family.collisions"];
+    assert_close(collisions.refinements[1].relative_change.unwrap(), 0.05);
+    assert_eq!(collisions.refinements[1].materially_sensitive, Some(false));
+    let outside = engineered("count-relative-outside", 0, 20, 23);
+    let collisions = &outside.metrics["event_counts.by_family.collisions"];
+    assert_close(collisions.refinements[1].relative_change.unwrap(), 0.15);
+    assert_eq!(collisions.refinements[1].materially_sensitive, Some(true));
+
+    // A continuous metric has no absolute part, so a zero coarser value remains
+    // an unbounded relative change: any nonzero change there is material.
+    let continuous = SyntheticSeed {
+        ttc: reported(0.0),
+        ..SyntheticSeed::default()
+    };
+    let mut fine = continuous.clone();
+    fine.ttc = reported(0.5);
+    let report = fixture(
+        &scratch,
+        "continuous-zero",
+        [&two(continuous.clone()), &two(continuous), &two(fine)],
+    )
+    .report()
+    .expect("three fidelities over one bank converge");
+    let ttc = &report.metrics["minimum_ttc_s"];
+    assert_eq!(ttc.tolerance.class, CONTINUOUS_CLASS);
+    assert_eq!(ttc.tolerance.absolute, 0.0);
+    assert_eq!(ttc.refinements[1].relative_change, None);
+    assert_eq!(ttc.refinements[1].materially_sensitive, Some(true));
+
+    // Every metric in every report states the tolerance it was read against.
+    for (path, sensitivity) in every_sensitivity(&noise) {
+        assert_eq!(sensitivity.tolerance.relative, CONVERGENCE_TOLERANCE);
+        assert_eq!(
+            sensitivity.tolerance.absolute,
+            match sensitivity.tolerance.class.as_str() {
+                COUNT_CLASS => CONVERGENCE_COUNT_TOLERANCE,
+                CONTINUOUS_CLASS => 0.0,
+                other => panic!("'{path}' reports an unknown tolerance class '{other}'"),
+            }
+        );
+    }
 }
 
 /// A value that is not applicable or not observed at both steps is a status, not

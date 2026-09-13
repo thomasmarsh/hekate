@@ -51,11 +51,13 @@
 //! over one seed bank — one batch per fidelity, each covering the same simulated
 //! duration — and writes `convergence.json`: for every metric the across-seed
 //! value at each fidelity, the paired refinement change from Fast to Standard
-//! and from Standard to Fine, and a convergence verdict against a declared 5%
-//! relative tolerance, disaggregated by mode pair and by movement. A metric
-//! whose standard-to-fine change exceeds the tolerance is reported as materially
-//! sensitive rather than hidden. It writes the three batches through the batch
-//! machinery's resume path, so a completed run directory is never rewritten.
+//! and from Standard to Fine, and a convergence verdict against a per-metric
+//! tolerance, disaggregated by mode pair and by movement. A metric whose
+//! standard-to-fine change exceeds its own tolerance — 5% of the coarser value
+//! for a continuous metric, plus one whole record or agent for a count metric —
+//! is reported as materially sensitive rather than hidden. It writes the three
+//! batches through the batch machinery's resume path, so a completed run
+//! directory is never rewritten.
 //!
 //! `replay` reproduces a completed run directory from its manifest: it re-loads
 //! the recorded scenario source, checks the recorded content hash, and re-runs
@@ -351,13 +353,15 @@ Method:
 reports: count, mean, spread, interval, and the seeds behind each reporting
 status. A refinement step's change is the paired mean difference of that one
 bank's runs at the two fidelities, with its paired 95% Student-t interval. The
-declared tolerance is 5% of the coarser fidelity's across-seed value, measured
-as the relative change |fine - coarse| / |coarse|: a metric whose
-standard-to-fine relative change exceeds it is materially sensitive, and the
-report names it. A metric no seed reports at both steps is inconclusive; a
-not-applicable or not-observed value is a status, never a zero; and a zero
-coarser value has no relative scale, so a zero change is converged and any other
-change is materially sensitive.
+tolerance is per metric: a metric is materially sensitive when its change
+exceeds an absolute part plus a relative part times the coarser fidelity's
+across-seed value, measured as the relative change |fine - coarse| / |coarse|
+for a continuous metric (5% and no absolute part) and with one whole record or
+agent added for a count metric, so one unit of count drift is noise rather than
+an unbounded relative change against a zero. The report names every materially
+sensitive metric and states the class, relative part, and absolute part each
+verdict used. A metric no seed reports at both steps is inconclusive and a
+not-applicable or not-observed value is a status, never a zero.
 
 Output:
   convergence.json names the scenario, the seed bank, the three fidelity batches

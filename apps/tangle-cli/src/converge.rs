@@ -13,31 +13,49 @@
 //!
 //! ## The declared tolerance
 //!
-//! [`CONVERGENCE_TOLERANCE`] is the declared tolerance (5%) and
-//! [`TOLERANCE_MEASURE`] the measure it is compared against: the **relative
-//! change** of a metric's value from the coarser fidelity of a refinement step
-//! to the finer one,
+//! The tolerance is **per metric**, and each metric's record carries the one it
+//! was read against ([`MetricSensitivity::tolerance`]). Every metric's tolerance
+//! is the same shape — a relative part on the coarser value plus an absolute
+//! part in the metric's own unit — and the part that differs is the metric's
+//! class:
+//!
+//! - a **continuous** metric (`seconds`, `metres`, `agents_per_second`) is read
+//!   against [`CONVERGENCE_TOLERANCE`] (5%) of its coarser across-seed value and
+//!   no absolute part, so a change has to be a real fraction of the value to
+//!   count;
+//! - a **count** metric (`records`, `agents`) adds
+//!   [`CONVERGENCE_COUNT_TOLERANCE`] (one unit) to that relative part, because a
+//!   count's smallest possible change is one whole record or one whole agent.
+//!
+//! The absolute part is what the single global relative tolerance could not
+//! express: a count metric whose coarser value is `0` has no relative scale at
+//! all, so `0 -> 1` used to read as an unbounded relative change and a material
+//! sensitivity. One record of drift is now noise, and the report states the
+//! class, the relative part, and the absolute part it used rather than hiding
+//! the rule.
+//!
+//! The measure is
 //!
 //! ```text
-//! |value(fine) - value(coarse)| / |value(coarse)|
+//! |value(fine) - value(coarse)| > absolute + relative x |value(coarse)|
 //! ```
 //!
 //! where each value is the across-seed [mean](MetricDistribution::mean) over the
-//! shared bank ([`TOLERANCE_REFERENCE`]). The change itself is the paired mean
+//! shared bank ([`TOLERANCE_REFERENCE`]) and the change itself is the paired mean
 //! difference `fine - coarse` over that bank, so it carries the paired
-//! confidence interval and the per-seed pairing the seed bank makes possible.
+//! confidence interval and the per-seed pairing the seed bank makes possible. The
+//! relative change `|change| / |reference|` is reported beside it
+//! ([`TOLERANCE_MEASURE`]), and is absent when the coarser value is zero and the
+//! change is not, because that ratio has no scale: the absolute part decides
+//! there.
 //!
-//! A metric whose **standard-to-fine** relative change *exceeds* the tolerance —
-//! strictly greater, not equal ([`VERDICT_REFINEMENT`]) — is
+//! A metric whose **standard-to-fine** change exceeds its tolerance — strictly
+//! greater, not equal ([`VERDICT_REFINEMENT`]) — is
 //! [`ConvergenceVerdict::MateriallySensitive`]: the report names it rather than
-//! hiding it behind an averaged value. Every metric is judged by the same
-//! unit-free measure, so seconds, metres, and record counts are comparable.
+//! hiding it behind an averaged value.
 //!
-//! Three cases are named rather than approximated:
+//! Two cases are named rather than approximated:
 //!
-//! - a coarser value of exactly zero has no relative scale: a zero change is
-//!   `converged`, any other change is `materially_sensitive`, and the step
-//!   reports `relative_change: null`, an unbounded relative change;
 //! - a metric no seed reports at both steps of a refinement — not applicable,
 //!   not observed, or the slice does not reach that fidelity — has no change to
 //!   measure: the step reports `relative_change: null` and the metric is
@@ -95,8 +113,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::aggregate::{
-    AggregateError, AggregatedBatch, AggregatedSeed, Aggregation, MetricDistribution,
-    aggregate_batch,
+    AGENTS, AggregateError, AggregatedBatch, AggregatedSeed, Aggregation, MetricDistribution,
+    RECORDS, aggregate_batch,
 };
 use crate::baseline::{PRESETS, Preset, ScenarioProvenance};
 use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest, BatchSpec};
@@ -110,8 +128,11 @@ pub const CONVERGENCE_VERSION: u32 = 1;
 /// Default file name of the convergence report.
 pub const CONVERGENCE_FILE: &str = "convergence.json";
 
-/// The measure the declared tolerance is compared against.
+/// The measure the declared tolerance's relative part is read against.
 pub const TOLERANCE_MEASURE: &str = "relative_change";
+
+/// The rule every metric's tolerance applies.
+pub const TOLERANCE_RULE: &str = "|fine - coarse| > absolute + relative x |coarse|";
 
 /// The denominator the relative change uses.
 pub const TOLERANCE_REFERENCE: &str = "the across-seed mean at the coarser fidelity of the step";
@@ -119,17 +140,34 @@ pub const TOLERANCE_REFERENCE: &str = "the across-seed mean at the coarser fidel
 /// The refinement step every metric's verdict reads.
 pub const VERDICT_REFINEMENT: &str = "standard_to_fine";
 
-/// The declared convergence tolerance: a metric whose standard-to-fine relative
-/// change **exceeds** this fraction of its coarser across-seed value is
-/// materially sensitive to the fixed step.
+/// The class of a metric whose value is a continuous quantity.
+pub const CONTINUOUS_CLASS: &str = "continuous";
+
+/// The class of a metric whose value is a count of records or agents.
+pub const COUNT_CLASS: &str = "count";
+
+/// The units read as countable: a count's smallest change is one whole unit.
+pub const COUNT_UNITS: [&str; 2] = [RECORDS, AGENTS];
+
+/// The declared convergence tolerance's relative part: a metric whose
+/// refinement change exceeds this fraction of its coarser across-seed value is
+/// materially sensitive, before its class's absolute part is added.
 ///
 /// 5% is a declared engineering default (the Phase 1 fidelity presets are
 /// themselves "provisional engineering defaults, not calibrated scientific
 /// claims"), chosen so a refinement change an experiment's conclusion would turn
 /// on is reported rather than averaged away. It is recorded in every report's
-/// [`Tolerance`] block, so a reader never has to guess the threshold a verdict
-/// used.
+/// [`Tolerance`] block and in every metric's own [`MetricTolerance`], so a reader
+/// never has to guess the threshold a verdict used.
 pub const CONVERGENCE_TOLERANCE: f64 = 0.05;
+
+/// The declared absolute part of a countable metric's tolerance, in the metric's
+/// own unit: one record or one agent.
+///
+/// A count's smallest possible change is one whole unit, so one unit of drift is
+/// the count-metric noise floor the global relative tolerance could not express;
+/// a change of more than one unit has to clear the relative part as well.
+pub const CONVERGENCE_COUNT_TOLERANCE: f64 = 1.0;
 
 /// The Standard fidelity preset's name, whose step fixes the one simulated
 /// duration every fidelity covers.
@@ -139,10 +177,9 @@ const STANDARD_FIDELITY: &str = "standard";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConvergenceVerdict {
-    /// Every refinement step's change is within the declared tolerance.
+    /// Every refinement step's change is within the metric's tolerance.
     Converged,
-    /// The standard-to-fine change exceeds the declared tolerance, or is an
-    /// unbounded relative change against a zero coarser value: the metric is
+    /// The standard-to-fine change exceeds the metric's tolerance: the metric is
     /// materially sensitive to the fixed step.
     MateriallySensitive,
     /// No change could be measured: no seed reported a value at both steps of
@@ -152,8 +189,8 @@ pub enum ConvergenceVerdict {
 
 impl ConvergenceVerdict {
     /// The verdict one refinement step's tolerance reading implies: a step that
-    /// exceeds the tolerance is materially sensitive, a step within it is
-    /// converged, and a step with no measurable change is inconclusive.
+    /// exceeds the metric's tolerance is materially sensitive, a step within it
+    /// is converged, and a step with no measurable change is inconclusive.
     pub fn of(materially_sensitive: Option<bool>) -> Self {
         match materially_sensitive {
             Some(true) => Self::MateriallySensitive,
@@ -163,14 +200,60 @@ impl ConvergenceVerdict {
     }
 }
 
+/// The tolerance one metric's verdict was read against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricTolerance {
+    /// The metric's class, [`CONTINUOUS_CLASS`] or [`COUNT_CLASS`].
+    pub class: String,
+    /// The relative part of the tolerance: the fraction of the coarser value.
+    pub relative: f64,
+    /// The absolute part of the tolerance, in the metric's own unit; `0` for a
+    /// continuous metric.
+    pub absolute: f64,
+}
+
+impl MetricTolerance {
+    /// The tolerance a metric reported in `unit` is read against, with
+    /// `relative` as the declared relative part.
+    pub fn of(unit: &str, relative: f64) -> Self {
+        let countable = COUNT_UNITS.contains(&unit);
+        Self {
+            class: match countable {
+                true => COUNT_CLASS,
+                false => CONTINUOUS_CLASS,
+            }
+            .to_owned(),
+            relative,
+            absolute: match countable {
+                true => CONVERGENCE_COUNT_TOLERANCE,
+                false => 0.0,
+            },
+        }
+    }
+
+    /// The change at or below which a metric with a coarser value of
+    /// `reference` is converged.
+    fn scale(&self, reference: f64) -> f64 {
+        self.absolute + self.relative * reference.abs()
+    }
+}
+
 /// The documented tolerance every verdict in the report was read against.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tolerance {
-    /// The measure, [`TOLERANCE_MEASURE`].
+    /// The measure of a step's change that is reported beside the verdict,
+    /// [`TOLERANCE_MEASURE`].
     pub measure: String,
-    /// The declared tolerance, [`CONVERGENCE_TOLERANCE`] unless the caller
-    /// declared another.
-    pub value: f64,
+    /// The rule every metric's tolerance applies, [`TOLERANCE_RULE`].
+    pub rule: String,
+    /// The relative part every metric's tolerance carries,
+    /// [`CONVERGENCE_TOLERANCE`] unless the caller declared another.
+    pub relative: f64,
+    /// The absolute part a countable metric's tolerance adds, in that metric's
+    /// own unit, [`CONVERGENCE_COUNT_TOLERANCE`].
+    pub count_absolute: f64,
+    /// The units read as countable, [`COUNT_UNITS`].
+    pub count_units: Vec<String>,
     /// The denominator of the relative change, [`TOLERANCE_REFERENCE`].
     pub reference: String,
     /// The refinement step the metric verdict reads, [`VERDICT_REFINEMENT`].
@@ -178,11 +261,17 @@ pub struct Tolerance {
 }
 
 impl Tolerance {
-    /// The tolerance block for a declared `value`.
-    fn of(value: f64) -> Self {
+    /// The tolerance block for a declared `relative` part.
+    fn of(relative: f64) -> Self {
         Self {
             measure: TOLERANCE_MEASURE.to_owned(),
-            value,
+            rule: TOLERANCE_RULE.to_owned(),
+            relative,
+            count_absolute: CONVERGENCE_COUNT_TOLERANCE,
+            count_units: COUNT_UNITS
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<String>>(),
             reference: TOLERANCE_REFERENCE.to_owned(),
             verdict_refinement: VERDICT_REFINEMENT.to_owned(),
         }
@@ -231,11 +320,11 @@ pub struct RefinementStep {
     /// fidelity's, because side A is the minuend.
     pub paired: Option<PairedDistribution>,
     /// The relative change `|mean(to) - mean(from)| / |mean(from)|`, absent when
-    /// no seed is paired or when the coarser value is zero and the change is not
-    /// — an unbounded relative change, which the declared rule calls materially
-    /// sensitive.
+    /// no seed is paired or when the coarser value is zero and the change is not,
+    /// because that ratio has no scale there; the metric's tolerance decides that
+    /// case by its absolute part alone.
     pub relative_change: Option<f64>,
-    /// Whether this step's change exceeds the declared tolerance: `None` when no
+    /// Whether this step's change exceeds this metric's tolerance: `None` when no
     /// change is measurable.
     pub materially_sensitive: Option<bool>,
 }
@@ -247,6 +336,9 @@ pub struct MetricSensitivity {
     pub metric_definition_version: u32,
     /// The metric's unit, as metric definition v2 fixes it.
     pub unit: String,
+    /// The tolerance this metric's verdict was read against: its class, the
+    /// relative part, and the absolute part in the metric's own unit.
+    pub tolerance: MetricTolerance,
     /// The declared fidelity order: Fast, Standard, Fine.
     pub fidelities: Vec<FidelityValue>,
     /// The declared refinement order: Fast → Standard, Standard → Fine.
@@ -651,7 +743,7 @@ fn read_fidelity(preset: Preset, root: &Path) -> Result<FidelityReading, Converg
 fn sensitivity(
     values: [Option<&MetricDistribution>; 3],
     paired: [Option<&PairedDistribution>; 2],
-    tolerance: f64,
+    relative: f64,
 ) -> MetricSensitivity {
     let unit = values
         .iter()
@@ -659,6 +751,7 @@ fn sensitivity(
         .next()
         .map(|distribution| distribution.unit.clone())
         .expect("a metric key is read from a fidelity that reports it");
+    let tolerance = MetricTolerance::of(&unit, relative);
     let fidelities = PRESETS
         .iter()
         .zip(values)
@@ -668,28 +761,29 @@ fn sensitivity(
         })
         .collect();
     let refinements = vec![
-        refinement(PRESETS[0], PRESETS[1], values[0], paired[0], tolerance),
-        refinement(PRESETS[1], PRESETS[2], values[1], paired[1], tolerance),
+        refinement(PRESETS[0], PRESETS[1], values[0], paired[0], &tolerance),
+        refinement(PRESETS[1], PRESETS[2], values[1], paired[1], &tolerance),
     ];
     let verdict = ConvergenceVerdict::of(refinements[1].materially_sensitive);
 
     MetricSensitivity {
         metric_definition_version: METRIC_DEFINITION_VERSION,
         unit,
+        tolerance,
         fidelities,
         refinements,
         verdict,
     }
 }
 
-/// Build one refinement step: its paired change and the declared tolerance's
+/// Build one refinement step: its paired change and the metric's tolerance's
 /// reading of it.
 fn refinement(
     from: Preset,
     to: Preset,
     from_value: Option<&MetricDistribution>,
     paired: Option<&PairedDistribution>,
-    tolerance: f64,
+    tolerance: &MetricTolerance,
 ) -> RefinementStep {
     let change = paired.and_then(|distribution| distribution.mean_difference);
     let reference = from_value.and_then(|distribution| distribution.mean);
@@ -704,25 +798,29 @@ fn refinement(
     }
 }
 
-/// The declared tolerance's reading of one refinement step's change.
+/// The metric's tolerance reading of one refinement step's change.
 ///
 /// The change is the paired mean difference `to - from` over the shared seed
-/// bank and the reference is the coarser fidelity's across-seed mean. A change
-/// against a zero reference has no relative scale: a zero change is converged
-/// and any other change is an unbounded relative change, which the declared rule
-/// calls materially sensitive. A step with no change at all — no seed reported a
-/// value at both fidelities — is not comparable.
+/// bank and the reference is the coarser fidelity's across-seed mean. The metric
+/// is materially sensitive when the change exceeds its tolerance: the absolute
+/// part plus the relative part times the reference's magnitude. The reported
+/// relative change `|change| / |reference|` is absent against a zero reference,
+/// where that ratio has no scale, and the absolute part alone decides. A step
+/// with no change at all — no seed reported a value at both fidelities — is not
+/// comparable.
 fn assess(
     change: Option<f64>,
     reference: Option<f64>,
-    tolerance: f64,
+    tolerance: &MetricTolerance,
 ) -> (Option<f64>, Option<bool>) {
     match (change, reference) {
-        (Some(change), Some(reference)) if reference != 0.0 => {
-            let relative_change = change.abs() / reference.abs();
-            (Some(relative_change), Some(relative_change > tolerance))
+        (Some(change), Some(reference)) => {
+            let relative_change = (reference != 0.0).then(|| change.abs() / reference.abs());
+            (
+                relative_change,
+                Some(change.abs() > tolerance.scale(reference)),
+            )
         }
-        (Some(change), Some(_)) => (None, Some(change != 0.0)),
         _ => (None, None),
     }
 }
@@ -756,40 +854,82 @@ mod tests {
         assert_eq!(fidelity_ticks(PRESETS[2].step_s, 60), 150);
     }
 
-    /// The declared tolerance is a strict threshold on the relative change, and
-    /// a zero reference is unbounded rather than approximated.
+    /// The per-metric tolerance is a strict threshold on the change: the
+    /// absolute part plus the relative part times the coarser value's magnitude.
+    /// A count metric's absolute part is what lets a zero reference judge a
+    /// one-record change as noise rather than as an unbounded relative change.
     #[test]
-    fn the_tolerance_is_a_strict_relative_threshold() {
+    fn the_tolerance_is_a_strict_absolute_plus_relative_threshold() {
+        let continuous = MetricTolerance::of("seconds", 0.25);
+        assert_eq!(continuous.class, CONTINUOUS_CLASS);
+        assert_eq!(continuous.absolute, 0.0);
+
         // A change of exactly the tolerance is converged: the rule is "exceeds".
         assert_eq!(
-            assess(Some(0.25), Some(1.0), 0.25),
+            assess(Some(0.25), Some(1.0), &continuous),
             (Some(0.25), Some(false))
         );
         assert_eq!(
-            assess(Some(0.250_000_1), Some(1.0), 0.25),
+            assess(Some(0.250_000_1), Some(1.0), &continuous),
             (Some(0.250_000_1), Some(true))
         );
         assert_eq!(
-            assess(Some(-0.5), Some(1.0), 0.05),
+            assess(Some(-0.5), Some(1.0), &continuous),
             (Some(0.5), Some(true)),
             "the measure is the magnitude of the change"
         );
         // A negative coarser value is a scale, not a sign: the reference is its
         // magnitude, like the change.
         assert_eq!(
-            assess(Some(0.05), Some(-1.0), 0.05),
+            assess(Some(0.05), Some(-1.0), &continuous),
             (Some(0.05), Some(false))
         );
 
-        // A zero reference has no relative scale.
-        assert_eq!(assess(Some(0.0), Some(0.0), 0.05), (None, Some(false)));
-        assert_eq!(assess(Some(2.0), Some(0.0), 0.05), (None, Some(true)));
-        assert_eq!(assess(Some(-2.0), Some(0.0), 0.05), (None, Some(true)));
+        // A zero reference has no relative scale, so the absolute part decides:
+        // a continuous metric has none, and a count metric has one unit.
+        assert_eq!(
+            assess(Some(0.0), Some(0.0), &continuous),
+            (None, Some(false))
+        );
+        assert_eq!(
+            assess(Some(2.0), Some(0.0), &continuous),
+            (None, Some(true))
+        );
+        assert_eq!(
+            assess(Some(-2.0), Some(0.0), &continuous),
+            (None, Some(true))
+        );
+
+        let count = MetricTolerance::of("records", 0.05);
+        assert_eq!(count.class, COUNT_CLASS);
+        assert_eq!(count.absolute, CONVERGENCE_COUNT_TOLERANCE);
+        assert_eq!(count.scale(0.0), 1.0);
+        // One record of drift is noise, from zero or from a value.
+        assert_eq!(assess(Some(1.0), Some(0.0), &count), (None, Some(false)));
+        assert_eq!(assess(Some(0.0), Some(0.0), &count), (None, Some(false)));
+        assert_eq!(
+            assess(Some(1.0), Some(10.0), &count),
+            (Some(0.1), Some(false))
+        );
+        // More than the absolute part has to clear the relative part too.
+        assert_eq!(assess(Some(2.0), Some(0.0), &count), (None, Some(true)));
+        assert_eq!(
+            assess(Some(2.0), Some(10.0), &count),
+            (Some(0.2), Some(true))
+        );
+        assert_eq!(assess(Some(-2.0), Some(0.0), &count), (None, Some(true)));
+        // Agents per second is a rate, not a count of agents.
+        assert_eq!(
+            MetricTolerance::of("agents_per_second", 0.05).class,
+            CONTINUOUS_CLASS
+        );
+        assert_eq!(MetricTolerance::of("agents", 0.05).class, COUNT_CLASS);
+        assert_eq!(COUNT_UNITS, ["records", "agents"]);
 
         // No change to measure is not a converged change.
-        assert_eq!(assess(None, Some(1.0), 0.05), (None, None));
-        assert_eq!(assess(Some(1.0), None, 0.05), (None, None));
-        assert_eq!(assess(None, None, 0.05), (None, None));
+        assert_eq!(assess(None, Some(1.0), &continuous), (None, None));
+        assert_eq!(assess(Some(1.0), None, &continuous), (None, None));
+        assert_eq!(assess(None, None, &continuous), (None, None));
 
         assert_eq!(
             ConvergenceVerdict::of(Some(true)),
