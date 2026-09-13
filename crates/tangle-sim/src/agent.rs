@@ -9,6 +9,7 @@ use glam::DVec2;
 use tangle_model::{BodyKind, CrossingId, MovementId, PathId, PedestrianRouteId};
 
 use crate::compliance::ComplianceDecision;
+use crate::narrow::NarrowProfile;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
 
@@ -91,8 +92,15 @@ pub(crate) struct AgentInit {
     /// Assigned vehicle route, present for demand-generated vehicles.
     pub movement: Option<MovementId>,
     /// Sampled physical and behavior profile, present for demand-generated
-    /// vehicles.
+    /// vehicles. A narrow wheeled agent carries the shared longitudinal
+    /// projection of its [`NarrowProfile`] here, so every shared stage reads one
+    /// profile.
     pub profile: Option<VehicleProfile>,
+    /// Sampled narrow wheeled parameter set, present only for a narrow mode
+    /// (a capsule that steers); `None` for a passenger car and the scripted
+    /// population. Carries the narrow-specific steering and lateral-clearance
+    /// parameters the longitudinal model does not read.
+    pub narrow_profile: Option<NarrowProfile>,
     /// Assigned pedestrian route, present for demand-generated pedestrians.
     pub pedestrian_route: Option<PedestrianRouteId>,
     /// Sampled pedestrian body and gait, present for demand-generated
@@ -115,6 +123,12 @@ pub(crate) struct AgentStore {
     pub(crate) direction: Vec<f64>,
     pub(crate) movement: Vec<Option<MovementId>>,
     pub(crate) profile: Vec<Option<VehicleProfile>>,
+    pub(crate) narrow_profile: Vec<Option<NarrowProfile>>,
+    /// Envelope kind of each body, derived once at spawn from the mode and the
+    /// narrow profile: a vehicle is a box, a narrow mode a capsule, and a
+    /// pedestrian a circle. Snapshot output reads it so a capsule body is
+    /// reported without a mode branch.
+    pub(crate) body_kind: Vec<BodyKind>,
     pub(crate) pedestrian_route: Vec<Option<PedestrianRouteId>>,
     pub(crate) pedestrian_profile: Vec<Option<PedestrianProfile>>,
     /// Index of the pedestrian's next waypoint target along its route. Always
@@ -149,6 +163,12 @@ impl AgentStore {
         self.direction.push(init.direction);
         self.movement.push(init.movement);
         self.profile.push(init.profile);
+        self.body_kind.push(match (init.mode, init.narrow_profile) {
+            (AgentMode::Pedestrian, _) => BodyKind::Circle,
+            (AgentMode::Vehicle, Some(_)) => BodyKind::Capsule,
+            (AgentMode::Vehicle, None) => BodyKind::Box,
+        });
+        self.narrow_profile.push(init.narrow_profile);
         self.pedestrian_route.push(init.pedestrian_route);
         self.pedestrian_profile.push(init.pedestrian_profile);
         self.pedestrian_waypoint_index.push(0);
@@ -186,6 +206,7 @@ mod tests {
             direction: 1.0,
             movement: None,
             profile: None,
+            narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
         }

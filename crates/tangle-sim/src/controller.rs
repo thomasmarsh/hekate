@@ -4,13 +4,20 @@
 //! # The seam
 //!
 //! The kernel never calls a concrete motion model. [`crate::Simulation`] drives
-//! each mode through [`ControllerModels`], a pair of boxed trait objects:
+//! each mode through [`ControllerModels`], a set of boxed trait objects:
 //!
 //! - [`VehicleController`] answers the vehicle longitudinal question: given a
 //!   sampled profile, the vehicle's speed, and the constraints ahead, what
 //!   acceleration does the vehicle command for this step? Its initial
 //!   implementation is [`IdmController`], the documented Intelligent Driver
 //!   Model in [`crate::control`].
+//! - [`crate::narrow::NarrowWheeledController`] answers the same longitudinal
+//!   question for the narrow wheeled family (a capsule that steers): given a
+//!   sampled narrow profile, the agent's speed, and the constraints ahead, what
+//!   acceleration does it command? Its initial implementation is
+//!   [`crate::narrow::IdmNarrowWheeledController`], the shared IDM law under a
+//!   narrow profile, documented by the bicycle and scooter cards in
+//!   [`crate::narrow`].
 //! - [`PedestrianController`] answers the pedestrian question: given a sampled
 //!   profile, the pedestrian's world state, and the nearby bodies, which
 //!   heading and speed target does it command, and how far may this step's
@@ -42,6 +49,7 @@
 //! | Model | Family | Card |
 //! |---|---|---|
 //! | [`IdmController`] | Intelligent Driver Model, Treiber, Hennecke & Helbing (2000) | [`crate::control`] |
+//! | [`crate::narrow::IdmNarrowWheeledController`] | Intelligent Driver Model under a narrow wheeled profile | [`crate::narrow`] |
 //! | [`WaypointController`] | pure-pursuit waypoint seeking, Coulter (1992), with a bounded social-force-style repulsion, Helbing & Molnár (1995) | [`crate::pedestrian`] |
 //!
 //! Each card follows the checked-in template
@@ -52,11 +60,18 @@
 //! assumptions, parameter sources, validated ranges, known failure modes, and
 //! incompatible fidelity settings, with its equations or steering law in
 //! between; the pedestrian card additionally states its waypoints and its
-//! determinism. This module adds no third model: the vehicle longitudinal model
-//! and the pedestrian model are the two Phase 1 modes, and `PHASE_2_PLAN.md`
-//! owns any deferred mode.
+//! determinism. The narrow wheeled family carries one card per mode
+//! (bicycle and scooter) in the module that implements the shared model.
+//!
+//! # Scope
+//!
+//! This seam indexes the models the kernel holds. The narrow wheeled model is
+//! held here for the family the spawn path dispatches on; wiring narrow-mode
+//! spawning and the family dispatch through the four stages is the tracked
+//! follow-up, so no agent reaches the narrow model yet.
 
 use crate::control::{self, Constraint};
+use crate::narrow::{self, NarrowWheeledController};
 use crate::pedestrian::{self, Conflict, PedestrianState, Steering};
 use crate::profile::{PedestrianProfile, VehicleProfile};
 
@@ -183,24 +198,28 @@ impl PedestrianController for WaypointController {
     }
 }
 
-/// The pair of motion models the kernel drives its interaction logic through.
+/// The motion models the kernel drives its interaction logic through.
 ///
-/// [`Simulation`](crate::Simulation) holds one of these, so both modes are
+/// [`Simulation`](crate::Simulation) holds one of these, so each family is
 /// reachable through an interface rather than through a module function call.
 #[derive(Debug)]
 pub(crate) struct ControllerModels {
     /// The vehicle longitudinal model.
     pub(crate) vehicle: Box<dyn VehicleController>,
+    /// The narrow wheeled longitudinal model.
+    pub(crate) narrow: Box<dyn NarrowWheeledController>,
     /// The pedestrian model.
     pub(crate) pedestrian: Box<dyn PedestrianController>,
 }
 
 impl ControllerModels {
-    /// The Phase 1 initial models: IDM for vehicles and the waypoint controller
-    /// for pedestrians.
+    /// The initial models: IDM for vehicles, the shared IDM law under a narrow
+    /// profile for the narrow wheeled family, and the waypoint controller for
+    /// pedestrians.
     pub(crate) fn initial() -> Self {
         Self {
             vehicle: Box::new(IdmController),
+            narrow: Box::new(narrow::IdmNarrowWheeledController),
             pedestrian: Box::new(WaypointController),
         }
     }
@@ -209,6 +228,7 @@ impl ControllerModels {
     pub(crate) fn names(&self) -> ControllerModelNames {
         ControllerModelNames {
             vehicle: self.vehicle.name(),
+            narrow: self.narrow.name(),
             pedestrian: self.pedestrian.name(),
         }
     }
@@ -223,6 +243,8 @@ impl ControllerModels {
 pub struct ControllerModelNames {
     /// The vehicle longitudinal model in use.
     pub vehicle: &'static str,
+    /// The narrow wheeled longitudinal model in use.
+    pub narrow: &'static str,
     /// The pedestrian model in use.
     pub pedestrian: &'static str,
 }
@@ -231,6 +253,7 @@ pub struct ControllerModelNames {
 mod tests {
     use super::*;
     use crate::agent::AgentMode;
+    use crate::narrow::NarrowProfile;
     use crate::sim::Simulation;
     use crate::{RunConfig, SnapshotDetail};
     use glam::DVec2;
@@ -336,6 +359,26 @@ mod tests {
         }
     }
 
+    /// A narrow wheeled model that commands a standstill, so its motion is
+    /// unmistakably not the shared IDM law's.
+    #[derive(Debug)]
+    struct StandstillNarrowController;
+
+    impl NarrowWheeledController for StandstillNarrowController {
+        fn name(&self) -> &'static str {
+            "standstill narrow test double"
+        }
+
+        fn desired_acceleration(
+            &self,
+            _profile: &NarrowProfile,
+            _speed_mps: f64,
+            _constraints: &[Constraint],
+        ) -> f64 {
+            0.0
+        }
+    }
+
     /// A pedestrian model that commands a standstill and no spacing cap, so its
     /// motion is unmistakably not the waypoint controller's.
     #[derive(Debug)]
@@ -375,21 +418,24 @@ mod tests {
     fn stubs() -> ControllerModels {
         ControllerModels {
             vehicle: Box::new(FixedBrakeController),
+            narrow: Box::new(StandstillNarrowController),
             pedestrian: Box::new(StandstillController),
         }
     }
 
     const STUB_NAMES: ControllerModelNames = ControllerModelNames {
         vehicle: "fixed-brake test double",
+        narrow: "standstill narrow test double",
         pedestrian: "standstill test double",
     };
 
     #[test]
-    fn the_initial_models_are_idm_and_the_waypoint_controller() {
+    fn the_initial_models_are_idm_the_narrow_idm_and_the_waypoint_controller() {
         assert_eq!(
             sim(3).controller_models(),
             ControllerModelNames {
                 vehicle: "idm",
+                narrow: "idm-narrow",
                 pedestrian: "waypoint",
             }
         );
@@ -413,6 +459,7 @@ mod tests {
             initial_sim.controller_models(),
             ControllerModelNames {
                 vehicle: "idm",
+                narrow: "idm-narrow",
                 pedestrian: "waypoint",
             }
         );

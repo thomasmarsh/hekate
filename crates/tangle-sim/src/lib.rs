@@ -42,6 +42,7 @@ mod demand;
 mod event;
 mod index;
 mod metrics;
+mod narrow;
 pub mod pedestrian;
 mod pedestrian_compliance;
 mod profile;
@@ -70,6 +71,7 @@ pub use metrics::{
     RegionOccupancy, SEPARATION_RESOLUTION_M, TTC_HORIZON_S, TTC_TIME_TOLERANCE_S,
     tick_minimum_clearance_m, time_to_collision,
 };
+pub use narrow::NarrowProfile;
 pub use pedestrian::{PedestrianWaypoint, PedestrianZone};
 pub use pedestrian_compliance::{
     PedestrianComplianceDecision, PedestrianComplianceReason, PedestrianSignalAction,

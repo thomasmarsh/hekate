@@ -2080,6 +2080,11 @@ pub struct CompiledScenario {
     pedestrian_profiles: CompiledPedestrianProfile,
     population: PopulationSource,
     mode_templates: Vec<CompiledModeTemplate>,
+    /// Mode template a version-2 demand source produces, parallel to
+    /// [`Self::demand`] and indexed by [`DemandId`]. The version-1 view has no
+    /// mode templates, so every entry is `None` there; `compile_v2` fills the
+    /// authored template of each mode-tagged demand source.
+    demand_modes: Vec<Option<ModeTemplateId>>,
     facilities: Vec<CompiledFacility>,
     facility_connectors: Vec<CompiledFacilityConnector>,
     id_map: IdMap,
@@ -2130,9 +2135,22 @@ impl CompiledScenario {
                 .iter()
                 .map(|connector| &connector.id),
         );
+        // Each mode-tagged demand source's template, in the same order the
+        // shared version-1 view materializes its `demand` array. Validation has
+        // already rejected an undeclared mode, so an entry is always found.
+        let demand_modes: Vec<Option<ModeTemplateId>> = source
+            .demand
+            .iter()
+            .map(|entry| {
+                mode_template_index
+                    .get(entry.mode.as_str())
+                    .map(|&index| ModeTemplateId::from_index(index))
+            })
+            .collect();
 
         let mut scenario = Self::compile_validated(v2_to_v1_view(source));
         scenario.mode_templates = mode_templates;
+        scenario.demand_modes = demand_modes;
         scenario.facilities = facilities;
         scenario.facility_connectors = facility_connectors;
         scenario.id_map.facilities = facility_names;
@@ -2406,6 +2424,7 @@ impl CompiledScenario {
             // The Increment 1 compiled shapes are version-2 only; `compile_v2`
             // fills them after this shared version-1 view.
             mode_templates: Vec::new(),
+            demand_modes: Vec::new(),
             facilities: Vec::new(),
             facility_connectors: Vec::new(),
             id_map,
@@ -2508,6 +2527,17 @@ impl CompiledScenario {
     /// authored `mode_templates[]` entry.
     pub fn mode_templates(&self) -> &[CompiledModeTemplate] {
         &self.mode_templates
+    }
+
+    /// The mode template a compiled vehicle demand source produces, or `None`
+    /// when the scenario authored no mode tag (every version-1 demand, and the
+    /// version-2 pedestrian demand materialized separately).
+    ///
+    /// This is the demand-to-mode link the kernel reads to select an agent's
+    /// family and profile at spawn; it is parallel to [`Self::demand`] and
+    /// indexed the same way, so it is `None` for a version-1 source.
+    pub fn demand_mode(&self, id: DemandId) -> Option<ModeTemplateId> {
+        self.demand_modes.get(id.index()).copied().flatten()
     }
 
     /// Compiled continuous-width facilities in dense-index order.

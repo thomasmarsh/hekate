@@ -1549,6 +1549,7 @@ mod tests {
             direction: 1.0,
             movement: None,
             profile: None,
+            narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
         })
@@ -1872,6 +1873,7 @@ mod tests {
             direction: 1.0,
             movement,
             profile: None,
+            narrow_profile: None,
             pedestrian_route,
             pedestrian_profile: None,
         })

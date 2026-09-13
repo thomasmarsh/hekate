@@ -37,9 +37,9 @@
 
 use glam::DVec2;
 use tangle_model::{
-    CompiledMovement, CompiledPath, CompiledPedestrianRoute, CompiledScenario, CrossingId,
-    DemandId, MovementId, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PortalId,
-    RuleKind, SignalColor, SignalId,
+    AgentFamily, CompiledMovement, CompiledPath, CompiledPedestrianRoute, CompiledScenario,
+    CrossingId, DemandId, ModeTemplateId, MovementId, PathEnd, PathId, PedestrianDemandId,
+    PedestrianRouteId, PortalId, RuleKind, SignalColor, SignalId,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore};
@@ -51,6 +51,7 @@ use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, 
 use crate::event::{DespawnReason, Event, ViolationKind};
 use crate::index::{self, SpatialIndex};
 use crate::metrics::InteractionMetrics;
+use crate::narrow::{self, sample_narrow_profile};
 use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
 use crate::profile::{
@@ -355,6 +356,7 @@ impl Simulation {
                     direction: 1.0,
                     movement: None,
                     profile: None,
+                    narrow_profile: None,
                     pedestrian_route: None,
                     pedestrian_profile: None,
                 });
@@ -422,7 +424,7 @@ impl Simulation {
                 motion: match detail {
                     SnapshotDetail::Position => None,
                     SnapshotDetail::Full => Some(MotionSample {
-                        body_kind: self.agents.mode[index].body_kind(),
+                        body_kind: self.agents.body_kind[index],
                         // A Phase 1 body is a single box or circle envelope, so
                         // it carries no ordered segments yet.
                         segments: Vec::new(),
@@ -515,7 +517,23 @@ impl Simulation {
         self.agents.movement.get(agent.index()).copied().flatten()
     }
 
-    /// Sampled profile of an agent, present for demand-generated vehicles.
+    /// Sampled narrow wheeled profile of a narrow mode agent.
+    ///
+    /// Present exactly for a narrow wheeled agent (a capsule that steers),
+    /// carrying its narrow-specific steering and lateral-clearance parameters;
+    /// `None` for a passenger car, the scripted population, and a pedestrian.
+    /// The shared longitudinal parameters are the same agent's
+    /// [`Simulation::agent_profile`].
+    pub fn agent_narrow_profile(&self, agent: AgentId) -> Option<narrow::NarrowProfile> {
+        self.agents
+            .narrow_profile
+            .get(agent.index())
+            .copied()
+            .flatten()
+    }
+
+    /// Sampled longitudinal profile of an agent, present for demand-generated
+    /// vehicles and narrow modes.
     pub fn agent_profile(&self, agent: AgentId) -> Option<VehicleProfile> {
         self.agents.profile.get(agent.index()).copied().flatten()
     }
@@ -664,9 +682,10 @@ impl Simulation {
 
     /// Names of the motion models this run drives.
     ///
-    /// The kernel reaches the vehicle longitudinal model and the pedestrian
-    /// model through the interfaces in [`crate::controller`], so this reports
-    /// the model identities a trace was produced with.
+    /// The kernel reaches the vehicle longitudinal model, the narrow wheeled
+    /// longitudinal model, and the pedestrian model through the interfaces in
+    /// [`crate::controller`], so this reports the model identities a trace was
+    /// produced with.
     pub fn controller_models(&self) -> ControllerModelNames {
         self.controllers.names()
     }
@@ -1257,8 +1276,12 @@ impl Simulation {
         // Admit in FIFO order per source, stopping at the first blocked arrival
         // so a queue stays ordered and does not jump later arrivals ahead.
         for runtime in 0..self.demand.len() {
+            // The mode template this source produces; `None` for a version-1
+            // source with no mode tag, which keeps the car path unchanged.
+            let source = self.demand[runtime].source;
+            let mode = self.scenario.demand_mode(DemandId::from_index(source));
             while let Some(&movement) = self.demand[runtime].pending.front() {
-                if self.try_admit(movement) {
+                if self.try_admit(movement, mode) {
                     self.demand[runtime].pending.pop_front();
                 } else {
                     break;
@@ -1312,7 +1335,13 @@ impl Simulation {
     }
 
     /// Admit one demand vehicle on `movement` when the portal entry is clear.
-    fn try_admit(&mut self, movement_id: MovementId) -> bool {
+    ///
+    /// `mode` is the mode template the source produces, or `None` for a
+    /// version-1 source. A capsule template spawns the narrow wheeled family
+    /// (a narrow profile and a capsule body); every other mode, and a version-1
+    /// source, keeps the passenger-car path. The branch is on the compiled
+    /// family, never on a template id.
+    fn try_admit(&mut self, movement_id: MovementId, mode: Option<ModeTemplateId>) -> bool {
         let Some((path_id, entry_distance, direction)) =
             self.scenario.movement(movement_id).map(|movement| {
                 let (entry_distance, direction) = movement_entry(&self.scenario, movement);
@@ -1325,13 +1354,28 @@ impl Simulation {
         // The profile is derived from the stable agent id, so a blocked arrival
         // re-derives the same profile on the next attempt. Physical/longitudinal
         // parameters use the `profile` stream and the compliance propensity the
-        // `compliance` stream; the two never share a generator.
+        // `compliance` stream; the two never share a generator. A narrow wheeled
+        // mode draws from the same per-agent streams and projects onto the
+        // shared longitudinal profile, so the shared stages stay one code path.
         let agent_id = AgentId::from_index(self.agents.len());
-        let profile = sample_profile(
-            self.scenario.profiles(),
-            &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
-            &mut derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get()),
-        );
+        let narrow_profile = match mode.and_then(|id| self.scenario.mode_template(id)) {
+            Some(template) if template.family() == Some(AgentFamily::WheeledCapsule) => {
+                Some(sample_narrow_profile(
+                    template,
+                    &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
+                    &mut derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get()),
+                ))
+            }
+            _ => None,
+        };
+        let profile = match narrow_profile {
+            Some(narrow) => narrow.vehicle_profile(),
+            None => sample_profile(
+                self.scenario.profiles(),
+                &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
+                &mut derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get()),
+            ),
+        };
         if !self.entry_clear(path_id, entry_distance, profile.length_m) {
             return false;
         }
@@ -1358,6 +1402,7 @@ impl Simulation {
             direction,
             movement: Some(movement_id),
             profile: Some(profile),
+            narrow_profile,
             pedestrian_route: None,
             pedestrian_profile: None,
         });
@@ -1440,6 +1485,7 @@ impl Simulation {
             direction,
             movement: None,
             profile: None,
+            narrow_profile: None,
             pedestrian_route: Some(route_id),
             pedestrian_profile: Some(profile),
         });
@@ -1560,6 +1606,7 @@ impl Simulation {
         };
         Observation::Vehicle(VehicleObservation {
             profile,
+            narrow: self.agents.narrow_profile[index],
             speed_mps: self.agents.speed_mps[index],
             leader,
             stop_line,
@@ -1737,11 +1784,21 @@ impl MotionControl for Simulation {
                     count += 1;
                 }
 
-                let accel = self.controllers.vehicle.desired_acceleration(
-                    &profile,
-                    vehicle.speed_mps,
-                    &constraints[..count],
-                );
+                // A narrow mode reaches the narrow wheeled model; every other
+                // path-following agent reaches the vehicle model. The dispatch
+                // is on the agent's own profile, never on a mode name.
+                let accel = match vehicle.narrow {
+                    Some(narrow) => self.controllers.narrow.desired_acceleration(
+                        &narrow,
+                        vehicle.speed_mps,
+                        &constraints[..count],
+                    ),
+                    None => self.controllers.vehicle.desired_acceleration(
+                        &profile,
+                        vehicle.speed_mps,
+                        &constraints[..count],
+                    ),
+                };
                 let mut new_speed =
                     (vehicle.speed_mps + accel * dt).clamp(0.0, profile.desired_speed_mps);
 
@@ -1987,6 +2044,7 @@ mod tests {
     use super::*;
     use crate::config::DEFAULT_STEP;
     use crate::controller::{VehicleController, WaypointController};
+    use crate::narrow;
     use crate::units::Seconds;
     use tangle_model::{
         AgentBody, CompiledModeTemplate, CompiledScenario, ProfileRange, compile_mode_template,
@@ -2304,6 +2362,7 @@ mod tests {
             direction: 1.0,
             movement: None,
             profile: Some(profile),
+            narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
         });
@@ -2412,6 +2471,7 @@ mod tests {
             direction: 1.0,
             movement: None,
             profile: None,
+            narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
         });
@@ -2569,6 +2629,7 @@ mod tests {
         let gap_m = 0.5;
         let observation = Observation::Vehicle(VehicleObservation {
             profile: Some(profile),
+            narrow: None,
             speed_mps: 12.0,
             leader: None,
             stop_line: Some(Constraint {
@@ -2654,6 +2715,7 @@ mod tests {
         sim.agents.profile[0] = Some(constant_vehicle_profile(12.0));
         sim.set_controller_models(ControllerModels {
             vehicle: Box::new(FixedBrakeModel),
+            narrow: Box::new(narrow::IdmNarrowWheeledController),
             pedestrian: Box::new(WaypointController),
         });
         let dt = sim.config().step().as_secs();
@@ -2904,6 +2966,7 @@ mod tests {
         // caps the command's deceleration.
         let stop = Observation::Vehicle(VehicleObservation {
             profile: Some(profile),
+            narrow: None,
             speed_mps: profile.desired_speed_mps,
             leader: None,
             stop_line: Some(Constraint {

@@ -243,15 +243,38 @@ pub(crate) fn desired_acceleration(
     speed_mps: f64,
     constraints: &[Constraint],
 ) -> f64 {
-    let a_max = profile.max_accel_mps2;
-    let b = profile.comfortable_brake_mps2;
+    idm_acceleration(
+        profile.max_accel_mps2,
+        profile.comfortable_brake_mps2,
+        profile.desired_speed_mps,
+        profile.time_gap_s,
+        speed_mps,
+        constraints,
+    )
+}
+
+/// Commanded acceleration in m/s² for one IDM parameter set.
+///
+/// This is the IDM law itself, parameterized by `a_max`, `b`, `v0`, and `T`
+/// rather than by a [`VehicleProfile`], so the narrow wheeled family
+/// ([`crate::narrow`]) reaches the same law under its own sampled profile. The
+/// result is clamped to `[-b, +a_max]`; the kernel applies the position caps
+/// outside this command.
+pub(crate) fn idm_acceleration(
+    a_max: f64,
+    b: f64,
+    v0: f64,
+    time_gap_s: f64,
+    speed_mps: f64,
+    constraints: &[Constraint],
+) -> f64 {
     let v = speed_mps.max(0.0);
-    let v0 = profile.desired_speed_mps.max(f64::MIN_POSITIVE);
+    let v0 = v0.max(f64::MIN_POSITIVE);
 
     let free = 1.0 - (v / v0).powi(IDM_FREE_FLOW_EXPONENT as i32);
     let mut interaction = 0.0;
     for constraint in constraints {
-        interaction += interaction_term(profile, v, constraint, a_max, b);
+        interaction += interaction_term(time_gap_s, v, constraint, a_max, b);
     }
 
     (a_max * (free - interaction)).clamp(-b, a_max)
@@ -259,7 +282,7 @@ pub(crate) fn desired_acceleration(
 
 /// The `(s* / gap)^2` interaction term of one constraint.
 fn interaction_term(
-    profile: &VehicleProfile,
+    time_gap_s: f64,
     speed_mps: f64,
     constraint: &Constraint,
     a_max: f64,
@@ -272,9 +295,9 @@ fn interaction_term(
     let closing = speed_mps - constraint.speed_mps;
     let sqrt_ab = (a_max * b).sqrt();
     let dynamic = if sqrt_ab > 0.0 {
-        speed_mps * profile.time_gap_s + speed_mps * closing / (2.0 * sqrt_ab)
+        speed_mps * time_gap_s + speed_mps * closing / (2.0 * sqrt_ab)
     } else {
-        speed_mps * profile.time_gap_s
+        speed_mps * time_gap_s
     };
     let desired = constraint.standstill_m + dynamic.max(0.0);
     (desired / gap).powi(2)

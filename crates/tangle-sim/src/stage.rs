@@ -36,6 +36,7 @@ use tangle_model::CrossingId;
 
 use crate::agent::AgentId;
 use crate::control::Constraint;
+use crate::narrow::NarrowProfile;
 use crate::pedestrian::{Conflict, PedestrianState, PedestrianWaypoint};
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
@@ -125,6 +126,12 @@ pub(crate) struct VehicleObservation {
     /// Sampled behavior profile; `None` for the walking skeleton's scripted
     /// constant-speed population, which has no model to command.
     pub(crate) profile: Option<VehicleProfile>,
+    /// The narrow wheeled parameter set when this path-following agent is a
+    /// narrow mode (a capsule that steers); `None` for a passenger car and the
+    /// scripted population. The kernel uses it to reach the narrow wheeled
+    /// model; `profile` still carries the same agent's shared longitudinal
+    /// parameters, so every shared constraint and cap reads one profile.
+    pub(crate) narrow: Option<NarrowProfile>,
     /// Current speed in metres per second.
     pub(crate) speed_mps: f64,
     /// Nearest live leader ahead and the following constraint it imposes.

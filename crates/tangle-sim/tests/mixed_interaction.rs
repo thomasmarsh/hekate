@@ -876,6 +876,7 @@ fn the_mixed_benchmark_shares_one_world_one_rule_and_one_event_stream() {
         sim.controller_models(),
         ControllerModelNames {
             vehicle: "idm",
+            narrow: "idm-narrow",
             pedestrian: "waypoint",
         }
     );
