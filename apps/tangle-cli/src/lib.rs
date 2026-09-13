@@ -61,9 +61,9 @@ pub use run_dir::{
     TrajectorySampling, write_run_directory,
 };
 pub use run_metrics::{
-    EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue,
-    MovementMinima, OperationalMetrics, OperationalValues, RunMetrics, RunMetricsArtifact,
-    RunMetricsRecorder,
+    EVENT_FAMILY_LABELS, EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
+    MetricValue, MovementMinima, OperationalMetrics, OperationalValues, RunMetrics,
+    RunMetricsArtifact, RunMetricsRecorder,
 };
 pub use seed_bank::{
     LoadedSeedBank, SEED_BANK_VERSION, SeedBank, SeedBankError, SeedBankReference, read_seed_bank,

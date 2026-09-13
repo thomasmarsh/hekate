@@ -20,8 +20,8 @@ use std::process::{Command, Output};
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     AGGREGATION_FILE, AGGREGATION_VERSION, AggregateError, Aggregation, BATCH_MANIFEST_FILE,
-    BatchManifest, BatchRequest, BatchRun, BatchSpec, CONFIDENCE_LEVEL, EventCounts,
-    LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MANIFEST_FILE,
+    BatchManifest, BatchRequest, BatchRun, BatchSpec, CONFIDENCE_LEVEL, EVENT_FAMILY_LABELS,
+    EventCounts, LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MANIFEST_FILE,
     METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus, MetricValue,
     MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues, RunMetricsArtifact,
     SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch, load_scenario_hashed,
@@ -195,7 +195,15 @@ fn movement_bucket(
 }
 
 /// Event counts with every family present and `collisions` set.
-fn event_counts(collisions: u64) -> EventCounts {
+///
+/// `by_mode` and `by_movement` are keyed by the mode or movement the caller
+/// names, and are transposed into the run artifact's own shape, whose outer key
+/// is the family and whose inner key is the mode or movement.
+fn event_counts(
+    collisions: u64,
+    by_mode: &BTreeMap<String, BTreeMap<String, u64>>,
+    by_movement: &BTreeMap<String, BTreeMap<String, u64>>,
+) -> EventCounts {
     let mut by_family: BTreeMap<String, u64> = FAMILIES
         .into_iter()
         .map(|family| (family.to_owned(), 0))
@@ -210,12 +218,44 @@ fn event_counts(collisions: u64) -> EventCounts {
             )
         })
         .collect();
+    // Every family is present in the transposed map, `0` for the modes and
+    // movements the caller did not name: the run artifact's own `by_family` set
+    // always holds all ten, and a count of an absent family is an observed zero.
+    let transpose = |slices: &BTreeMap<String, BTreeMap<String, u64>>| {
+        FAMILIES
+            .into_iter()
+            .map(|family| {
+                let counts = slices
+                    .iter()
+                    .map(|(key, counts)| (key.clone(), counts.get(family).copied().unwrap_or(0)))
+                    .collect();
+                (family.to_owned(), counts)
+            })
+            .collect()
+    };
     EventCounts {
         total: by_family.values().sum(),
         by_family,
         by_family_kind,
-        by_family_mode: BTreeMap::new(),
-        by_family_movement: BTreeMap::new(),
+        by_family_mode: transpose(by_mode),
+        by_family_movement: transpose(by_movement),
+    }
+}
+
+/// One operational bucket with every metric reported at `value` and `agents`
+/// standing agents queued, so a test can read a known value back.
+fn operational_bucket(value: f64, agents: f64) -> OperationalValues {
+    OperationalValues {
+        throughput_agents_per_s: reported(value),
+        mean_travel_time_s: reported(value),
+        total_travel_time_s: reported(value),
+        mean_stopped_delay_s: reported(value),
+        total_stopped_delay_s: reported(value),
+        mean_control_delay_s: reported(value),
+        total_control_delay_s: reported(value),
+        maximum_queue_length_agents: reported(agents),
+        maximum_queue_duration_s: reported(value),
+        mean_queue_duration_s: reported(value),
     }
 }
 
@@ -228,6 +268,12 @@ struct SyntheticSeed {
     mode_pairs: BTreeMap<String, MetricValue>,
     movements: BTreeMap<String, MovementMinima>,
     collisions: u64,
+    /// Counted records per mode and family.
+    event_families_by_mode: BTreeMap<String, BTreeMap<String, u64>>,
+    /// Counted records per movement key and family.
+    event_families_by_movement: BTreeMap<String, BTreeMap<String, u64>>,
+    /// The operational values of each movement key the run carried.
+    operational_by_movement: BTreeMap<String, OperationalValues>,
 }
 
 impl Default for SyntheticSeed {
@@ -243,6 +289,9 @@ impl Default for SyntheticSeed {
             ),
             movements: BTreeMap::new(),
             collisions: 0,
+            event_families_by_mode: BTreeMap::new(),
+            event_families_by_movement: BTreeMap::new(),
+            operational_by_movement: BTreeMap::new(),
         }
     }
 }
@@ -275,14 +324,18 @@ fn write_synthetic_batch(root: &Path, seeds: &[(u64, SyntheticSeed)]) {
                 minimum_post_encroachment_s: values.pet.clone(),
                 mode_pair_minimum_separation_m: values.mode_pairs.clone(),
                 movement_minima: values.movements.clone(),
-                event_counts: event_counts(values.collisions),
+                event_counts: event_counts(
+                    values.collisions,
+                    &values.event_families_by_mode,
+                    &values.event_families_by_movement,
+                ),
                 operational: OperationalMetrics {
                     run: OperationalValues::not_observed(),
                     by_mode: ["vehicle", "pedestrian"]
                         .into_iter()
                         .map(|mode| (mode.to_owned(), OperationalValues::not_observed()))
                         .collect(),
-                    by_movement: BTreeMap::new(),
+                    by_movement: values.operational_by_movement.clone(),
                 },
             },
         );
@@ -837,6 +890,170 @@ fn the_mode_pair_and_movement_slices_disaggregate_by_mode_and_movement() {
 }
 
 #[test]
+fn the_event_slices_disaggregate_the_counted_families_by_mode_and_movement() {
+    let scratch = Scratch::new("event-slices");
+    let root = scratch.path("batch");
+    let families = |counts: &[(&str, u64)]| -> BTreeMap<String, u64> {
+        counts
+            .iter()
+            .map(|(family, count)| ((*family).to_owned(), *count))
+            .collect()
+    };
+    let seeds = vec![
+        (
+            0,
+            SyntheticSeed {
+                event_families_by_mode: BTreeMap::from([(
+                    "vehicle".to_owned(),
+                    families(&[("collisions", 1), ("queue_events", 4)]),
+                )]),
+                event_families_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    families(&[("collisions", 1), ("yields", 2)]),
+                )]),
+                operational_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    operational_bucket(3.0, 2.0),
+                )]),
+                ..SyntheticSeed::default()
+            },
+        ),
+        (
+            1,
+            SyntheticSeed {
+                event_families_by_mode: BTreeMap::from([(
+                    "vehicle".to_owned(),
+                    families(&[("collisions", 3)]),
+                )]),
+                // Only the counted records reach this movement here: the run
+                // carried no operational block for it, so its operational
+                // metrics are unobserved rather than zero.
+                event_families_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    families(&[("collisions", 3)]),
+                )]),
+                ..SyntheticSeed::default()
+            },
+        ),
+        (
+            2,
+            SyntheticSeed {
+                // This run placed no agent on east and carried west instead.
+                operational_by_movement: BTreeMap::from([(
+                    "movement:west".to_owned(),
+                    operational_bucket(5.0, 1.0),
+                )]),
+                ..SyntheticSeed::default()
+            },
+        ),
+    ];
+    write_synthetic_batch(&root, &seeds);
+
+    let aggregation = aggregate_batch(&root).expect("a well-formed batch aggregates");
+
+    // The mode slices: both modes, every counted family present, and a family a
+    // mode recorded nothing for is the observed zero the run artifact's own
+    // `by_family` set reports — a count, not an absent value.
+    assert_eq!(
+        aggregation.mode_event_slices.keys().collect::<Vec<_>>(),
+        vec!["pedestrian", "vehicle"]
+    );
+    let mut expected_keys: Vec<String> = FAMILIES
+        .iter()
+        .map(|family| format!("event_counts.{family}"))
+        .collect();
+    expected_keys.sort();
+    for (mode, slice) in &aggregation.mode_event_slices {
+        assert_eq!(
+            slice.keys().collect::<Vec<_>>(),
+            expected_keys.iter().collect::<Vec<_>>(),
+            "mode '{mode}' carries every counted family"
+        );
+        for (key, distribution) in slice {
+            assert_eq!(distribution.count, 3, "'{mode}/{key}' counts every seed");
+            assert!(distribution.not_observed_seeds.is_empty());
+            assert_eq!(distribution.unit, "records");
+        }
+    }
+    let vehicle_collisions = &aggregation.mode_event_slices["vehicle"]["event_counts.collisions"];
+    assert_close(vehicle_collisions.mean.expect("a mean"), 4.0 / 3.0);
+    assert_eq!(vehicle_collisions.reported_seeds, vec![0, 1, 2]);
+    assert_close(vehicle_collisions.spread.minimum.expect("a least"), 0.0);
+    assert_close(vehicle_collisions.spread.maximum.expect("a greatest"), 3.0);
+    assert_close(
+        aggregation.mode_event_slices["vehicle"]["event_counts.queue_events"]
+            .mean
+            .expect("a mean"),
+        4.0 / 3.0,
+    );
+    assert_close(
+        aggregation.mode_event_slices["pedestrian"]["event_counts.collisions"]
+            .mean
+            .expect("a mean"),
+        0.0,
+    );
+
+    // The agent movement slices: keyed by one movement key, holding that
+    // movement's operational values and its counted families.
+    assert_eq!(
+        aggregation.agent_movement_slices.keys().collect::<Vec<_>>(),
+        vec!["movement:east", "movement:west"]
+    );
+    let mut expected_movement_keys: Vec<String> =
+        OPERATIONAL_FIELDS.map(|field| field.to_owned()).to_vec();
+    expected_movement_keys.extend(
+        FAMILIES
+            .iter()
+            .map(|family| format!("event_counts.{family}")),
+    );
+    expected_movement_keys.sort();
+    let east = &aggregation.agent_movement_slices["movement:east"];
+    assert_eq!(
+        east.keys().collect::<Vec<_>>(),
+        expected_movement_keys.iter().collect::<Vec<_>>()
+    );
+    let east_collisions = &east["event_counts.collisions"];
+    assert_eq!(east_collisions.count, 2);
+    assert_close(east_collisions.mean.expect("a mean"), 2.0);
+    assert_eq!(east_collisions.reported_seeds, vec![0, 1]);
+    assert_eq!(
+        east_collisions.not_observed_seeds,
+        vec![2],
+        "a run with no agent on this movement made no observation of it"
+    );
+    let east_throughput = &east["throughput_agents_per_s"];
+    assert_eq!(east_throughput.count, 1);
+    assert_close(east_throughput.mean.expect("a mean"), 3.0);
+    assert_eq!(east_throughput.reported_seeds, vec![0]);
+    assert_eq!(east_throughput.not_observed_seeds, vec![1, 2]);
+    assert_eq!(east_throughput.unit, "agents_per_second");
+    assert_close(
+        east["maximum_queue_length_agents"].mean.expect("a mean"),
+        2.0,
+    );
+    assert_eq!(east["maximum_queue_length_agents"].unit, "agents");
+    let west = &aggregation.agent_movement_slices["movement:west"];
+    assert_eq!(west["event_counts.collisions"].count, 1);
+    assert_close(west["event_counts.collisions"].mean.expect("a mean"), 0.0);
+    assert_eq!(
+        west["event_counts.collisions"].not_observed_seeds,
+        vec![0, 1]
+    );
+    assert_close(west["throughput_agents_per_s"].mean.expect("a mean"), 5.0);
+
+    // Every slice accounts for every seed exactly once.
+    for slice in aggregation
+        .mode_event_slices
+        .values()
+        .chain(aggregation.agent_movement_slices.values())
+    {
+        for (key, distribution) in slice {
+            assert_statuses_account_for_every_seed(key, distribution, 3);
+        }
+    }
+}
+
+#[test]
 fn every_aggregated_metric_links_to_its_manifests_and_definition_version() {
     let scratch = Scratch::new("links");
     let root = scratch.path("batch");
@@ -888,6 +1105,10 @@ fn every_aggregated_metric_links_to_its_manifests_and_definition_version() {
 
     // Every aggregated metric carries the definition version and links each
     // reported seed to that seed's manifest.
+    // The mode-and-movement event slices make the same link: a synthetic batch
+    // always reports both modes, so the link walk covers them.
+    assert!(!aggregation.mode_event_slices.is_empty());
+
     let distributions = aggregation
         .metrics
         .values()
@@ -902,6 +1123,18 @@ fn every_aggregated_metric_links_to_its_manifests_and_definition_version() {
                 .movement_slices
                 .values()
                 .flat_map(|slice| slice.metrics.values()),
+        )
+        .chain(
+            aggregation
+                .mode_event_slices
+                .values()
+                .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            aggregation
+                .agent_movement_slices
+                .values()
+                .flat_map(|slice| slice.values()),
         );
     let mut checked = 0;
     for distribution in distributions {
@@ -1032,6 +1265,80 @@ fn a_real_batch_aggregates_its_mode_and_movement_slices() {
         }
     }
     assert!(reported, "a movement bucket must report a value");
+
+    // The mode event slice: both modes, every counted family, and the families
+    // one mode recorded no record of reported as an observed zero rather than
+    // as an absent value.
+    let manifests: BTreeMap<u64, &str> = aggregation
+        .seeds
+        .iter()
+        .map(|seed| (seed.seed, seed.manifest_sha256.as_str()))
+        .collect();
+    assert_eq!(
+        aggregation.mode_event_slices.keys().collect::<Vec<_>>(),
+        vec!["pedestrian", "vehicle"]
+    );
+    let mut expected_families: Vec<String> = EVENT_FAMILY_LABELS
+        .iter()
+        .map(|family| format!("event_counts.{family}"))
+        .collect();
+    expected_families.sort();
+    for (mode, slice) in &aggregation.mode_event_slices {
+        assert_eq!(
+            slice.keys().collect::<Vec<_>>(),
+            expected_families.iter().collect::<Vec<_>>()
+        );
+        for (key, distribution) in slice {
+            assert_eq!(distribution.unit, "records");
+            assert_eq!(distribution.count, 3, "'{mode}/{key}'");
+            for (seed, manifest) in distribution
+                .reported_seeds
+                .iter()
+                .zip(&distribution.manifests)
+            {
+                assert_eq!(Some(manifest.as_str()), manifests.get(seed).copied());
+            }
+        }
+    }
+
+    // Every record a mode's own agents produced adds to the run-level family
+    // count, so the mode slices partition the run-level count.
+    for family in EVENT_FAMILY_LABELS {
+        let key = format!("event_counts.{family}");
+        let run_level = &aggregation.metrics[&format!("event_counts.by_family.{family}")];
+        let mode_total: f64 = ["pedestrian", "vehicle"]
+            .into_iter()
+            .map(|mode| {
+                aggregation.mode_event_slices[mode][&key]
+                    .mean
+                    .expect("a mode count is always reported")
+            })
+            .sum();
+        assert!(
+            (mode_total - run_level.mean.expect("a run-level count")).abs() < 1e-9,
+            "the mode slices of '{family}' must sum to its run-level count: {mode_total} against {:?}",
+            run_level.mean
+        );
+    }
+
+    // The agent movement slice: every movement the runs observed, holding the
+    // ten operational metrics and every counted family, each accounting for
+    // every seed. The benchmark drives several movements, so the slice is not
+    // empty.
+    assert!(!aggregation.agent_movement_slices.is_empty());
+    let mut movement_keys: Vec<String> = OPERATIONAL_FIELDS.map(|field| field.to_owned()).to_vec();
+    movement_keys.extend(expected_families.iter().cloned());
+    movement_keys.sort();
+    for (movement, slice) in &aggregation.agent_movement_slices {
+        assert!(movement.starts_with("movement:") || movement.starts_with("pedestrian_route:"));
+        assert_eq!(
+            slice.keys().collect::<Vec<_>>(),
+            movement_keys.iter().collect::<Vec<_>>()
+        );
+        for (key, distribution) in slice {
+            assert_statuses_account_for_every_seed(key, distribution, 3);
+        }
+    }
 }
 
 #[test]
@@ -1103,12 +1410,20 @@ fn the_output_ordering_is_deterministic() {
     };
     ascending(first.metrics.keys().collect());
     ascending(first.mode_pair_slices.keys().collect());
+    ascending(first.mode_event_slices.keys().collect());
     ascending(first.movement_slices.keys().collect());
+    ascending(first.agent_movement_slices.keys().collect());
     for slice in first.mode_pair_slices.values() {
+        ascending(slice.keys().collect());
+    }
+    for slice in first.mode_event_slices.values() {
         ascending(slice.keys().collect());
     }
     for slice in first.movement_slices.values() {
         ascending(slice.metrics.keys().collect());
+    }
+    for slice in first.agent_movement_slices.values() {
+        ascending(slice.keys().collect());
     }
     for distribution in first
         .metrics
@@ -1124,6 +1439,18 @@ fn the_output_ordering_is_deterministic() {
                 .movement_slices
                 .values()
                 .flat_map(|slice| slice.metrics.values()),
+        )
+        .chain(
+            first
+                .mode_event_slices
+                .values()
+                .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            first
+                .agent_movement_slices
+                .values()
+                .flat_map(|slice| slice.values()),
         )
     {
         for seeds in [

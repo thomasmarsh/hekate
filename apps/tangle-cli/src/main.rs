@@ -33,19 +33,19 @@
 //! `aggregate` reads a completed batch and writes the batch-level experiment
 //! record `aggregation.json`: for every metric the runs report, the across-seed
 //! count, mean, spread, and 95% Student-t confidence interval, disaggregated by
-//! mode pair and by movement, with every number linked to the manifests it came
-//! from. It reports not-applicable and not-observed values as statuses and
-//! counts them per seed rather than reading them as zero, and it mutates no run
-//! artifact.
+//! mode pair, by mode, and by movement, with every number linked to the
+//! manifests it came from. It reports not-applicable and not-observed values as
+//! statuses and counts them per seed rather than reading them as zero, and it
+//! mutates no run artifact.
 //!
 //! `compare` reads two completed batches (`--a` and `--b`) and the seed bank
 //! both ran, proves both sides used that one bank in that one order, pairs the
 //! runs by seed, and writes `comparison.json`: the per-seed paired difference of
 //! every reported metric with its mean and a paired 95% Student-t confidence
-//! interval, disaggregated by mode pair and by movement and linked to both run
-//! manifests. Pairing by seed cancels the between-seed variance both sides
-//! share, which the unpaired per-side interval cannot. It refuses unpaired or
-//! mismatched inputs and mutates no run artifact.
+//! interval, disaggregated by mode pair, by mode, and by movement and linked to
+//! both run manifests. Pairing by seed cancels the between-seed variance both
+//! sides share, which the unpaired per-side interval cannot. It refuses unpaired
+//! or mismatched inputs and mutates no run artifact.
 //!
 //! `converge` runs one scenario at the Fast, Standard, and Fine fidelity presets
 //! over one seed bank — one batch per fidelity, each covering the same simulated
@@ -247,8 +247,9 @@ Exit codes:
 const AGGREGATE_LONG_ABOUT: &str = "\
 Aggregate a completed batch into one machine-readable aggregation.json: for every
 metric the batch's runs report, the across-seed count, mean, spread, and two-sided
-95% Student-t confidence interval, disaggregated by mode pair and by movement,
-with every number linked to its run manifest and to metric_definition_version 2.
+95% Student-t confidence interval, disaggregated by mode pair, by mode, and by
+movement, with every number linked to its run manifest and to
+metric_definition_version 2.
 
 Usage:
   tangle-cli aggregate <BATCH_ROOT> [--output <PATH>]
@@ -261,10 +262,12 @@ Inputs:
 
 Output:
   aggregation.json names the batch manifest, the seeds read, the interval
-  method, and one distribution per metric, mode-pair slice, and movement slice.
-  A value the runs call not applicable or not observed is counted as a seed
-  behind that status, never averaged in as zero. The output orders metrics,
-  slices, and seeds deterministically.
+  method, and one distribution per metric, mode-pair slice, mode event slice,
+  movement slice, and agent movement slice. A value the runs call not applicable
+  or not observed is counted as a seed behind that status, never averaged in as
+  zero; a counted event family a mode or movement recorded nothing for is a
+  reported zero, because the run artifact itself reports every family. The
+  output orders metrics, slices, and seeds deterministically.
 
 Exit codes:
   0  every run's metrics were read, checked, and aggregated
@@ -279,8 +282,8 @@ Compare two completed batches that ran one common-random-number seed bank. The
 comparison proves both sides used that bank in that one seed order, pairs the
 runs by seed, and for every reported metric computes the per-seed difference
 d_i = A(seed_i) - B(seed_i) with its mean and a paired two-sided 95% Student-t
-confidence interval, disaggregated by mode pair and by movement and linked to
-both run manifests and to metric_definition_version 2.
+confidence interval, disaggregated by mode pair, by mode, and by movement and
+linked to both run manifests and to metric_definition_version 2.
 
 Usage:
   tangle-cli compare --a <BATCH_ROOT> --b <BATCH_ROOT> --seed-bank <FILE> [--output <PATH>]
@@ -306,9 +309,10 @@ statistic and counted with both sides' statuses.
 
 Output:
   comparison.json names the seed bank and both batch manifests, the paired runs,
-the documented method, and one distribution per metric, mode-pair slice, and
-movement slice. Metrics, slices, and seeds are ordered deterministically. No run
-artifact is created, changed, or removed.
+the documented method, and one distribution per metric, mode-pair slice, mode
+event slice, movement slice, and agent movement slice. Metrics, slices, and
+seeds are ordered deterministically. No run artifact is created, changed, or
+removed.
 
 Exit codes:
   0  the two batches were proven to share one bank and compared

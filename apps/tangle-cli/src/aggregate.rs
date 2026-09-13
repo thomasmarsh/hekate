@@ -20,7 +20,8 @@
 //! kinded families. The metric set is read from the artifacts, so a later
 //! definition revision that adds a metric is aggregated without a change here.
 //!
-//! The slices hold the same three interaction metrics:
+//! The slices hold the interaction metrics, the event families, and the
+//! operational families:
 //!
 //! - [`Aggregation::mode_pair_slices`] is keyed by the `ModePair` label
 //!   (`vehicle_vehicle`, `vehicle_pedestrian`, `pedestrian_pedestrian`) and
@@ -28,7 +29,27 @@
 //!   reports per mode pair;
 //! - [`Aggregation::movement_slices`] is keyed by a bucket of two movement keys
 //!   and holds the bucket's `minimum_separation_m`, `minimum_ttc_s`, and
-//!   `minimum_post_encroachment_s`, exactly as the run artifact keys them.
+//!   `minimum_post_encroachment_s`, exactly as the run artifact keys them;
+//! - [`Aggregation::mode_event_slices`] is keyed by one `AgentMode` label and
+//!   holds the counted event families that mode's own agents produced, keyed
+//!   `event_counts.<family>`;
+//! - [`Aggregation::agent_movement_slices`] is keyed by one movement key — the
+//!   key of the agent that produced the record, not a pair of keys — and holds
+//!   that movement's operational values plus its counted event families.
+//!
+//! The operational families per mode are already whole-batch metrics
+//! (`operational.by_mode.<mode>.<metric>`), so the mode slice carries exactly
+//! what the whole-batch map cannot: the event counts. The operational movement
+//! level is deliberately not a whole-batch metric — a movement bucket is sparse
+//! across seeds — so the agent-movement slice carries the operational values
+//! there as well.
+//!
+//! A family a mode or movement recorded no record for is a reported `0`, not an
+//! absent value: the run artifact's own `by_family` set always holds every
+//! family, so a count of an absent family is an observation of zero. A movement
+//! bucket a run's artifact does not carry at all is a different statement — the
+//! run placed no agent on that movement — and is counted `not_observed` there,
+//! like every other sparse slice.
 //!
 //! ## Reported, not applicable, not observed
 //!
@@ -95,8 +116,8 @@ use serde::{Deserialize, Serialize};
 use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest};
 use crate::run_dir::MANIFEST_FILE;
 use crate::run_metrics::{
-    METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue, MovementMinima,
-    OperationalValues, RunMetricsArtifact,
+    EVENT_FAMILY_LABELS, EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
+    MetricValue, MovementMinima, OperationalValues, RunMetricsArtifact,
 };
 use crate::trace::sha256_hex;
 
@@ -168,8 +189,11 @@ const SECONDS: &str = "seconds";
 /// The unit of a distance metric, as metric definition v2 fixes it.
 pub(crate) const METRES: &str = "metres";
 
-/// The unit of a countable event metric, as metric definition v2 fixes it.
+/// The countable event families' unit, as metric definition v2 fixes it.
 const RECORDS: &str = "records";
+
+/// The metric-key prefix a slice's counted event family carries.
+pub(crate) const EVENT_COUNT_PREFIX: &str = "event_counts.";
 
 /// The unit of a throughput metric, as metric definition v2 fixes it.
 const AGENTS_PER_SECOND: &str = "agents_per_second";
@@ -488,10 +512,19 @@ pub struct Aggregation {
     pub seeds: Vec<AggregatedSeed>,
     /// The whole-batch distributions, keyed by metric name.
     pub metrics: BTreeMap<String, MetricDistribution>,
-    /// The mode slices, keyed by `ModePair` label.
+    /// The mode-pair slices, keyed by `ModePair` label.
     pub mode_pair_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The mode slices, keyed by one `AgentMode` label (`vehicle`,
+    /// `pedestrian`), each holding `event_counts.<family>` for every counted
+    /// family.
+    pub mode_event_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
     /// The movement slices, keyed by the pair's two movement keys.
     pub movement_slices: BTreeMap<String, MovementSlice>,
+    /// The agent-movement slices, keyed by one movement key
+    /// (`movement:<name>` or `pedestrian_route:<name>`), each holding the ten
+    /// operational metrics of one agent's own movement plus
+    /// `event_counts.<family>` for every counted family.
+    pub agent_movement_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
 }
 
 /// Aggregate a completed batch: read its manifest and every seed's metrics, and
@@ -648,7 +681,9 @@ pub(crate) enum Reading<'a> {
 /// — over the run and per mode. The operational movement level is deliberately
 /// not read here: a movement bucket is sparse across seeds, and the aggregation
 /// counts a whole-batch metric that a seed does not report at all as a broken
-/// comparison rather than as an unobserved slice.
+/// comparison rather than as an unobserved slice. That level is carried by
+/// [`Aggregation::agent_movement_slices`] instead, and the event families per
+/// mode by [`Aggregation::mode_event_slices`].
 pub(crate) fn run_level_readings(
     artifact: &RunMetricsArtifact,
 ) -> Vec<(String, &'static str, Reading<'_>)> {
@@ -774,6 +809,65 @@ pub(crate) fn movement_readings(
     ]
 }
 
+/// One mode's counted event families, keyed by the slice's metric name.
+///
+/// Every family the run counts is present, `0` when that mode produced no record
+/// of it: the run artifact's `by_family` set always holds all ten, so a family
+/// missing from the sparse `by_family_mode` slice is an observed zero rather
+/// than an absent value.
+pub(crate) fn mode_event_readings(
+    counts: &EventCounts,
+    mode: &str,
+) -> Vec<(String, &'static str, u64)> {
+    EVENT_FAMILY_LABELS
+        .into_iter()
+        .map(|family| {
+            (
+                format!("{EVENT_COUNT_PREFIX}{family}"),
+                RECORDS,
+                counts
+                    .by_family_mode
+                    .get(family)
+                    .and_then(|modes| modes.get(mode))
+                    .copied()
+                    .unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
+/// One agent movement's counted event families, keyed by the slice's metric
+/// name, under the same complete-set rule as [`mode_event_readings`].
+pub(crate) fn agent_movement_event_readings(
+    counts: &EventCounts,
+    movement: &str,
+) -> Vec<(String, &'static str, u64)> {
+    EVENT_FAMILY_LABELS
+        .into_iter()
+        .map(|family| {
+            (
+                format!("{EVENT_COUNT_PREFIX}{family}"),
+                RECORDS,
+                counts
+                    .by_family_movement
+                    .get(family)
+                    .and_then(|movements| movements.get(movement))
+                    .copied()
+                    .unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
+/// Every movement key the run attributed a counted record to.
+pub(crate) fn recorded_movement_keys(counts: &EventCounts) -> BTreeSet<&str> {
+    counts
+        .by_family_movement
+        .values()
+        .flat_map(|movements| movements.keys().map(String::as_str))
+        .collect()
+}
+
 /// The running per-seed readings of one metric.
 #[derive(Debug)]
 struct Accumulator {
@@ -828,6 +922,13 @@ impl Accumulator {
                 Ok(())
             }
         }
+    }
+
+    /// Record one seed's reading of an always-reported count, which is a value
+    /// like any other: a reported zero is a measured zero.
+    fn count(&mut self, seed: u64, manifest: &str, count: u64) {
+        self.reported
+            .push((seed, count as f64, manifest.to_owned()));
     }
 
     /// The seeds this metric holds no status for, ascending.
@@ -886,6 +987,9 @@ impl Accumulator {
     }
 }
 
+/// One slice's per-metric accumulators, filled seed by seed.
+type SliceAccumulation = BTreeMap<String, Accumulator>;
+
 /// One movement bucket's accumulators.
 #[derive(Debug)]
 struct MovementAccumulation {
@@ -900,10 +1004,14 @@ struct MovementAccumulation {
 struct Accumulation {
     /// The whole-batch accumulators, keyed by metric name.
     metrics: BTreeMap<String, Accumulator>,
-    /// The mode slices, keyed by `ModePair` label.
+    /// The mode-pair slices, keyed by `ModePair` label.
     mode_pairs: BTreeMap<String, Accumulator>,
-    /// The movement slices, keyed by the pair's two movement keys.
+    /// The mode event slices, keyed by `AgentMode` label.
+    modes: BTreeMap<String, SliceAccumulation>,
+    /// The pair movement slices, keyed by the pair's two movement keys.
     movements: BTreeMap<String, MovementAccumulation>,
+    /// The agent movement slices, keyed by one movement key.
+    agent_movements: BTreeMap<String, SliceAccumulation>,
 }
 
 impl Accumulation {
@@ -922,11 +1030,7 @@ impl Accumulation {
                 .or_insert_with(|| Accumulator::new(unit));
             match reading {
                 Reading::Value(value) => accumulator.reading(seed, manifest, &key, value, path)?,
-                Reading::Count(count) => {
-                    accumulator
-                        .reported
-                        .push((seed, count as f64, manifest.to_owned()));
-                }
+                Reading::Count(count) => accumulator.count(seed, manifest, count),
             }
         }
 
@@ -936,6 +1040,19 @@ impl Accumulation {
                 .entry(label.clone())
                 .or_insert_with(|| Accumulator::new(METRES));
             accumulator.reading(seed, manifest, MODE_PAIR_METRIC, value, path)?;
+        }
+
+        // Every mode the artifact reports carries every counted family, `0` for
+        // a family it produced no record of, so the mode slice is complete.
+        for mode in artifact.operational.by_mode.keys() {
+            for (key, unit, count) in mode_event_readings(&artifact.event_counts, mode) {
+                self.modes
+                    .entry(mode.clone())
+                    .or_default()
+                    .entry(key)
+                    .or_insert_with(|| Accumulator::new(unit))
+                    .count(seed, manifest, count);
+            }
         }
 
         for (bucket, minima) in &artifact.movement_minima {
@@ -952,6 +1069,35 @@ impl Accumulation {
                     .entry(name.to_owned())
                     .or_insert_with(|| Accumulator::new(unit));
                 accumulator.reading(seed, manifest, name, value, path)?;
+            }
+        }
+
+        // One agent movement's own slice: its operational values and its counted
+        // event families. The bucket exists for a movement the run placed an
+        // agent on, so a bucket a run does not carry is no observation there.
+        let mut agent_buckets: BTreeSet<&str> = artifact
+            .operational
+            .by_movement
+            .keys()
+            .map(String::as_str)
+            .collect();
+        agent_buckets.extend(recorded_movement_keys(&artifact.event_counts));
+        for bucket in agent_buckets {
+            let slice = self.agent_movements.entry(bucket.to_owned()).or_default();
+            if let Some(values) = artifact.operational.by_movement.get(bucket) {
+                for (name, unit, value) in operational_readings(values) {
+                    slice
+                        .entry(name.to_owned())
+                        .or_insert_with(|| Accumulator::new(unit))
+                        .reading(seed, manifest, name, value, path)?;
+                }
+            }
+            for (key, unit, count) in agent_movement_event_readings(&artifact.event_counts, bucket)
+            {
+                slice
+                    .entry(key)
+                    .or_insert_with(|| Accumulator::new(unit))
+                    .count(seed, manifest, count);
             }
         }
         Ok(())
@@ -991,6 +1137,8 @@ impl Accumulation {
             })
             .collect();
 
+        let mode_event_slices = finish_slices(self.modes, seeds);
+
         let movement_slices = self
             .movements
             .into_iter()
@@ -1021,9 +1169,35 @@ impl Accumulation {
             seeds: seeds_read,
             metrics,
             mode_pair_slices,
+            mode_event_slices,
             movement_slices,
+            agent_movement_slices: finish_slices(self.agent_movements, seeds),
         })
     }
+}
+
+/// Close every accumulator of a slice family into its distributions.
+///
+/// A slice bucket is sparse across seeds, so a seed that does not carry the
+/// bucket is counted `not_observed` for every metric of that bucket rather than
+/// shrinking the sample.
+fn finish_slices(
+    slices: BTreeMap<String, SliceAccumulation>,
+    seeds: &[u64],
+) -> BTreeMap<String, BTreeMap<String, MetricDistribution>> {
+    slices
+        .into_iter()
+        .map(|(key, metrics)| {
+            let metrics = metrics
+                .into_iter()
+                .map(|(name, mut accumulator)| {
+                    accumulator.fill_not_observed(seeds);
+                    (name, accumulator.finish())
+                })
+                .collect();
+            (key, metrics)
+        })
+        .collect()
 }
 
 #[cfg(test)]

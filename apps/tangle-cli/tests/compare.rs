@@ -59,6 +59,22 @@ const KINDS: [(&str, [&str; 2]); 2] = [
     ("control_transitions", ["signal_stop", "crossing_wait"]),
 ];
 
+/// The operational metrics metric definition v2 reports for one bucket, by
+/// artifact field name. Restated here so the comparison's metric set is pinned
+/// independently of the writer that produced it.
+const OPERATIONAL_FIELDS: [&str; 10] = [
+    "maximum_queue_duration_s",
+    "maximum_queue_length_agents",
+    "mean_control_delay_s",
+    "mean_queue_duration_s",
+    "mean_stopped_delay_s",
+    "mean_travel_time_s",
+    "throughput_agents_per_s",
+    "total_control_delay_s",
+    "total_stopped_delay_s",
+    "total_travel_time_s",
+];
+
 /// A scratch working directory that is removed when the test ends.
 struct Scratch {
     dir: PathBuf,
@@ -219,7 +235,16 @@ fn movement_bucket(
 
 /// Event counts with every family present and `collisions` set; `drop` removes
 /// one family, which makes that metric one-sided against the other batch.
-fn event_counts(collisions: u64, drop: Option<&str>) -> EventCounts {
+///
+/// `by_mode` and `by_movement` are keyed by the mode or movement the caller
+/// names, and are transposed into the run artifact's own shape, whose outer key
+/// is the family.
+fn event_counts(
+    collisions: u64,
+    drop: Option<&str>,
+    by_mode: &BTreeMap<String, BTreeMap<String, u64>>,
+    by_movement: &BTreeMap<String, BTreeMap<String, u64>>,
+) -> EventCounts {
     let mut by_family: BTreeMap<String, u64> = FAMILIES
         .into_iter()
         .filter(|family| Some(*family) != drop)
@@ -235,12 +260,41 @@ fn event_counts(collisions: u64, drop: Option<&str>) -> EventCounts {
             )
         })
         .collect();
+    let transpose = |slices: &BTreeMap<String, BTreeMap<String, u64>>| {
+        FAMILIES
+            .into_iter()
+            .map(|family| {
+                let counts = slices
+                    .iter()
+                    .map(|(key, counts)| (key.clone(), counts.get(family).copied().unwrap_or(0)))
+                    .collect();
+                (family.to_owned(), counts)
+            })
+            .collect()
+    };
     EventCounts {
         total: by_family.values().sum(),
         by_family,
         by_family_kind,
-        by_family_mode: BTreeMap::new(),
-        by_family_movement: BTreeMap::new(),
+        by_family_mode: transpose(by_mode),
+        by_family_movement: transpose(by_movement),
+    }
+}
+
+/// One operational bucket with every metric reported at `value` and `agents`
+/// standing agents queued, so a test can read a known value back.
+fn operational_bucket(value: f64, agents: f64) -> OperationalValues {
+    OperationalValues {
+        throughput_agents_per_s: reported(value),
+        mean_travel_time_s: reported(value),
+        total_travel_time_s: reported(value),
+        mean_stopped_delay_s: reported(value),
+        total_stopped_delay_s: reported(value),
+        mean_control_delay_s: reported(value),
+        total_control_delay_s: reported(value),
+        maximum_queue_length_agents: reported(agents),
+        maximum_queue_duration_s: reported(value),
+        mean_queue_duration_s: reported(value),
     }
 }
 
@@ -253,6 +307,12 @@ struct SyntheticSeed {
     mode_pairs: BTreeMap<String, MetricValue>,
     movements: BTreeMap<String, MovementMinima>,
     collisions: u64,
+    /// Counted records per mode and family.
+    event_families_by_mode: BTreeMap<String, BTreeMap<String, u64>>,
+    /// Counted records per movement key and family.
+    event_families_by_movement: BTreeMap<String, BTreeMap<String, u64>>,
+    /// The operational values of each movement key the run carried.
+    operational_by_movement: BTreeMap<String, OperationalValues>,
 }
 
 impl Default for SyntheticSeed {
@@ -268,6 +328,9 @@ impl Default for SyntheticSeed {
             ),
             movements: BTreeMap::new(),
             collisions: 0,
+            event_families_by_mode: BTreeMap::new(),
+            event_families_by_movement: BTreeMap::new(),
+            operational_by_movement: BTreeMap::new(),
         }
     }
 }
@@ -341,14 +404,19 @@ fn write_side(
                 minimum_post_encroachment_s: values.pet.clone(),
                 mode_pair_minimum_separation_m: values.mode_pairs.clone(),
                 movement_minima: values.movements.clone(),
-                event_counts: event_counts(values.collisions, deviation.drop_family.as_deref()),
+                event_counts: event_counts(
+                    values.collisions,
+                    deviation.drop_family.as_deref(),
+                    &values.event_families_by_mode,
+                    &values.event_families_by_movement,
+                ),
                 operational: OperationalMetrics {
                     run: OperationalValues::not_observed(),
                     by_mode: ["vehicle", "pedestrian"]
                         .into_iter()
                         .map(|mode| (mode.to_owned(), OperationalValues::not_observed()))
                         .collect(),
-                    by_movement: BTreeMap::new(),
+                    by_movement: values.operational_by_movement.clone(),
                 },
             },
         );
@@ -467,9 +535,22 @@ fn every_distribution(comparison: &Comparison) -> Vec<(String, &PairedDistributi
             all.push((format!("mode_pair_slices.{label}.{key}"), distribution));
         }
     }
+    for (mode, slice) in &comparison.mode_event_slices {
+        for (key, distribution) in slice {
+            all.push((format!("mode_event_slices.{mode}.{key}"), distribution));
+        }
+    }
     for (bucket, slice) in &comparison.movement_slices {
         for (key, distribution) in &slice.metrics {
             all.push((format!("movement_slices.{bucket}.{key}"), distribution));
+        }
+    }
+    for (movement, slice) in &comparison.agent_movement_slices {
+        for (key, distribution) in slice {
+            all.push((
+                format!("agent_movement_slices.{movement}.{key}"),
+                distribution,
+            ));
         }
     }
     all
@@ -818,6 +899,184 @@ fn the_mode_and_movement_slices_pair_by_mode_and_movement() {
         solo_separation.count + solo_separation.unpaired.len(),
         comparison.pairs.len()
     );
+}
+
+/// The counted event families pair by mode and by one agent's own movement, and
+/// the agent movement slice carries the movement's operational values as well.
+#[test]
+fn the_event_families_pair_by_mode_and_by_agent_movement() {
+    let scratch = Scratch::new("event-slices");
+    let families = |counts: &[(&str, u64)]| -> BTreeMap<String, u64> {
+        counts
+            .iter()
+            .map(|(family, count)| ((*family).to_owned(), *count))
+            .collect()
+    };
+    let a = vec![
+        (
+            0,
+            SyntheticSeed {
+                event_families_by_mode: BTreeMap::from([(
+                    "vehicle".to_owned(),
+                    families(&[("collisions", 1), ("queue_events", 4)]),
+                )]),
+                event_families_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    families(&[("collisions", 1)]),
+                )]),
+                operational_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    operational_bucket(3.0, 2.0),
+                )]),
+                ..SyntheticSeed::default()
+            },
+        ),
+        (
+            1,
+            SyntheticSeed {
+                event_families_by_mode: BTreeMap::from([(
+                    "vehicle".to_owned(),
+                    families(&[("collisions", 3)]),
+                )]),
+                event_families_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    families(&[("collisions", 3)]),
+                )]),
+                // Only the counted records reach this movement on side A here,
+                // so side A makes no observation of its operational values.
+                ..SyntheticSeed::default()
+            },
+        ),
+    ];
+    let b = vec![
+        (
+            0,
+            SyntheticSeed {
+                event_families_by_mode: BTreeMap::from([(
+                    "vehicle".to_owned(),
+                    families(&[("collisions", 0)]),
+                )]),
+                event_families_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    families(&[("collisions", 0)]),
+                )]),
+                operational_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    operational_bucket(1.0, 1.0),
+                )]),
+                ..SyntheticSeed::default()
+            },
+        ),
+        (
+            1,
+            SyntheticSeed {
+                event_families_by_mode: BTreeMap::from([(
+                    "vehicle".to_owned(),
+                    families(&[("collisions", 1)]),
+                )]),
+                event_families_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    families(&[("collisions", 1)]),
+                )]),
+                operational_by_movement: BTreeMap::from([(
+                    "movement:east".to_owned(),
+                    operational_bucket(2.0, 3.0),
+                )]),
+                ..SyntheticSeed::default()
+            },
+        ),
+    ];
+    let (a_root, b_root, bank_path, _) = synthetic_pair(&scratch, "event-slices", &[0, 1], &a, &b);
+    let comparison = compare_batches(&a_root, &b_root, &bank_path).expect("the batches compare");
+
+    // Mode slices: both modes carry every counted family, and a family a mode
+    // recorded no record of is an observed zero on both sides.
+    assert_eq!(
+        comparison
+            .mode_event_slices
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["pedestrian".to_owned(), "vehicle".to_owned()]
+    );
+    let mut expected_families: Vec<String> = FAMILIES
+        .iter()
+        .map(|family| format!("event_counts.{family}"))
+        .collect();
+    expected_families.sort();
+    for (mode, slice) in &comparison.mode_event_slices {
+        assert_eq!(
+            slice.keys().cloned().collect::<Vec<_>>(),
+            expected_families,
+            "mode '{mode}' carries every counted family"
+        );
+        for (key, distribution) in slice {
+            assert_eq!(distribution.unit, "records");
+            assert_eq!(distribution.count, 2, "'{mode}/{key}'");
+            assert!(distribution.unpaired.is_empty());
+        }
+    }
+    let collisions = &comparison.mode_event_slices["vehicle"]["event_counts.collisions"];
+    assert_close(collisions.mean_difference.expect("two pairs"), 1.5);
+    assert_eq!(collisions.paired_seeds, vec![0, 1]);
+    let queue_events = &comparison.mode_event_slices["vehicle"]["event_counts.queue_events"];
+    assert_close(queue_events.mean_difference.expect("two pairs"), 2.0);
+    assert_close(
+        comparison.mode_event_slices["pedestrian"]["event_counts.collisions"]
+            .mean_difference
+            .expect("two pairs"),
+        0.0,
+    );
+
+    // Agent movement slices: one movement key, its operational values and its
+    // counted families, each paired over the seeds both sides report.
+    assert_eq!(
+        comparison
+            .agent_movement_slices
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["movement:east".to_owned()]
+    );
+    let east = &comparison.agent_movement_slices["movement:east"];
+    let mut expected_movement: Vec<String> = OPERATIONAL_FIELDS
+        .iter()
+        .map(|field| (*field).to_owned())
+        .collect();
+    expected_movement.extend(expected_families.iter().cloned());
+    expected_movement.sort();
+    assert_eq!(east.keys().cloned().collect::<Vec<_>>(), expected_movement);
+    let east_collisions = &east["event_counts.collisions"];
+    assert_close(east_collisions.mean_difference.expect("two pairs"), 1.5);
+    let east_throughput = &east["throughput_agents_per_s"];
+    assert_eq!(east_throughput.unit, "agents_per_second");
+    // Seed 1's side A carried no operational block for the movement, so the
+    // pair is counted unpaired with both sides' statuses rather than zeroed.
+    assert_eq!(east_throughput.count, 1);
+    assert_close(east_throughput.mean_difference.expect("one pair"), 2.0);
+    assert_eq!(east_throughput.paired_seeds, vec![0]);
+    assert_eq!(
+        east_throughput
+            .unpaired
+            .iter()
+            .map(|seed| (seed.seed, seed.a, seed.b))
+            .collect::<Vec<_>>(),
+        vec![(1, MetricStatus::NotObserved, MetricStatus::Reported)]
+    );
+    let east_queue = &east["maximum_queue_length_agents"];
+    assert_eq!(east_queue.unit, "agents");
+    assert_eq!(east_queue.count, 1);
+    assert_close(east_queue.mean_difference.expect("one pair"), 1.0);
+    assert_eq!(east_queue.paired_seeds, vec![0]);
+
+    // Every distribution accounts for every pair exactly once.
+    for (path, distribution) in every_distribution(&comparison) {
+        assert_eq!(
+            distribution.count + distribution.unpaired.len(),
+            comparison.pairs.len(),
+            "'{path}' must account for every pair"
+        );
+    }
 }
 
 /// A sparse bucket first reached at a later seed still reports its unpaired

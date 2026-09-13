@@ -249,6 +249,28 @@ pub struct MovementMinima {
     pub minimum_post_encroachment_s: MetricValue,
 }
 
+/// The countable event families of metric definition v1, in the order v1
+/// declares them.
+///
+/// A run artifact writes all ten into [`EventCounts::by_family`] — `0` when the
+/// family is absent — so a consumer that enumerates the families reads a
+/// complete set from this list rather than from a sparse `by_family_mode` or
+/// `by_family_movement` slice. A count of an absent family is an observed zero,
+/// never an absent value. The artifact's own maps sort their keys, so this list
+/// fixes the family set rather than an artifact key order.
+pub const EVENT_FAMILY_LABELS: [&str; 10] = [
+    "collisions",
+    "near_misses",
+    "violations",
+    "region_entries",
+    "region_exits",
+    "queue_events",
+    "control_transitions",
+    "yields",
+    "spawns",
+    "despawns",
+];
+
 /// The countable event families of metric definition v1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum EventFamily {
@@ -963,6 +985,16 @@ const fn event_agent(event: Event) -> AgentId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The published family list is the counted family set, in order, so a
+    /// consumer that enumerates the labels covers every family exactly once.
+    #[test]
+    fn the_published_family_labels_are_the_counted_families() {
+        assert_eq!(
+            EVENT_FAMILY_LABELS,
+            EventFamily::ALL.map(|family| family.label())
+        );
+    }
 
     /// The bucket key sorts its two movement keys, so a pair and its mirror
     /// share one bucket.

@@ -77,7 +77,10 @@
 //! a seed where neither side carried the bucket is counted unobserved on both.
 //! Every slice distribution's paired and unpaired seeds therefore account for
 //! every pair, exactly as the aggregation counts a sparse slice rather than
-//! shrinking its sample.
+//! shrinking its sample. A counted event family is not sparse in that sense: a
+//! mode's or a movement's family slice always holds all ten families, `0` when
+//! the run recorded none of them, because the run artifact's own `by_family` set
+//! already reports an absent family as a count of zero.
 //!
 //! ## Determinism and immutability
 //!
@@ -98,7 +101,8 @@ use serde::{Deserialize, Serialize};
 use crate::aggregate::{
     CONFIDENCE_LEVEL, ConfidenceInterval, LARGEST_TABULATED_DEGREES_OF_FREEDOM,
     LEAST_INTERVAL_SEEDS, METRES, MODE_PAIR_METRIC, NORMAL_CRITICAL_975, Reading, Spread,
-    movement_readings, run_level_readings, sample_mean, sample_variance,
+    agent_movement_event_readings, mode_event_readings, movement_readings, operational_readings,
+    recorded_movement_keys, run_level_readings, sample_mean, sample_variance,
 };
 use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest, BatchRun};
 use crate::run_dir::MANIFEST_FILE;
@@ -512,10 +516,17 @@ pub struct Comparison {
     pub pairs: Vec<ComparedPair>,
     /// The whole-batch paired distributions, keyed by metric name.
     pub metrics: BTreeMap<String, PairedDistribution>,
-    /// The mode slices, keyed by `ModePair` label.
+    /// The mode-pair slices, keyed by `ModePair` label.
     pub mode_pair_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The mode event slices, keyed by one `AgentMode` label, holding
+    /// `event_counts.<family>` for every counted family.
+    pub mode_event_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
     /// The movement slices, keyed by the pair's two movement keys.
     pub movement_slices: BTreeMap<String, ComparedMovementSlice>,
+    /// The agent-movement slices, keyed by one movement key, holding the ten
+    /// operational metrics of one agent's own movement plus
+    /// `event_counts.<family>` for every counted family.
+    pub agent_movement_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
 }
 
 /// Compare two batches run from one common-random-number seed bank.
@@ -561,7 +572,9 @@ pub fn compare_batches(
     let mut compared_seeds = Vec::with_capacity(seeds.len());
     let mut metrics: BTreeMap<String, PairedAccumulator> = BTreeMap::new();
     let mut mode_pairs: BTreeMap<String, PairedAccumulator> = BTreeMap::new();
+    let mut mode_events: BTreeMap<String, SlicePairing> = BTreeMap::new();
     let mut movements: BTreeMap<String, MovementPairing> = BTreeMap::new();
+    let mut agent_movements: BTreeMap<String, SlicePairing> = BTreeMap::new();
     let mut metric_set: Option<BTreeSet<String>> = None;
 
     for seed in &seeds {
@@ -656,6 +669,33 @@ pub fn compare_batches(
                 });
         }
 
+        // A mode one side does not carry made no observation on that side, and
+        // a family a mode recorded no record of is a reported zero.
+        let modes: BTreeSet<&String> = a_readings
+            .mode_events
+            .keys()
+            .chain(b_readings.mode_events.keys())
+            .collect();
+        for mode in modes {
+            let a_slice = a_readings.mode_events.get(mode);
+            let b_slice = b_readings.mode_events.get(mode);
+            let source = a_slice
+                .or(b_slice)
+                .expect("a mode slice belongs to at least one side");
+            let pairing = mode_events
+                .entry(mode.clone())
+                .or_insert_with(|| SlicePairing::of(source));
+            pair_slice_metrics(
+                &mut pairing.metrics,
+                &pairing.units,
+                *seed,
+                a_slice,
+                b_slice,
+                &a_run.link.manifest_sha256,
+                &b_run.link.manifest_sha256,
+            );
+        }
+
         let buckets: BTreeSet<&String> = a_readings
             .movements
             .keys()
@@ -670,26 +710,43 @@ pub fn compare_batches(
             let pairing = movements
                 .entry(bucket.clone())
                 .or_insert_with(|| MovementPairing::of(source));
-            let bucket_metrics: Vec<(String, &'static str)> = pairing
-                .units
-                .iter()
-                .map(|(name, unit)| (name.clone(), *unit))
-                .collect();
-            for (name, unit) in bucket_metrics {
-                let a_value = reading_of(a_bucket, &name);
-                let b_value = reading_of(b_bucket, &name);
-                pairing
-                    .metrics
-                    .entry(name)
-                    .or_insert_with(|| PairedAccumulator::new(unit))
-                    .record(Pairing {
-                        seed: *seed,
-                        a: a_value,
-                        b: b_value,
-                        a_manifest: &a_run.link.manifest_sha256,
-                        b_manifest: &b_run.link.manifest_sha256,
-                    });
-            }
+            pair_slice_metrics(
+                &mut pairing.metrics,
+                &pairing.units,
+                *seed,
+                a_bucket.map(|bucket| &bucket.readings),
+                b_bucket.map(|bucket| &bucket.readings),
+                &a_run.link.manifest_sha256,
+                &b_run.link.manifest_sha256,
+            );
+        }
+
+        // One agent movement's own slice: its operational values and counted
+        // families, paired the same way. A movement one side never placed an
+        // agent on is no observation there.
+        let agent_buckets: BTreeSet<&String> = a_readings
+            .agent_movements
+            .keys()
+            .chain(b_readings.agent_movements.keys())
+            .collect();
+        for bucket in agent_buckets {
+            let a_slice = a_readings.agent_movements.get(bucket);
+            let b_slice = b_readings.agent_movements.get(bucket);
+            let source = a_slice
+                .or(b_slice)
+                .expect("a movement slice belongs to at least one side");
+            let pairing = agent_movements
+                .entry(bucket.clone())
+                .or_insert_with(|| SlicePairing::of(source));
+            pair_slice_metrics(
+                &mut pairing.metrics,
+                &pairing.units,
+                *seed,
+                a_slice,
+                b_slice,
+                &a_run.link.manifest_sha256,
+                &b_run.link.manifest_sha256,
+            );
         }
 
         compared_seeds.push(ComparedPair {
@@ -721,6 +778,7 @@ pub fn compare_batches(
                 (label, slice)
             })
             .collect(),
+        mode_event_slices: finish_slice_pairings(mode_events, &seeds),
         movement_slices: movements
             .into_iter()
             .map(|(bucket, mut pairing)| {
@@ -736,7 +794,25 @@ pub fn compare_batches(
                 )
             })
             .collect(),
+        agent_movement_slices: finish_slice_pairings(agent_movements, &seeds),
     })
+}
+
+/// Close every bucket of a slice family, counting the seeds a bucket does not
+/// reach as no observation on either side.
+fn finish_slice_pairings(
+    pairings: BTreeMap<String, SlicePairing>,
+    seeds: &[u64],
+) -> BTreeMap<String, BTreeMap<String, PairedDistribution>> {
+    pairings
+        .into_iter()
+        .map(|(key, mut pairing)| {
+            for accumulator in pairing.metrics.values_mut() {
+                accumulator.fill_missing(seeds);
+            }
+            (key, finish_all(pairing.metrics))
+        })
+        .collect()
 }
 
 /// One side's batch manifest and the links a comparison records for it.
@@ -980,12 +1056,38 @@ impl SeedSide<'_> {
     }
 }
 
+/// One slice bucket's readings on one side: a mode's counted families, an agent
+/// movement's operational values and counted families, or a pair movement
+/// bucket's interaction minima.
+struct SliceReadings {
+    /// The slice's metrics, each with its unit.
+    units: BTreeMap<String, &'static str>,
+    /// The slice's per-metric readings.
+    readings: BTreeMap<String, PairReading>,
+}
+
+impl SliceReadings {
+    /// The slice's readings, each with the unit it is reported in.
+    fn of(readings: BTreeMap<String, (&'static str, PairReading)>) -> Self {
+        let mut units = BTreeMap::new();
+        let mut values = BTreeMap::new();
+        for (name, (unit, reading)) in readings {
+            units.insert(name.clone(), unit);
+            values.insert(name, reading);
+        }
+        Self {
+            units,
+            readings: values,
+        }
+    }
+}
+
 /// One movement bucket's readings on one side.
 struct Movements {
     /// The bucket's two movement keys, sorted lexicographically.
     keys: [String; 2],
-    /// The bucket's three metrics, each with its unit.
-    readings: BTreeMap<String, (&'static str, PairReading)>,
+    /// The bucket's readings.
+    readings: SliceReadings,
 }
 
 /// One side's readings of one seed.
@@ -994,8 +1096,12 @@ struct SeedReadings {
     metrics: BTreeMap<String, (&'static str, PairReading)>,
     /// The mode-pair values, keyed by `ModePair` label.
     mode_pairs: BTreeMap<String, PairReading>,
-    /// The movement buckets, keyed by the pair's two movement keys.
+    /// The mode event slices, keyed by `AgentMode` label.
+    mode_events: BTreeMap<String, SliceReadings>,
+    /// The pair movement buckets, keyed by the pair's two movement keys.
     movements: BTreeMap<String, Movements>,
+    /// The agent movement slices, keyed by one movement key.
+    agent_movements: BTreeMap<String, SliceReadings>,
 }
 
 /// Read one artifact's metrics into the comparison's reading shape.
@@ -1018,6 +1124,17 @@ fn read_readings(
         mode_pairs.insert(label.clone(), side.reading(MODE_PAIR_METRIC, value)?);
     }
 
+    // Every mode carries every counted family, `0` when the mode recorded none,
+    // so a mode's slice is a complete observation rather than a sparse bucket.
+    let mut mode_events = BTreeMap::new();
+    for mode in artifact.operational.by_mode.keys() {
+        let readings = mode_event_readings(&artifact.event_counts, mode)
+            .into_iter()
+            .map(|(key, unit, count)| (key, (unit, PairReading::Reported(count as f64))))
+            .collect();
+        mode_events.insert(mode.clone(), SliceReadings::of(readings));
+    }
+
     let mut movements = BTreeMap::new();
     for (bucket, minima) in &artifact.movement_minima {
         let mut readings = BTreeMap::new();
@@ -1028,15 +1145,41 @@ fn read_readings(
             bucket.clone(),
             Movements {
                 keys: minima.movement_keys.clone(),
-                readings,
+                readings: SliceReadings::of(readings),
             },
         );
+    }
+
+    // One agent movement's own slice: the operational values of the movement it
+    // was observed on plus that movement's counted families, which are complete
+    // like a mode's.
+    let mut agent_movements = BTreeMap::new();
+    let mut buckets: BTreeSet<&str> = artifact
+        .operational
+        .by_movement
+        .keys()
+        .map(String::as_str)
+        .collect();
+    buckets.extend(recorded_movement_keys(&artifact.event_counts));
+    for bucket in buckets {
+        let mut readings: BTreeMap<String, (&'static str, PairReading)> = BTreeMap::new();
+        if let Some(values) = artifact.operational.by_movement.get(bucket) {
+            for (name, unit, value) in operational_readings(values) {
+                readings.insert(name.to_owned(), (unit, side.reading(name, value)?));
+            }
+        }
+        for (key, unit, count) in agent_movement_event_readings(&artifact.event_counts, bucket) {
+            readings.insert(key, (unit, PairReading::Reported(count as f64)));
+        }
+        agent_movements.insert(bucket.to_owned(), SliceReadings::of(readings));
     }
 
     Ok(SeedReadings {
         metrics,
         mode_pairs,
+        mode_events,
         movements,
+        agent_movements,
     })
 }
 
@@ -1069,10 +1212,42 @@ fn check_metric_set(
 
 /// One bucket's reading on a side, or no observation when the side does not
 /// carry the bucket at all.
-fn reading_of(bucket: Option<&Movements>, metric: &str) -> PairReading {
+fn slice_reading(bucket: Option<&SliceReadings>, metric: &str) -> PairReading {
     bucket
         .and_then(|bucket| bucket.readings.get(metric))
-        .map_or(PairReading::NotObserved, |(_, reading)| *reading)
+        .copied()
+        .unwrap_or(PairReading::NotObserved)
+}
+
+/// Pair every metric of one slice bucket for one seed.
+///
+/// A metric a bucket carries on neither side is no observation on either side,
+/// which is what a bucket a run does not reach contributes to the pair.
+fn pair_slice_metrics(
+    accumulators: &mut BTreeMap<String, PairedAccumulator>,
+    units: &BTreeMap<String, &'static str>,
+    seed: u64,
+    a: Option<&SliceReadings>,
+    b: Option<&SliceReadings>,
+    a_manifest: &str,
+    b_manifest: &str,
+) {
+    let bucket_metrics: Vec<(String, &'static str)> = units
+        .iter()
+        .map(|(name, unit)| (name.clone(), *unit))
+        .collect();
+    for (name, unit) in bucket_metrics {
+        accumulators
+            .entry(name.clone())
+            .or_insert_with(|| PairedAccumulator::new(unit))
+            .record(Pairing {
+                seed,
+                a: slice_reading(a, &name),
+                b: slice_reading(b, &name),
+                a_manifest,
+                b_manifest,
+            });
+    }
 }
 
 /// One seed's paired reading of one metric.
@@ -1087,6 +1262,24 @@ struct Pairing<'a> {
     a_manifest: &'a str,
     /// Side B's run manifest hash.
     b_manifest: &'a str,
+}
+
+/// One slice bucket's paired accumulators.
+struct SlicePairing {
+    /// The bucket's metrics with the unit each is reported in.
+    units: BTreeMap<String, &'static str>,
+    /// The bucket's per-metric accumulators.
+    metrics: BTreeMap<String, PairedAccumulator>,
+}
+
+impl SlicePairing {
+    /// The bucket's metrics and units, as the side that carries it spells them.
+    fn of(source: &SliceReadings) -> Self {
+        Self {
+            units: source.units.clone(),
+            metrics: BTreeMap::new(),
+        }
+    }
 }
 
 /// One movement bucket's paired accumulators.
@@ -1108,11 +1301,7 @@ impl MovementPairing {
     fn of(source: &Movements) -> Self {
         Self {
             keys: source.keys.clone(),
-            units: source
-                .readings
-                .iter()
-                .map(|(name, (unit, _))| (name.clone(), *unit))
-                .collect(),
+            units: source.readings.units.clone(),
             metrics: BTreeMap::new(),
         }
     }
