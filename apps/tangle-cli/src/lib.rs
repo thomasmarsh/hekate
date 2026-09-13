@@ -1,8 +1,8 @@
 //! Headless command-line interface for Tangle.
 //!
 //! The binary in `main.rs` is a thin argument parser; the reusable work lives
-//! here so tests and future tooling can load a scenario and produce the same
-//! canonical trace without spawning a process.
+//! here so tests and future tooling can load a scenario, check it, and produce
+//! the same canonical trace without spawning a process.
 //!
 //! This crate is an application: it reads scenario files from disk. The kernel
 //! crates remain filesystem-free, and this crate depends on them rather than
@@ -10,6 +10,7 @@
 
 mod baseline;
 mod trace;
+mod validate;
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +22,7 @@ pub use baseline::{
     ScenarioProvenance, capture,
 };
 pub use trace::{Trace, TraceRecorder, canonical_trace};
+pub use validate::{ValidationSummary, render_validation_failure, validate_scenario};
 
 /// Failure to load and compile a scenario file.
 #[derive(Debug, thiserror::Error)]

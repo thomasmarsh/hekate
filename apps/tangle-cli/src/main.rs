@@ -4,6 +4,11 @@
 //! ticks, and writes the canonical trace. The trace hash printed to stderr is
 //! the value a golden test or manifest compares.
 //!
+//! `validate` loads the same source through the same loader but stops there:
+//! it reports whether the schema and the semantic invariants hold, exits
+//! non-zero on any invalid input, and advances no tick or run artifact. It is
+//! the check a CI job or a pre-batch step runs.
+//!
 //! `baseline` captures the deterministic Phase 1 baseline manifest at every
 //! fidelity preset and optionally a non-normative wall-clock report.
 
@@ -14,7 +19,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use tangle_cli::{CaptureRequest, canonical_trace, capture, load_scenario, load_scenario_hashed};
+use tangle_cli::{
+    CaptureRequest, canonical_trace, capture, load_scenario, load_scenario_hashed,
+    render_validation_failure, validate_scenario,
+};
 use tangle_sim::RunConfig;
 
 /// Fixed steps run by `run` when `--ticks` is omitted.
@@ -44,9 +52,34 @@ struct Cli {
 enum Command {
     /// Run a scenario and emit its canonical trace and hash.
     Run(RunArgs),
+    /// Check a scenario source and report diagnostics without running it.
+    #[command(long_about = VALIDATE_LONG_ABOUT)]
+    Validate(ValidateArgs),
     /// Capture the deterministic Phase 1 baseline and a performance report.
     Baseline(BaselineArgs),
 }
+
+/// The `validate` contract shown by `--help`: usage, inputs, and exit codes.
+const VALIDATE_LONG_ABOUT: &str = "\
+Check a scenario source against the scenario schema and the semantic
+invariants the loader enforces, then stop. No tick is advanced and no run
+artifact is written.
+
+Usage:
+  tangle-cli validate <SCENARIO>
+
+Inputs:
+  <SCENARIO>  Path to a JSON5 scenario source document.
+
+Output:
+  One report line on stdout when the loader accepts the source; every
+  diagnostic, one per line, on stderr when it does not.
+
+Exit codes:
+  0  the loader accepts the source
+  1  the source cannot be read, is not valid JSON5 for the source schema, or
+     fails semantic validation
+  2  command-line usage error";
 
 #[derive(Args)]
 struct RunArgs {
@@ -73,6 +106,7 @@ struct RunArgs {
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Run(args) => run(args),
+        Command::Validate(args) => validate(args),
         Command::Baseline(args) => baseline(args),
     }
 }
@@ -110,6 +144,28 @@ fn run(args: RunArgs) -> ExitCode {
 
     eprintln!("trace hash: {}", trace.hash());
     ExitCode::SUCCESS
+}
+
+/// Arguments for `validate`.
+#[derive(Args)]
+struct ValidateArgs {
+    /// Path to the JSON5 scenario.
+    scenario: PathBuf,
+}
+
+fn validate(args: ValidateArgs) -> ExitCode {
+    match validate_scenario(&args.scenario) {
+        Ok(summary) => {
+            println!(
+                "{}: valid scenario '{}' (schema version {})",
+                summary.source_path.display(),
+                summary.scenario_id,
+                summary.schema_version
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(render_validation_failure(&error)),
+    }
 }
 
 /// Arguments for `baseline`.
