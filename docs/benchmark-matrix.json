@@ -1,0 +1,1526 @@
+{
+  "matrix_version": 1,
+  "owner": "TAS-059-benchmark-matrix-and-tolerances",
+  "source": "docs/benchmark-matrix.md",
+  "modes": [
+    "passenger_car",
+    "pedestrian",
+    "bicycle",
+    "scooter",
+    "bus",
+    "rigid_truck",
+    "tractor_semitrailer"
+  ],
+  "mode_classes": {
+    "passenger_car": "M",
+    "pedestrian": "P",
+    "bicycle": "N",
+    "scooter": "N",
+    "bus": "M",
+    "rigid_truck": "M",
+    "tractor_semitrailer": "A"
+  },
+  "families": [
+    "following",
+    "crossing",
+    "merging",
+    "overtaking",
+    "head-on_opposing",
+    "shared_space",
+    "stop_service",
+    "unknown"
+  ],
+  "pairs": [
+    "passenger_car__passenger_car",
+    "passenger_car__pedestrian",
+    "passenger_car__bicycle",
+    "passenger_car__scooter",
+    "passenger_car__bus",
+    "passenger_car__rigid_truck",
+    "passenger_car__tractor_semitrailer",
+    "pedestrian__pedestrian",
+    "pedestrian__bicycle",
+    "pedestrian__scooter",
+    "pedestrian__bus",
+    "pedestrian__rigid_truck",
+    "pedestrian__tractor_semitrailer",
+    "bicycle__bicycle",
+    "bicycle__scooter",
+    "bicycle__bus",
+    "bicycle__rigid_truck",
+    "bicycle__tractor_semitrailer",
+    "scooter__scooter",
+    "scooter__bus",
+    "scooter__rigid_truck",
+    "scooter__tractor_semitrailer",
+    "bus__bus",
+    "bus__rigid_truck",
+    "bus__tractor_semitrailer",
+    "rigid_truck__rigid_truck",
+    "rigid_truck__tractor_semitrailer",
+    "tractor_semitrailer__tractor_semitrailer"
+  ],
+  "disposition_counts": {
+    "supported": 157,
+    "impossible": 67,
+    "deferred": 0
+  },
+  "family_disposition_counts": {
+    "following": {
+      "supported": 22,
+      "impossible": 6
+    },
+    "crossing": {
+      "supported": 28,
+      "impossible": 0
+    },
+    "merging": {
+      "supported": 22,
+      "impossible": 6
+    },
+    "overtaking": {
+      "supported": 21,
+      "impossible": 7
+    },
+    "head-on_opposing": {
+      "supported": 22,
+      "impossible": 6
+    },
+    "shared_space": {
+      "supported": 7,
+      "impossible": 21
+    },
+    "stop_service": {
+      "supported": 7,
+      "impossible": 21
+    },
+    "unknown": {
+      "supported": 28,
+      "impossible": 0
+    }
+  },
+  "impossible_reasons": {
+    "FD": "disjoint facility geometry between pedestrian and wheeled agents",
+    "OP": "no pedestrian lateral-passing/overtaking tactic",
+    "WWS": "wheeled-only shared space is undefined in Phase 2",
+    "NOBUS": "no stop service without a bus participant"
+  },
+  "cell_classes": {
+    "CC-CAR": {
+      "quantity": [
+        "coordinate round-trip error",
+        "body dimension error",
+        "command-envelope violations",
+        "steady-state free-speed error"
+      ],
+      "tolerance": [
+        "T-RT",
+        "T-DIM",
+        "T-ENV",
+        "T-SPD"
+      ],
+      "baseline": "phase1",
+      "presets": [
+        "fast",
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-PED": {
+      "quantity": [
+        "circle-diameter error",
+        "command-envelope violations",
+        "steady-state free-speed error"
+      ],
+      "tolerance": [
+        "T-DIM",
+        "T-ENV",
+        "T-SPD"
+      ],
+      "baseline": "phase1",
+      "presets": [
+        "fast",
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-NARROW": {
+      "quantity": [
+        "coordinate round-trip error",
+        "body dimension error",
+        "command-envelope violations",
+        "steady-state free-speed error"
+      ],
+      "tolerance": [
+        "T-RT",
+        "T-DIM",
+        "T-ENV",
+        "T-SPD"
+      ],
+      "baseline": "increment-1",
+      "presets": [
+        "fast",
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-HEAVY": {
+      "quantity": [
+        "coordinate round-trip error",
+        "body dimension error",
+        "command-envelope violations",
+        "swept-turn feasibility"
+      ],
+      "tolerance": [
+        "T-RT",
+        "T-DIM",
+        "T-ENV",
+        "T-SWEPT"
+      ],
+      "baseline": "increment-3",
+      "presets": [
+        "fast",
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-ARTIC": {
+      "quantity": [
+        "max segment pose error",
+        "off-tracking error",
+        "missed segment contacts"
+      ],
+      "tolerance": [
+        "T-ART",
+        "T-OFF",
+        "T-SWEPT"
+      ],
+      "baseline": "increment-3",
+      "presets": [
+        "fast",
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-TRANSIT": {
+      "quantity": [
+        "passenger conservation residual",
+        "hand-computed dwell error",
+        "occupancy bound"
+      ],
+      "tolerance": [
+        "T-CONS",
+        "T-DWELL",
+        "T-OCC"
+      ],
+      "baseline": "increment-4",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-GROUP": {
+      "quantity": [
+        "stranded group members",
+        "group conservation residual"
+      ],
+      "tolerance": [
+        "T-GROUP",
+        "T-CONS"
+      ],
+      "baseline": "increment-5",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-FOLLOW": {
+      "quantity": [
+        "per-mode-pair minimum surface separation",
+        "command-envelope violations",
+        "collision-event count"
+      ],
+      "tolerance": [
+        "T-SEP",
+        "T-ENV",
+        "T-REG"
+      ],
+      "baseline": "phase1-or-increment-5",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-CROSS": {
+      "quantity": [
+        "per-mode-pair minimum surface separation",
+        "minimum TTC",
+        "PET",
+        "collision-event count"
+      ],
+      "tolerance": [
+        "T-SEP",
+        "T-TTC",
+        "T-REG"
+      ],
+      "baseline": "phase1-or-increment-5",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-MERGE": {
+      "quantity": [
+        "per-mode-pair minimum surface separation",
+        "unresolved mutual-yield steps"
+      ],
+      "tolerance": [
+        "T-SEP",
+        "T-DEAD"
+      ],
+      "baseline": "increment-5",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-OVERTAKE": {
+      "quantity": [
+        "predicted vs executed minimum clearance",
+        "close-pass minimum clearance",
+        "boundary-crossings without an event"
+      ],
+      "tolerance": [
+        "T-O1",
+        "T-O2",
+        "T-O3"
+      ],
+      "baseline": "increment-2",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-OPPOSE": {
+      "quantity": [
+        "minimum separation in the opposing corridor",
+        "occupied-corridor bypasses"
+      ],
+      "tolerance": [
+        "T-H1",
+        "T-H2"
+      ],
+      "baseline": "increment-2-or-5",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-SHARED": {
+      "quantity": [
+        "per-pair minimum surface separation",
+        "unresolved mutual-yield steps"
+      ],
+      "tolerance": [
+        "T-SEP",
+        "T-DEAD"
+      ],
+      "baseline": "increment-5",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-STOP": {
+      "quantity": [
+        "passenger conservation residual",
+        "occupancy bound",
+        "hand-computed dwell error"
+      ],
+      "tolerance": [
+        "T-CONS",
+        "T-OCC",
+        "T-DWELL"
+      ],
+      "baseline": "increment-4",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-UNKNOWN": {
+      "quantity": [
+        "forced-classification count"
+      ],
+      "tolerance": [
+        "T-CLASS"
+      ],
+      "baseline": "increment-6",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "CC-MIXED": {
+      "quantity": [
+        "agent/passenger/route conservation residual",
+        "per-mode-pair minimum separation",
+        "conclusion sign stability"
+      ],
+      "tolerance": [
+        "T-CONS",
+        "T-SEP",
+        "T-STABLE"
+      ],
+      "baseline": "increment-7",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    }
+  },
+  "tolerances": {
+    "T-SEP": {
+      "quantity": "per-mode-pair minimum surface separation, m",
+      "bound": ">= -1e-9",
+      "baseline": "phase1-or-fixture-reference"
+    },
+    "T-REG": {
+      "quantity": "collision-event count on the fixture, records",
+      "bound": "<= frozen Phase 1 count for the same fixture",
+      "baseline": "phase1"
+    },
+    "T-CONS": {
+      "quantity": "agent/passenger/route conservation residual",
+      "bound": "= 0",
+      "baseline": "phase1-or-increment-4-or-7"
+    },
+    "T-DEAD": {
+      "quantity": "unresolved mutual-yield steps",
+      "bound": "= 0",
+      "baseline": "increment-5"
+    },
+    "T-O1": {
+      "quantity": "abs(predicted - executed minimum clearance), m",
+      "bound": "<= 0.10",
+      "baseline": "increment-2"
+    },
+    "T-O2": {
+      "quantity": "close-pass minimum body-to-body clearance, m",
+      "bound": ">= authored clearance band - 0.01",
+      "baseline": "increment-2"
+    },
+    "T-O3": {
+      "quantity": "boundary-crossings without an emitted event, count",
+      "bound": "= 0",
+      "baseline": "increment-2"
+    },
+    "T-H1": {
+      "quantity": "minimum separation in the opposing corridor, m",
+      "bound": ">= -1e-9",
+      "baseline": "increment-2"
+    },
+    "T-H2": {
+      "quantity": "occupied-opposing-corridor bypasses, count",
+      "bound": "= 0",
+      "baseline": "increment-2"
+    },
+    "T-DWELL": {
+      "quantity": "abs(realized dwell - hand-computed dwell formula), s",
+      "bound": "<= 1e-9",
+      "baseline": "increment-4"
+    },
+    "T-OCC": {
+      "quantity": "bus occupancy, passengers",
+      "bound": "0 <= occupancy <= capacity",
+      "baseline": "increment-4"
+    },
+    "T-TTC": {
+      "quantity": "TTC/PET reporting resolution, s; applicability status presence",
+      "bound": "resolution <= 1e-6; status present out of range",
+      "baseline": "def-005"
+    },
+    "T-CLASS": {
+      "quantity": "forced-classification count, records",
+      "bound": "= 0",
+      "baseline": "increment-6"
+    },
+    "T-GROUP": {
+      "quantity": "stranded group members, count",
+      "bound": "= 0",
+      "baseline": "increment-5"
+    },
+    "T-STABLE": {
+      "quantity": "material-conclusion verdict flips between standard and fine",
+      "bound": "= 0 flips, or each flip reported sensitive",
+      "baseline": "increment-7"
+    },
+    "T-RT": {
+      "quantity": "path-world-path coordinate round-trip error, m",
+      "bound": "<= 1e-9",
+      "baseline": "increment-1"
+    },
+    "T-DIM": {
+      "quantity": "realized body dimension vs authored template, m",
+      "bound": "<= 1e-12",
+      "baseline": "authored-version-2-template"
+    },
+    "T-ENV": {
+      "quantity": "command-envelope violations, count",
+      "bound": "= 0",
+      "baseline": "increment-1-or-3"
+    },
+    "T-SPD": {
+      "quantity": "steady-state free-speed error vs authored constant desired speed, m/s",
+      "bound": "<= 1e-6 after declared settling distance",
+      "baseline": "increment-1-or-3"
+    },
+    "T-ART": {
+      "quantity": "max segment pose error vs high-resolution reference, m",
+      "bound": "<= 0.05",
+      "baseline": "increment-3"
+    },
+    "T-OFF": {
+      "quantity": "off-tracking error vs reference, m",
+      "bound": "<= 0.05",
+      "baseline": "increment-3"
+    },
+    "T-SWEPT": {
+      "quantity": "missed segment contacts vs all-pairs reference, count",
+      "bound": "= 0",
+      "baseline": "increment-3"
+    }
+  },
+  "fixtures": {
+    "existing": [
+      "scenarios/walking/walking_guide_v1.json5",
+      "scenarios/benchmarks/straight_approach_v1.json5",
+      "scenarios/benchmarks/car_following_v1.json5",
+      "scenarios/benchmarks/perpendicular_conflict_v1.json5",
+      "scenarios/benchmarks/offset_junction_v1.json5",
+      "scenarios/benchmarks/red_light_compliance_v1.json5",
+      "scenarios/benchmarks/four_leg_signal_v1.json5",
+      "scenarios/benchmarks/pedestrian_crossing_v1.json5",
+      "scenarios/benchmarks/mixed_interaction_v1.json5",
+      "scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5",
+      "scenarios/experiments/four_leg_pedestrian_ns_priority_v1.json5"
+    ],
+    "planned_patterns": {
+      "pair": "scenarios/phase2/inc5/pair_<a>__<b>__<family>_v2.json5",
+      "shared_space": "scenarios/phase2/inc5/shared_space_<a>__<b>_v2.json5",
+      "group": "scenarios/phase2/inc5/group_<name>_v2.json5",
+      "narrow_isolated": "scenarios/phase2/inc1/narrow_isolated_{straight,curve,braking}_v2.json5",
+      "narrow_signal": "scenarios/phase2/inc1/narrow_signal_v2.json5",
+      "narrow_following": "scenarios/phase2/inc1/narrow_following_v2.json5",
+      "narrow_crossing": "scenarios/phase2/inc1/narrow_crossing_v2.json5",
+      "narrow_passing": "scenarios/phase2/inc2/narrow_passing_v2.json5",
+      "motor_passing_narrow": "scenarios/phase2/inc2/motor_passing_narrow_v2.json5",
+      "motor_lane_change": "scenarios/phase2/inc2/motor_lane_change_v2.json5",
+      "narrow_wrong_way": "scenarios/phase2/inc2/narrow_wrong_way_v2.json5",
+      "heavy_isolated": "scenarios/phase2/inc3/heavy_isolated_v2.json5",
+      "heavy_following": "scenarios/phase2/inc3/heavy_following_v2.json5",
+      "articulated_reference": "scenarios/phase2/inc3/articulated_reference_v2.json5",
+      "articulated_conflict": "scenarios/phase2/inc3/articulated_conflict_v2.json5",
+      "transit_low_demand": "scenarios/phase2/inc4/transit_low_demand_v2.json5",
+      "transit_capacity": "scenarios/phase2/inc4/transit_capacity_v2.json5",
+      "transit_variable_dwell": "scenarios/phase2/inc4/transit_variable_dwell_v2.json5",
+      "transit_merge_back": "scenarios/phase2/inc4/transit_merge_back_v2.json5",
+      "transit_blocked_berth": "scenarios/phase2/inc4/transit_blocked_berth_v2.json5",
+      "ambiguous_interaction": "scenarios/phase2/inc6/ambiguous_interaction_v2.json5",
+      "mixed_release": "scenarios/phase2/inc7/mixed_release_v2.json5",
+      "mixed_release_saturated": "scenarios/phase2/inc7/mixed_release_saturated_v2.json5",
+      "density_ramp": "scenarios/phase2/inc5/density_ramp_v2.json5"
+    }
+  },
+  "mixed_cells": {
+    "MIX-1": {
+      "fixture": "scenarios/phase2/inc7/mixed_release_v2.json5",
+      "tolerance": [
+        "T-CONS",
+        "T-SEP"
+      ],
+      "baseline": "increment-7",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "MIX-2": {
+      "fixture": "scenarios/phase2/inc7/mixed_release_saturated_v2.json5",
+      "tolerance": [
+        "T-CONS",
+        "T-SEP"
+      ],
+      "baseline": "increment-7",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    },
+    "MIX-3": {
+      "fixture": "release-comparison-report",
+      "tolerance": [
+        "T-STABLE"
+      ],
+      "baseline": "increment-7",
+      "presets": [
+        "standard",
+        "fine"
+      ]
+    }
+  },
+  "cells": {
+    "passenger_car__passenger_car": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "passenger_car__pedestrian": {
+      "following": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "overtaking": {
+        "disposition": "impossible",
+        "reason": "OP"
+      },
+      "head-on_opposing": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "shared_space": {
+        "disposition": "supported",
+        "class": "CC-SHARED"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "passenger_car__bicycle": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "passenger_car__scooter": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "passenger_car__bus": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "supported",
+        "class": "CC-STOP"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "passenger_car__rigid_truck": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "passenger_car__tractor_semitrailer": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "pedestrian__pedestrian": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "impossible",
+        "reason": "OP"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "supported",
+        "class": "CC-SHARED"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "pedestrian__bicycle": {
+      "following": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "overtaking": {
+        "disposition": "impossible",
+        "reason": "OP"
+      },
+      "head-on_opposing": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "shared_space": {
+        "disposition": "supported",
+        "class": "CC-SHARED"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "pedestrian__scooter": {
+      "following": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "overtaking": {
+        "disposition": "impossible",
+        "reason": "OP"
+      },
+      "head-on_opposing": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "shared_space": {
+        "disposition": "supported",
+        "class": "CC-SHARED"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "pedestrian__bus": {
+      "following": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "overtaking": {
+        "disposition": "impossible",
+        "reason": "OP"
+      },
+      "head-on_opposing": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "shared_space": {
+        "disposition": "supported",
+        "class": "CC-SHARED"
+      },
+      "stop_service": {
+        "disposition": "supported",
+        "class": "CC-STOP"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "pedestrian__rigid_truck": {
+      "following": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "overtaking": {
+        "disposition": "impossible",
+        "reason": "OP"
+      },
+      "head-on_opposing": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "shared_space": {
+        "disposition": "supported",
+        "class": "CC-SHARED"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "pedestrian__tractor_semitrailer": {
+      "following": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "overtaking": {
+        "disposition": "impossible",
+        "reason": "OP"
+      },
+      "head-on_opposing": {
+        "disposition": "impossible",
+        "reason": "FD"
+      },
+      "shared_space": {
+        "disposition": "supported",
+        "class": "CC-SHARED"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bicycle__bicycle": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bicycle__scooter": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bicycle__bus": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "supported",
+        "class": "CC-STOP"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bicycle__rigid_truck": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bicycle__tractor_semitrailer": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "scooter__scooter": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "scooter__bus": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "supported",
+        "class": "CC-STOP"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "scooter__rigid_truck": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "scooter__tractor_semitrailer": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bus__bus": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "supported",
+        "class": "CC-STOP"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bus__rigid_truck": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "supported",
+        "class": "CC-STOP"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "bus__tractor_semitrailer": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "supported",
+        "class": "CC-STOP"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "rigid_truck__rigid_truck": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "rigid_truck__tractor_semitrailer": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    },
+    "tractor_semitrailer__tractor_semitrailer": {
+      "following": {
+        "disposition": "supported",
+        "class": "CC-FOLLOW"
+      },
+      "crossing": {
+        "disposition": "supported",
+        "class": "CC-CROSS"
+      },
+      "merging": {
+        "disposition": "supported",
+        "class": "CC-MERGE"
+      },
+      "overtaking": {
+        "disposition": "supported",
+        "class": "CC-OVERTAKE"
+      },
+      "head-on_opposing": {
+        "disposition": "supported",
+        "class": "CC-OPPOSE"
+      },
+      "shared_space": {
+        "disposition": "impossible",
+        "reason": "WWS"
+      },
+      "stop_service": {
+        "disposition": "impossible",
+        "reason": "NOBUS"
+      },
+      "unknown": {
+        "disposition": "supported",
+        "class": "CC-UNKNOWN"
+      }
+    }
+  }
+}

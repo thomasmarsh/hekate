@@ -1,9 +1,9 @@
 ---
 context_rev: 3
 priority: P1
-updated: 2026-09-13T17:25:38Z
+updated: 2026-09-13T17:36:47Z
 summary: The Phase 1 entry gate is satisfied and the schema-version-2 and compiled-agent-component increments are delivered; Increment 0 still owes the benchmark matrix and arbitrary-body-kind representation.
-next: [[TAS-059-benchmark-matrix-and-tolerances]]
+next: [[TAS-060-body-kinds-and-segments]]
 ---
 
 # Outcome
@@ -72,9 +72,10 @@ Still owed, groomed into targeted child sessions (§ Increment 0 of `PHASE_2_PLA
    The compiled component model, mode-template compilation and validation, the
    four controller-stage interfaces, a reusable model-card template conformed to
    by both Phase 1 cards, and the synthetic-template no-branch gate are in place.
-3. [[TAS-059-benchmark-matrix-and-tolerances]] — the benchmark matrix and
-   quantitative tolerances for independent, pairwise, and mixed-mode validation,
-   building on the existing fidelity presets.
+3. [[TAS-059-benchmark-matrix-and-tolerances]] — **delivered and resolved.**
+   `docs/benchmark-matrix.md` (with a machine-readable companion) names every
+   mode, mode pair, and interaction family cell with its fixture, quantity
+   compared, metric-bound tolerance, baseline, and fidelity presets.
 4. [[TAS-060-body-kinds-and-segments]] — arbitrary body kinds and optional body
    segments in output and presenters, with leaves
    [[TAS-071-body-kind-and-segment-output]] and
