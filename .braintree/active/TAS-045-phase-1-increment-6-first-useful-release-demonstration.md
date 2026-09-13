@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T13:05:35Z
+updated: 2026-09-13T13:47:55Z
 summary: Phase 1 Increment 6 delivers the first useful release demonstration - two scenario-only variants of one small intersection, a checked-in experiment spec and seed bank, immutable run results and a concise comparison report, golden traces with Fast/Standard/Fine convergence evidence and a known-limitations document, one-command reproduction, and a recorded replay with live-view instructions.
-next: [[TAS-049-increment-6-evidence-and-reproduction]]
+next: [[TAS-050-increment-6-replay-and-live-view]]
 ---
 
 # Context
