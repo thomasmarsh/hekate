@@ -809,6 +809,51 @@ fn the_mode_and_movement_slices_pair_by_mode_and_movement() {
     );
 }
 
+/// A sparse bucket first reached at a later seed still reports its unpaired
+/// seeds ascending: the seed the bucket never reached at all is appended after
+/// the readings, so the published list must be sorted rather than left in
+/// insertion order.
+#[test]
+fn a_bucket_first_reached_at_a_later_seed_still_orders_its_unpaired_seeds() {
+    let scratch = Scratch::new("sparse-order");
+    let bucket = ["movement:d", "movement:d"];
+    // Only side B carries the bucket, and only at seed 1. At seed 0 neither side
+    // reports it, so seed 0 reaches the distribution through the fill alone.
+    let carried = SyntheticSeed {
+        movements: BTreeMap::from([movement_bucket(
+            bucket,
+            reported(2.0),
+            absent(MetricStatus::NotApplicable),
+            reported(0.5),
+        )]),
+        ..SyntheticSeed::default()
+    };
+    let a = vec![(0, SyntheticSeed::default()), (1, SyntheticSeed::default())];
+    let b = vec![(0, SyntheticSeed::default()), (1, carried)];
+    let (a_root, b_root, bank_path, _) = synthetic_pair(&scratch, "sparse-order", &[0, 1], &a, &b);
+    let comparison = compare_batches(&a_root, &b_root, &bank_path).expect("the batches compare");
+
+    let slice = &comparison.movement_slices[&format!("{}|{}", bucket[0], bucket[1])];
+    let separation = &slice.metrics["minimum_separation_m"];
+    assert_eq!(separation.count, 0);
+    assert_eq!(
+        separation
+            .unpaired
+            .iter()
+            .map(|seed| (seed.seed, seed.a, seed.b))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, MetricStatus::NotObserved, MetricStatus::NotObserved),
+            (1, MetricStatus::NotObserved, MetricStatus::Reported)
+        ],
+        "the seed the bucket never reached must be listed below the seed it did"
+    );
+    assert_eq!(
+        separation.count + separation.unpaired.len(),
+        comparison.pairs.len()
+    );
+}
+
 /// A pair with a not-applicable or not-observed side is excluded from the
 /// statistic and counted, so a metric with fewer reported pairs reports its
 /// paired `n` rather than a fabricated zero.

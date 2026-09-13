@@ -1173,8 +1173,10 @@ impl PairedAccumulator {
     ///
     /// A slice bucket exists only where a run carries it, so the seeds it does
     /// not reach would otherwise leave the distribution's statuses short of the
-    /// comparison's pairs. The seeds are walked in the bank's order, so the
-    /// unpaired list stays ascending.
+    /// comparison's pairs. The seeds are walked in the bank's order, but a seed
+    /// the bucket does reach was already recorded by then, so the seeds this
+    /// walk appends are not necessarily past it; [`Self::finish`] sorts the list
+    /// into seed order before it is published.
     fn fill_missing(&mut self, seeds: &[u64]) {
         let known: BTreeSet<u64> = self
             .differences
@@ -1195,9 +1197,13 @@ impl PairedAccumulator {
 
     /// Close the accumulator into the metric's paired comparison.
     ///
-    /// The seeds were recorded in the seed bank's order, so the seed lists are
-    /// already ascending and a distribution's order is its own property.
-    fn finish(self) -> PairedDistribution {
+    /// The paired seeds were recorded in the seed bank's order. The unpaired
+    /// list is not in that order yet: a bucket first reached at seed `k` records
+    /// `k` before [`Self::fill_missing`] appends the lower seeds it never
+    /// reaches, so the list is sorted here and published in seed order whatever
+    /// the call order was.
+    fn finish(mut self) -> PairedDistribution {
+        self.unpaired.sort_by_key(|unpaired| unpaired.seed);
         let values: Vec<f64> = self
             .differences
             .iter()
