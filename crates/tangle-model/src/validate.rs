@@ -12,8 +12,12 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::source::{
-    PathEnd, PointSource, ProfileRangeSource, RuleKind, SUPPORTED_SCHEMA_VERSION, ScenarioSource,
-    SignalColor,
+    ConflictRegionSource, CrossingSource, DemandChoiceSource, DemandSpawnSource,
+    MIN_SUPPORTED_SCHEMA_VERSION, ModeBodySource, ModeTemplateSource, MotionKind,
+    MovementDirection, PathEnd, PathSource, PedestrianRouteShareSource, PedestrianRouteSource,
+    PointSource, PolygonSource, PortalSource, ProfileRangeSource, RouteShareSource, RuleKind,
+    RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioSource, ScenarioSourceV2, SignalColor,
+    SignalSource, WaitingAreaSource,
 };
 
 /// Stable, machine-readable diagnostic codes.
@@ -132,6 +136,22 @@ pub enum DiagnosticCode {
     PedestrianDemandRoutePortalMismatch,
     /// A pedestrian demand source lists one route more than once.
     PedestrianDemandDuplicateRoute,
+    /// A version-2 movement's declared direction disagrees with its portal order.
+    MovementDirectionMismatch,
+    /// A version-2 mode template's body kind cannot use its motion family.
+    ModeTemplateBodyMotion,
+    /// A version-2 mode template's profiles are missing or unexpected for its family.
+    ModeTemplateProfile,
+    /// A version-2 demand source references an undeclared mode template.
+    DemandUnknownMode,
+    /// A version-2 demand source references an undeclared path.
+    DemandUnknownPath,
+    /// A version-2 demand choice does not match the mode's motion family.
+    DemandChoiceMismatch,
+    /// A version-2 demand interval is non-finite, negative, or inverted.
+    DemandIntervalInvalid,
+    /// A version-2 document declares an unusable population demand.
+    DemandPopulationInvalid,
 }
 
 impl DiagnosticCode {
@@ -195,6 +215,14 @@ impl DiagnosticCode {
                 "E_PEDESTRIAN_DEMAND_ROUTE_PORTAL_MISMATCH"
             }
             Self::PedestrianDemandDuplicateRoute => "E_PEDESTRIAN_DEMAND_DUPLICATE_ROUTE",
+            Self::MovementDirectionMismatch => "E_MOVEMENT_DIRECTION",
+            Self::ModeTemplateBodyMotion => "E_MODE_TEMPLATE_BODY_MOTION",
+            Self::ModeTemplateProfile => "E_MODE_TEMPLATE_PROFILE",
+            Self::DemandUnknownMode => "E_DEMAND_UNKNOWN_MODE",
+            Self::DemandUnknownPath => "E_DEMAND_UNKNOWN_PATH",
+            Self::DemandChoiceMismatch => "E_DEMAND_CHOICE_MISMATCH",
+            Self::DemandIntervalInvalid => "E_DEMAND_INTERVAL",
+            Self::DemandPopulationInvalid => "E_DEMAND_POPULATION",
         }
     }
 }
@@ -235,53 +263,154 @@ impl fmt::Display for Diagnostic {
     }
 }
 
-/// Validate a source scenario, returning every diagnostic in source order.
+/// Validate a version-1 source scenario, returning every diagnostic in source order.
 ///
-/// An empty result means the scenario is safe to compile.
+/// Version 1 keeps a direct read path until the migration step routes it through
+/// version 2. An empty result means the scenario is safe to compile.
 pub fn validate(source: &ScenarioSource) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-
-    if source.schema_version != SUPPORTED_SCHEMA_VERSION {
-        diagnostics.push(Diagnostic::new(
-            DiagnosticCode::UnsupportedSchemaVersion,
-            Some(source.id.clone()),
-            format!(
-                "schema_version {} is not supported; this build reads version {}",
-                source.schema_version, SUPPORTED_SCHEMA_VERSION
-            ),
-        ));
-    }
-
-    validate_ids(source, &mut diagnostics);
-    validate_paths(source, &mut diagnostics);
-    validate_portals(source, &mut diagnostics);
-    validate_polygons(source, &mut diagnostics);
-    validate_movements(source, &mut diagnostics);
-    validate_crossings(source, &mut diagnostics);
-    validate_conflict_regions(source, &mut diagnostics);
-    validate_rules(source, &mut diagnostics);
-    validate_signals(source, &mut diagnostics);
-    validate_waiting_areas(source, &mut diagnostics);
-    validate_pedestrian_routes(source, &mut diagnostics);
+    check_schema_version(source.schema_version, &source.id, &mut diagnostics);
+    validate_ids(&source.id, v1_ids(source), &mut diagnostics);
+    validate_common(&common_v1(source), &mut diagnostics);
     validate_demand(source, &mut diagnostics);
     validate_pedestrian_demand(source, &mut diagnostics);
     validate_profiles(source, &mut diagnostics);
     validate_pedestrian_profiles(source, &mut diagnostics);
     validate_population(source, &mut diagnostics);
-
     diagnostics
 }
 
-fn validate_ids(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    if source.id.is_empty() {
+/// Validate a version-2 source scenario, returning every diagnostic in source order.
+///
+/// An empty result means the scenario is safe to compile.
+pub fn validate_v2(source: &ScenarioSourceV2) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    check_schema_version(source.schema_version, &source.id, &mut diagnostics);
+    validate_ids(&source.id, v2_ids(source), &mut diagnostics);
+    validate_common(&common_v2(source), &mut diagnostics);
+    validate_mode_templates(&source.mode_templates, &mut diagnostics);
+    validate_demand_v2(source, &mut diagnostics);
+    diagnostics
+}
+
+/// Reject a schema version this build cannot read with the stable
+/// `E_SCHEMA_VERSION` diagnostic.
+fn check_schema_version(version: u32, id: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if !(MIN_SUPPORTED_SCHEMA_VERSION..=SUPPORTED_SCHEMA_VERSION).contains(&version) {
         diagnostics.push(Diagnostic::new(
-            DiagnosticCode::EmptyId,
-            None,
-            "scenario id must not be empty",
+            DiagnosticCode::UnsupportedSchemaVersion,
+            Some(id.to_owned()),
+            format!(
+                "schema_version {version} is not supported; this build reads versions \
+                 {MIN_SUPPORTED_SCHEMA_VERSION} through {SUPPORTED_SCHEMA_VERSION}"
+            ),
         ));
     }
+}
 
-    let authored = source
+/// The movement identity fields shared by the version-1 and version-2 shapes.
+struct MovementView<'a> {
+    id: &'a str,
+    from: &'a str,
+    to: &'a str,
+    path: &'a str,
+    stop_line_m: f64,
+    direction: Option<MovementDirection>,
+}
+
+/// The collections shared by the version-1 and version-2 source shapes.
+struct Common<'a> {
+    paths: &'a [PathSource],
+    portals: &'a [PortalSource],
+    boundaries: &'a [PolygonSource],
+    regions: &'a [PolygonSource],
+    movements: Vec<MovementView<'a>>,
+    crossings: &'a [CrossingSource],
+    waiting_areas: &'a [WaitingAreaSource],
+    pedestrian_routes: &'a [PedestrianRouteSource],
+    conflict_regions: &'a [ConflictRegionSource],
+    rules: &'a [RuleSource],
+    signals: &'a [SignalSource],
+}
+
+fn common_v1(source: &ScenarioSource) -> Common<'_> {
+    Common {
+        paths: &source.paths,
+        portals: &source.portals,
+        boundaries: &source.boundaries,
+        regions: &source.regions,
+        movements: source
+            .movements
+            .iter()
+            .map(|movement| MovementView {
+                id: &movement.id,
+                from: &movement.from,
+                to: &movement.to,
+                path: &movement.path,
+                stop_line_m: movement.stop_line_m,
+                direction: None,
+            })
+            .collect(),
+        crossings: &source.crossings,
+        waiting_areas: &source.waiting_areas,
+        pedestrian_routes: &source.pedestrian_routes,
+        conflict_regions: &source.conflict_regions,
+        rules: &source.rules,
+        signals: &source.signals,
+    }
+}
+
+fn common_v2(source: &ScenarioSourceV2) -> Common<'_> {
+    Common {
+        paths: &source.paths,
+        portals: &source.portals,
+        boundaries: &source.boundaries,
+        regions: &source.regions,
+        movements: source
+            .movements
+            .iter()
+            .map(|movement| MovementView {
+                id: &movement.id,
+                from: &movement.from,
+                to: &movement.to,
+                path: &movement.path,
+                stop_line_m: movement.stop_line_m,
+                direction: Some(movement.direction),
+            })
+            .collect(),
+        crossings: &source.crossings,
+        waiting_areas: &source.waiting_areas,
+        pedestrian_routes: &source.pedestrian_routes,
+        conflict_regions: &source.conflict_regions,
+        rules: &source.rules,
+        signals: &source.signals,
+    }
+}
+
+fn validate_common(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    validate_paths(common, diagnostics);
+    validate_portals(common, diagnostics);
+    validate_polygons(common, diagnostics);
+    validate_movements(common, diagnostics);
+    validate_crossings(common, diagnostics);
+    validate_conflict_regions(common, diagnostics);
+    validate_rules(common, diagnostics);
+    validate_signals(common, diagnostics);
+    validate_waiting_areas(common, diagnostics);
+    validate_pedestrian_routes(common, diagnostics);
+}
+
+/// Movement identifiers in authored order, for cross-reference checks.
+fn movement_ids<'a>(common: &'a Common<'_>) -> Vec<&'a str> {
+    common
+        .movements
+        .iter()
+        .map(|movement| movement.id)
+        .collect()
+}
+
+fn v1_ids(source: &ScenarioSource) -> impl Iterator<Item = &str> {
+    source
         .paths
         .iter()
         .map(|path| path.id.as_str())
@@ -298,12 +427,7 @@ fn validate_ids(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
         )
         .chain(source.rules.iter().map(|rule| rule.id.as_str()))
         .chain(source.signals.iter().map(|signal| signal.id.as_str()))
-        .chain(
-            source
-                .waiting_areas
-                .iter()
-                .map(|waiting_area| waiting_area.id.as_str()),
-        )
+        .chain(source.waiting_areas.iter().map(|area| area.id.as_str()))
         .chain(
             source
                 .pedestrian_routes
@@ -316,7 +440,56 @@ fn validate_ids(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
                 .pedestrian_demand
                 .iter()
                 .map(|demand| demand.id.as_str()),
-        );
+        )
+}
+
+fn v2_ids(source: &ScenarioSourceV2) -> impl Iterator<Item = &str> {
+    source
+        .paths
+        .iter()
+        .map(|path| path.id.as_str())
+        .chain(source.portals.iter().map(|portal| portal.id.as_str()))
+        .chain(source.boundaries.iter().map(|polygon| polygon.id.as_str()))
+        .chain(source.regions.iter().map(|polygon| polygon.id.as_str()))
+        .chain(source.movements.iter().map(|movement| movement.id.as_str()))
+        .chain(source.crossings.iter().map(|crossing| crossing.id.as_str()))
+        .chain(
+            source
+                .conflict_regions
+                .iter()
+                .map(|conflict| conflict.id.as_str()),
+        )
+        .chain(source.rules.iter().map(|rule| rule.id.as_str()))
+        .chain(source.signals.iter().map(|signal| signal.id.as_str()))
+        .chain(source.waiting_areas.iter().map(|area| area.id.as_str()))
+        .chain(
+            source
+                .pedestrian_routes
+                .iter()
+                .map(|route| route.id.as_str()),
+        )
+        .chain(
+            source
+                .mode_templates
+                .iter()
+                .map(|template| template.id.as_str()),
+        )
+        .chain(source.demand.iter().map(|demand| demand.id.as_str()))
+}
+
+fn validate_ids<'a>(
+    scenario_id: &str,
+    authored: impl Iterator<Item = &'a str>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if scenario_id.is_empty() {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::EmptyId,
+            None,
+            "scenario id must not be empty",
+        ));
+    }
+
     let mut seen: HashSet<&str> = HashSet::new();
     for id in authored {
         if id.is_empty() {
@@ -335,8 +508,8 @@ fn validate_ids(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-fn validate_paths(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for path in &source.paths {
+fn validate_paths(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    for path in common.paths {
         let object = Some(path.id.clone());
         if path.points.len() < 2 {
             diagnostics.push(Diagnostic::new(
@@ -382,8 +555,8 @@ fn polyline_length(points: &[PointSource]) -> f64 {
         .sum()
 }
 
-fn validate_portals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for portal in &source.portals {
+fn validate_portals(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    for portal in common.portals {
         if !portal.width_m.is_finite() || portal.width_m <= 0.0 {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::NonPositiveValue,
@@ -395,7 +568,7 @@ fn validate_portals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
             ));
         }
 
-        let Some(path) = source.paths.iter().find(|path| path.id == portal.path) else {
+        let Some(path) = common.paths.iter().find(|path| path.id == portal.path) else {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::PortalUnknownPath,
                 Some(portal.id.clone()),
@@ -433,7 +606,7 @@ fn validate_portals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
             ));
         }
 
-        let duplicate = source
+        let duplicate = common
             .portals
             .iter()
             .filter(|other| other.path == portal.path && other.end == portal.end)
@@ -458,12 +631,12 @@ fn validate_portals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
 
     // Spawn/absorb points that physically overlap are an ambiguous admission
     // area, so reject them before time zero.
-    for (index, portal) in source.portals.iter().enumerate() {
-        let Some(position) = portal_position(source, portal) else {
+    for (index, portal) in common.portals.iter().enumerate() {
+        let Some(position) = portal_position(portal, common.paths) else {
             continue;
         };
-        for other in source.portals.iter().skip(index + 1) {
-            let Some(other_position) = portal_position(source, other) else {
+        for other in common.portals.iter().skip(index + 1) {
+            let Some(other_position) = portal_position(other, common.paths) else {
                 continue;
             };
             let gap = (position.x - other_position.x).hypot(position.y - other_position.y);
@@ -484,11 +657,8 @@ fn validate_portals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
 
 /// World position of a portal's path endpoint, or `None` when the reference is
 /// broken (which another check reports).
-fn portal_position(
-    source: &ScenarioSource,
-    portal: &crate::source::PortalSource,
-) -> Option<PointSource> {
-    let path = source.paths.iter().find(|path| path.id == portal.path)?;
+fn portal_position(portal: &PortalSource, paths: &[PathSource]) -> Option<PointSource> {
+    let path = paths.iter().find(|path| path.id == portal.path)?;
     match portal.end {
         PathEnd::Start => path.points.first().copied(),
         PathEnd::End => path.points.last().copied(),
@@ -683,10 +853,10 @@ fn validate_profiles(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>)
         ),
     ];
     for (field, range) in ranges {
-        validate_profile_range(source, field, range, diagnostics);
+        validate_profile_range(&source.id, field, range, diagnostics);
     }
     validate_compliance_range(
-        source,
+        &source.id,
         "profiles.compliance",
         source.profiles.compliance,
         diagnostics,
@@ -705,10 +875,10 @@ fn validate_pedestrian_profiles(source: &ScenarioSource, diagnostics: &mut Vec<D
         ),
     ];
     for (field, range) in ranges {
-        validate_profile_range(source, field, range, diagnostics);
+        validate_profile_range(&source.id, field, range, diagnostics);
     }
     validate_compliance_range(
-        source,
+        &source.id,
         "pedestrian_profiles.compliance",
         source.pedestrian_profiles.compliance,
         diagnostics,
@@ -718,7 +888,7 @@ fn validate_pedestrian_profiles(source: &ScenarioSource, diagnostics: &mut Vec<D
 /// A compliance propensity is a fraction, so unlike the physical ranges it is
 /// allowed to be zero but must stay within `[0, 1]`.
 fn validate_compliance_range(
-    source: &ScenarioSource,
+    object: &str,
     field: &str,
     range: ProfileRangeSource,
     diagnostics: &mut Vec<Diagnostic>,
@@ -727,7 +897,7 @@ fn validate_compliance_range(
     if !finite || range.min < 0.0 || range.max > 1.0 || range.min > range.max {
         diagnostics.push(Diagnostic::new(
             DiagnosticCode::ProfileComplianceInvalid,
-            Some(source.id.clone()),
+            Some(object.to_owned()),
             format!(
                 "{field} must be finite, within [0, 1], and non-inverted, got [{}, {}]",
                 range.min, range.max
@@ -737,7 +907,7 @@ fn validate_compliance_range(
 }
 
 fn validate_profile_range(
-    source: &ScenarioSource,
+    object: &str,
     field: &str,
     range: ProfileRangeSource,
     diagnostics: &mut Vec<Diagnostic>,
@@ -746,7 +916,7 @@ fn validate_profile_range(
     if !finite || range.min <= 0.0 || range.min > range.max {
         diagnostics.push(Diagnostic::new(
             DiagnosticCode::ProfileRangeInvalid,
-            Some(source.id.clone()),
+            Some(object.to_owned()),
             format!(
                 "profiles.{field} must be finite, positive, and non-inverted, got [{}, {}]",
                 range.min, range.max
@@ -821,31 +991,31 @@ fn validate_polygon(id: &str, points: &[PointSource], diagnostics: &mut Vec<Diag
     }
 }
 
-fn validate_polygons(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for polygon in &source.boundaries {
+fn validate_polygons(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    for polygon in common.boundaries {
         validate_polygon(&polygon.id, &polygon.points, diagnostics);
     }
-    for polygon in &source.regions {
+    for polygon in common.regions {
         validate_polygon(&polygon.id, &polygon.points, diagnostics);
     }
 }
 
-fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for movement in &source.movements {
-        let from = source
+fn validate_movements(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    for movement in &common.movements {
+        let from = common
             .portals
             .iter()
             .find(|portal| portal.id == movement.from);
-        let to = source
+        let to = common
             .portals
             .iter()
             .find(|portal| portal.id == movement.to);
-        let path = source.paths.iter().find(|path| path.id == movement.path);
+        let path = common.paths.iter().find(|path| path.id == movement.path);
 
         if from.is_none() {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::MovementUnknownPortal,
-                Some(movement.id.clone()),
+                Some(movement.id.to_owned()),
                 format!(
                     "movement '{}' starts at undeclared portal '{}'",
                     movement.id, movement.from
@@ -855,7 +1025,7 @@ fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
         if to.is_none() {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::MovementUnknownPortal,
-                Some(movement.id.clone()),
+                Some(movement.id.to_owned()),
                 format!(
                     "movement '{}' ends at undeclared portal '{}'",
                     movement.id, movement.to
@@ -865,7 +1035,7 @@ fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
         if movement.from == movement.to {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::MovementSelfLoop,
-                Some(movement.id.clone()),
+                Some(movement.id.to_owned()),
                 format!(
                     "movement '{}' starts and ends at portal '{}'",
                     movement.id, movement.from
@@ -875,7 +1045,7 @@ fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
         if path.is_none() {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::MovementUnknownPath,
-                Some(movement.id.clone()),
+                Some(movement.id.to_owned()),
                 format!(
                     "movement '{}' follows undeclared path '{}'",
                     movement.id, movement.path
@@ -888,7 +1058,7 @@ fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
                 {
                     diagnostics.push(Diagnostic::new(
                         DiagnosticCode::MovementPortalPathMismatch,
-                        Some(movement.id.clone()),
+                        Some(movement.id.to_owned()),
                         format!(
                             "movement '{}' {role} portal '{}' attaches to path '{}', not '{}'",
                             movement.id, portal.id, portal.path, movement.path
@@ -906,7 +1076,7 @@ fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
             {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticCode::MovementStopLineInvalid,
-                    Some(movement.id.clone()),
+                    Some(movement.id.to_owned()),
                     format!(
                         "movement '{}' stop_line_m must be finite, non-negative, and no greater \
                          than its path length {path_length}, got {}",
@@ -915,11 +1085,31 @@ fn validate_movements(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
                 ));
             }
         }
+
+        // A version-2 direction must agree with the direction the portal order
+        // already fixes on the movement's path.
+        if let (Some(from), Some(direction)) = (from, movement.direction) {
+            let expected = match from.end {
+                PathEnd::Start => MovementDirection::Forward,
+                PathEnd::End => MovementDirection::Reverse,
+            };
+            if direction != expected {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::MovementDirectionMismatch,
+                    Some(movement.id.to_owned()),
+                    format!(
+                        "movement '{}' declares direction {:?} but its from portal fixes {:?}",
+                        movement.id, direction, expected
+                    ),
+                ));
+            }
+        }
     }
 }
 
-fn validate_crossings(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for crossing in &source.crossings {
+fn validate_crossings(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    let movements = movement_ids(common);
+    for crossing in common.crossings {
         if crossing.movements.is_empty() {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::CrossingEmpty,
@@ -927,7 +1117,7 @@ fn validate_crossings(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
                 format!("crossing '{}' crosses no movements", crossing.id),
             ));
         }
-        if !source
+        if !common
             .regions
             .iter()
             .any(|region| region.id == crossing.region)
@@ -942,11 +1132,7 @@ fn validate_crossings(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
             ));
         }
         for movement in &crossing.movements {
-            if !source
-                .movements
-                .iter()
-                .any(|candidate| candidate.id == *movement)
-            {
+            if !movements.contains(&movement.as_str()) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticCode::CrossingUnknownMovement,
                     Some(crossing.id.clone()),
@@ -984,9 +1170,9 @@ fn validate_crossings(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>
     }
 }
 
-fn validate_waiting_areas(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for area in &source.waiting_areas {
-        if !source.regions.iter().any(|region| region.id == area.region) {
+fn validate_waiting_areas(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    for area in common.waiting_areas {
+        if !common.regions.iter().any(|region| region.id == area.region) {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::WaitingAreaUnknownRegion,
                 Some(area.id.clone()),
@@ -999,12 +1185,22 @@ fn validate_waiting_areas(source: &ScenarioSource, diagnostics: &mut Vec<Diagnos
     }
 }
 
-fn validate_pedestrian_routes(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for route in &source.pedestrian_routes {
+fn validate_pedestrian_routes(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    let crossings: Vec<&str> = common
+        .crossings
+        .iter()
+        .map(|crossing| crossing.id.as_str())
+        .collect();
+    let waiting_areas: Vec<&str> = common
+        .waiting_areas
+        .iter()
+        .map(|area| area.id.as_str())
+        .collect();
+    for route in common.pedestrian_routes {
         let object = Some(route.id.clone());
-        let from = source.portals.iter().find(|portal| portal.id == route.from);
-        let to = source.portals.iter().find(|portal| portal.id == route.to);
-        let path = source.paths.iter().find(|path| path.id == route.path);
+        let from = common.portals.iter().find(|portal| portal.id == route.from);
+        let to = common.portals.iter().find(|portal| portal.id == route.to);
+        let path = common.paths.iter().find(|path| path.id == route.path);
 
         if from.is_none() {
             diagnostics.push(Diagnostic::new(
@@ -1064,11 +1260,7 @@ fn validate_pedestrian_routes(source: &ScenarioSource, diagnostics: &mut Vec<Dia
         }
 
         for crossing in &route.crossings {
-            if !source
-                .crossings
-                .iter()
-                .any(|candidate| candidate.id == *crossing)
-            {
+            if !crossings.contains(&crossing.as_str()) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticCode::PedestrianRouteUnknownCrossing,
                     object.clone(),
@@ -1080,11 +1272,7 @@ fn validate_pedestrian_routes(source: &ScenarioSource, diagnostics: &mut Vec<Dia
             }
         }
         for waiting_area in &route.waiting_areas {
-            if !source
-                .waiting_areas
-                .iter()
-                .any(|candidate| candidate.id == *waiting_area)
-            {
+            if !waiting_areas.contains(&waiting_area.as_str()) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticCode::PedestrianRouteUnknownWaitingArea,
                     object.clone(),
@@ -1098,8 +1286,9 @@ fn validate_pedestrian_routes(source: &ScenarioSource, diagnostics: &mut Vec<Dia
     }
 }
 
-fn validate_conflict_regions(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for conflict in &source.conflict_regions {
+fn validate_conflict_regions(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    let movements = movement_ids(common);
+    for conflict in common.conflict_regions {
         validate_polygon(&conflict.id, &conflict.points, diagnostics);
         let distinct =
             conflict.movements.len() == 2 && conflict.movements[0] != conflict.movements[1];
@@ -1115,11 +1304,7 @@ fn validate_conflict_regions(source: &ScenarioSource, diagnostics: &mut Vec<Diag
             ));
         }
         for movement in &conflict.movements {
-            if !source
-                .movements
-                .iter()
-                .any(|candidate| candidate.id == *movement)
-            {
+            if !movements.contains(&movement.as_str()) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticCode::ConflictUnknownMovement,
                     Some(conflict.id.clone()),
@@ -1133,13 +1318,15 @@ fn validate_conflict_regions(source: &ScenarioSource, diagnostics: &mut Vec<Diag
     }
 }
 
-fn validate_rules(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for rule in &source.rules {
-        if !source
-            .movements
-            .iter()
-            .any(|movement| movement.id == rule.movement)
-        {
+fn validate_rules(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    let movements = movement_ids(common);
+    let signals: Vec<&str> = common
+        .signals
+        .iter()
+        .map(|signal| signal.id.as_str())
+        .collect();
+    for rule in common.rules {
+        if !movements.contains(&rule.movement.as_str()) {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::RuleUnknownMovement,
                 Some(rule.id.clone()),
@@ -1151,11 +1338,7 @@ fn validate_rules(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
         }
         match (rule.kind, rule.signal.as_deref()) {
             (RuleKind::Signal, Some(signal)) => {
-                if !source
-                    .signals
-                    .iter()
-                    .any(|candidate| candidate.id == signal)
-                {
+                if !signals.contains(&signal) {
                     diagnostics.push(Diagnostic::new(
                         DiagnosticCode::RuleUnknownSignal,
                         Some(rule.id.clone()),
@@ -1184,8 +1367,9 @@ fn validate_rules(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-fn validate_signals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) {
-    for signal in &source.signals {
+fn validate_signals(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    let movements = movement_ids(common);
+    for signal in common.signals {
         if signal.heads.is_empty() || signal.phases.is_empty() {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::SignalEmpty,
@@ -1209,11 +1393,7 @@ fn validate_signals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
                     ),
                 ));
             }
-            if !source
-                .movements
-                .iter()
-                .any(|movement| movement.id == head.movement)
-            {
+            if !movements.contains(&head.movement.as_str()) {
                 diagnostics.push(Diagnostic::new(
                     DiagnosticCode::SignalUnknownMovement,
                     Some(signal.id.clone()),
@@ -1279,7 +1459,7 @@ fn validate_signals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
                 }
             }
 
-            for conflict in &source.conflict_regions {
+            for conflict in common.conflict_regions {
                 if conflict.movements.len() != 2 {
                     continue;
                 }
@@ -1302,6 +1482,362 @@ fn validate_signals(source: &ScenarioSource, diagnostics: &mut Vec<Diagnostic>) 
                     ));
                 }
             }
+        }
+    }
+}
+
+/// The profile parameters each Increment 0 body/motion family requires.
+fn required_profile_params(motion: MotionKind) -> &'static [&'static str] {
+    match motion {
+        MotionKind::SingleBodyWheeled => &[
+            "speed_mps",
+            "max_accel_mps2",
+            "comfortable_brake_mps2",
+            "time_gap_s",
+            "compliance",
+        ],
+        MotionKind::HolonomicWalking => &["speed_mps", "compliance"],
+    }
+}
+
+/// Validate version-2 mode templates: body and motion must coexist, and the
+/// profile parameters must be exactly those the motion family uses.
+fn validate_mode_templates(templates: &[ModeTemplateSource], diagnostics: &mut Vec<Diagnostic>) {
+    for template in templates {
+        let body_matches_motion = matches!(
+            (&template.body, template.motion),
+            (ModeBodySource::Box { .. }, MotionKind::SingleBodyWheeled)
+                | (ModeBodySource::Circle { .. }, MotionKind::HolonomicWalking)
+        );
+        if !body_matches_motion {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ModeTemplateBodyMotion,
+                Some(template.id.clone()),
+                format!(
+                    "mode template '{}' pairs an incompatible body kind with its motion family",
+                    template.id
+                ),
+            ));
+        }
+
+        let required = required_profile_params(template.motion);
+        for name in required {
+            if !template.profiles.contains_key(*name) {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ModeTemplateProfile,
+                    Some(template.id.clone()),
+                    format!(
+                        "mode template '{}' must declare profile '{name}' for its motion family",
+                        template.id
+                    ),
+                ));
+            }
+        }
+        for (name, range) in &template.profiles {
+            if !required.contains(&name.as_str()) {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ModeTemplateProfile,
+                    Some(template.id.clone()),
+                    format!(
+                        "mode template '{}' declares profile '{name}', which its motion family \
+                         does not use",
+                        template.id
+                    ),
+                ));
+                continue;
+            }
+            if name == "compliance" {
+                validate_compliance_range(&template.id, name, *range, diagnostics);
+            } else {
+                validate_profile_range(&template.id, name, *range, diagnostics);
+            }
+        }
+    }
+}
+
+/// Validate the movement shares of one version-2 vehicle rate demand.
+fn validate_demand_movements(
+    demand_id: &str,
+    portal: &str,
+    shares: &[RouteShareSource],
+    source: &ScenarioSourceV2,
+    object: &Option<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if shares.is_empty() {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::DemandEmptyRoutes,
+            object.clone(),
+            format!("demand '{demand_id}' lists no movements"),
+        ));
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    for share in shares {
+        if !share.weight.is_finite() || share.weight <= 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::NonPositiveValue,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' movement '{}' weight must be finite and positive, got {}",
+                    share.movement, share.weight
+                ),
+            ));
+        }
+        if !seen.insert(share.movement.as_str()) {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DemandDuplicateRoute,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' lists movement '{}' more than once",
+                    share.movement
+                ),
+            ));
+        }
+        match source
+            .movements
+            .iter()
+            .find(|movement| movement.id == share.movement)
+        {
+            None => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DemandUnknownMovement,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' routes to undeclared movement '{}'",
+                    share.movement
+                ),
+            )),
+            Some(movement) if movement.from != portal => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DemandRoutePortalMismatch,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' generates at portal '{portal}' but movement '{}' \
+                     starts at '{}'",
+                    share.movement, movement.from
+                ),
+            )),
+            Some(_) => {}
+        }
+    }
+}
+
+/// Validate the route shares of one version-2 pedestrian rate demand.
+fn validate_demand_routes(
+    demand_id: &str,
+    portal: &str,
+    shares: &[PedestrianRouteShareSource],
+    source: &ScenarioSourceV2,
+    object: &Option<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if shares.is_empty() {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::PedestrianDemandEmptyRoutes,
+            object.clone(),
+            format!("demand '{demand_id}' lists no routes"),
+        ));
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    for share in shares {
+        if !share.weight.is_finite() || share.weight <= 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::NonPositiveValue,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' route '{}' weight must be finite and positive, got {}",
+                    share.route, share.weight
+                ),
+            ));
+        }
+        if !seen.insert(share.route.as_str()) {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianDemandDuplicateRoute,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' lists route '{}' more than once",
+                    share.route
+                ),
+            ));
+        }
+        match source
+            .pedestrian_routes
+            .iter()
+            .find(|route| route.id == share.route)
+        {
+            None => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianDemandUnknownRoute,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' routes to undeclared route '{}'",
+                    share.route
+                ),
+            )),
+            Some(route) if route.from != portal => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PedestrianDemandRoutePortalMismatch,
+                object.clone(),
+                format!(
+                    "demand '{demand_id}' generates at portal '{portal}' but route '{}' starts \
+                     at '{}'",
+                    share.route, route.from
+                ),
+            )),
+            Some(_) => {}
+        }
+    }
+}
+
+/// Validate version-2 mode-tagged demand: declared mode template, declared
+/// portal or path, valid interval, and a choice matching the mode's family.
+fn validate_demand_v2(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    let mut population_ids: Vec<&str> = Vec::new();
+    for entry in &source.demand {
+        let object = Some(entry.id.clone());
+        let template = source
+            .mode_templates
+            .iter()
+            .find(|template| template.id == entry.mode);
+        if template.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DemandUnknownMode,
+                object.clone(),
+                format!(
+                    "demand '{}' references undeclared mode template '{}'",
+                    entry.id, entry.mode
+                ),
+            ));
+        }
+
+        match &entry.spawn {
+            DemandSpawnSource::Rate(rate) => {
+                if !rate.rate_per_hour.is_finite() || rate.rate_per_hour <= 0.0 {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::NonPositiveValue,
+                        object.clone(),
+                        format!(
+                            "demand '{}' rate_per_hour must be finite and positive, got {}",
+                            entry.id, rate.rate_per_hour
+                        ),
+                    ));
+                }
+                let interval = rate.interval_s;
+                if !interval.start_s.is_finite()
+                    || interval.start_s < 0.0
+                    || interval
+                        .end_s
+                        .is_some_and(|end| !end.is_finite() || end <= interval.start_s)
+                {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::DemandIntervalInvalid,
+                        object.clone(),
+                        format!(
+                            "demand '{}' interval_s needs a finite non-negative start and a null \
+                             or greater end",
+                            entry.id
+                        ),
+                    ));
+                }
+                if !source.portals.iter().any(|portal| portal.id == rate.portal) {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::DemandUnknownPortal,
+                        object.clone(),
+                        format!(
+                            "demand '{}' generates at undeclared portal '{}'",
+                            entry.id, rate.portal
+                        ),
+                    ));
+                }
+                match (&rate.choice, template.map(|template| template.motion)) {
+                    (
+                        DemandChoiceSource::Movements(shares),
+                        Some(MotionKind::SingleBodyWheeled),
+                    ) => validate_demand_movements(
+                        &entry.id,
+                        &rate.portal,
+                        shares,
+                        source,
+                        &object,
+                        diagnostics,
+                    ),
+                    (DemandChoiceSource::Routes(shares), Some(MotionKind::HolonomicWalking)) => {
+                        validate_demand_routes(
+                            &entry.id,
+                            &rate.portal,
+                            shares,
+                            source,
+                            &object,
+                            diagnostics,
+                        )
+                    }
+                    (_, Some(_)) => diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::DemandChoiceMismatch,
+                        object.clone(),
+                        format!(
+                            "demand '{}' choice does not match the '{}' mode's motion family",
+                            entry.id, entry.mode
+                        ),
+                    )),
+                    (_, None) => {}
+                }
+            }
+            DemandSpawnSource::Population(population) => {
+                population_ids.push(entry.id.as_str());
+                if !source.paths.iter().any(|path| path.id == population.path) {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::DemandUnknownPath,
+                        object.clone(),
+                        format!(
+                            "demand '{}' places its population on undeclared path '{}'",
+                            entry.id, population.path
+                        ),
+                    ));
+                }
+                if !population.speed_mps.is_finite() || population.speed_mps <= 0.0 {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::NonPositiveValue,
+                        object.clone(),
+                        format!(
+                            "demand '{}' population speed_mps must be finite and positive, got {}",
+                            entry.id, population.speed_mps
+                        ),
+                    ));
+                }
+                if !population.spacing_m.is_finite() || population.spacing_m <= 0.0 {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::NonPositiveValue,
+                        object.clone(),
+                        format!(
+                            "demand '{}' population spacing_m must be finite and positive, got {}",
+                            entry.id, population.spacing_m
+                        ),
+                    ));
+                }
+                if template.is_some_and(|template| template.motion != MotionKind::SingleBodyWheeled)
+                {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::DemandChoiceMismatch,
+                        object.clone(),
+                        format!(
+                            "demand '{}' population spawn requires a single_body_wheeled mode",
+                            entry.id
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    // A population reproduces the Phase 1 walking skeleton, which is incompatible
+    // with a rate demand in the same document; compiling both would silently drop
+    // one of them.
+    if !population_ids.is_empty() && source.demand.len() > 1 {
+        for id in population_ids {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::DemandPopulationInvalid,
+                Some(id.to_owned()),
+                format!(
+                    "demand '{id}' declares a population spawn alongside other demand; a \
+                     population must be the only demand in the document"
+                ),
+            ));
         }
     }
 }
@@ -1336,7 +1872,7 @@ mod tests {
     fn flags_unsupported_schema_version() {
         let source = base(&format!("{OK_PATHS}, {OK_PORTALS}"));
         let mut source = source;
-        source.schema_version = 2;
+        source.schema_version = 3;
         assert_eq!(codes(&source), ["E_SCHEMA_VERSION"]);
     }
 

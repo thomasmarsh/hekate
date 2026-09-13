@@ -11,9 +11,12 @@ use std::collections::HashMap;
 use glam::DVec2;
 
 use crate::source::{
-    PathEnd, PopulationSource, RuleKind, ScenarioSource, SignalColor, SignalSource,
+    DemandChoiceSource, DemandSource, DemandSpawnSource, ModeBodySource, ModeTemplateSource,
+    MovementSource, PathEnd, PedestrianDemandSource, PedestrianProfileSource, PopulationSource,
+    ProfileRangeSource, ProfileSource, RuleKind, ScenarioSource, ScenarioSourceV2, SignalColor,
+    SignalSource,
 };
-use crate::validate::{Diagnostic, validate};
+use crate::validate::{Diagnostic, validate, validate_v2};
 
 /// Dense index of a compiled guide path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1385,7 +1388,26 @@ impl CompiledScenario {
         if !diagnostics.is_empty() {
             return Err(diagnostics);
         }
+        Ok(Self::compile_validated(source))
+    }
 
+    /// Validate and compile a version-2 source scenario.
+    ///
+    /// Version 2 does not change compiled behavior in Increment 0: mode
+    /// templates and mode-tagged demand are materialized into the version-1
+    /// compiled fields (profiles, pedestrian profiles, population, demand), so
+    /// the kernel consumes the same compiled representation. Compiling the
+    /// authored shapes into agent components is a later leaf.
+    pub fn compile_v2(source: ScenarioSourceV2) -> Result<Self, Vec<Diagnostic>> {
+        let diagnostics = validate_v2(&source);
+        if !diagnostics.is_empty() {
+            return Err(diagnostics);
+        }
+        Ok(Self::compile_validated(v2_to_v1_view(source)))
+    }
+
+    /// Compile a source scenario that has already passed validation.
+    fn compile_validated(source: ScenarioSource) -> Self {
         // Validation guarantees these lookups succeed, so a missing name is a
         // programming error rather than a user diagnostic.
         let path_index = index_by_id(source.paths.iter().map(|path| path.id.as_str()));
@@ -1626,7 +1648,7 @@ impl CompiledScenario {
             pedestrian_demand: names(source.pedestrian_demand.iter().map(|demand| &demand.id)),
         };
 
-        Ok(Self {
+        Self {
             id: source.id,
             schema_version: source.schema_version,
             paths,
@@ -1646,7 +1668,7 @@ impl CompiledScenario {
             pedestrian_profiles: CompiledPedestrianProfile::from_source(source.pedestrian_profiles),
             population: source.population,
             id_map,
-        })
+        }
     }
 
     /// Authored scenario identifier.
@@ -1821,6 +1843,144 @@ fn index_by_id<'a>(ids: impl Iterator<Item = &'a str>) -> HashMap<&'a str, usize
 /// Clone a sequence of authored identifiers.
 fn names<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
     ids.map(String::clone).collect()
+}
+
+/// Materialize the version-1 reader view the Increment 0 compiler consumes.
+///
+/// Version 2 does not change compiled behavior in this increment, so a
+/// validated version-2 document is mapped back onto the version-1 source shape
+/// and compiled by the same code path. Validation guarantees every template and
+/// reference used here exists; the `Default` fallbacks only cover profile sets
+/// no authored agent references.
+fn v2_to_v1_view(source: ScenarioSourceV2) -> ScenarioSource {
+    let car = source
+        .mode_templates
+        .iter()
+        .find(|template| template.id == "passenger_car");
+    let pedestrian = source
+        .mode_templates
+        .iter()
+        .find(|template| template.id == "pedestrian");
+
+    let profiles = car.map(car_profile_from_template).unwrap_or_default();
+    let pedestrian_profiles = pedestrian
+        .map(pedestrian_profile_from_template)
+        .unwrap_or_default();
+
+    let mut demand = Vec::new();
+    let mut pedestrian_demand = Vec::new();
+    let mut population = None;
+    for entry in &source.demand {
+        match &entry.spawn {
+            DemandSpawnSource::Rate(rate) => match &rate.choice {
+                DemandChoiceSource::Movements(shares) => demand.push(DemandSource {
+                    id: entry.id.clone(),
+                    portal: rate.portal.clone(),
+                    rate_vph: rate.rate_per_hour,
+                    routes: shares.clone(),
+                }),
+                DemandChoiceSource::Routes(shares) => {
+                    pedestrian_demand.push(PedestrianDemandSource {
+                        id: entry.id.clone(),
+                        portal: rate.portal.clone(),
+                        rate_pph: rate.rate_per_hour,
+                        routes: shares.clone(),
+                    });
+                }
+            },
+            DemandSpawnSource::Population(spawn) => {
+                let (length_m, width_m) = match car.map(|template| &template.body) {
+                    Some(ModeBodySource::Box { length_m, width_m }) => (*length_m, *width_m),
+                    _ => (zero_range(), zero_range()),
+                };
+                population = Some(PopulationSource {
+                    vehicle_count: spawn.count,
+                    vehicle_speed_mps: spawn.speed_mps,
+                    vehicle_spacing_m: spawn.spacing_m,
+                    vehicle_length_m: length_m.min,
+                    vehicle_width_m: width_m.min,
+                });
+            }
+        }
+    }
+
+    ScenarioSource {
+        schema_version: source.schema_version,
+        id: source.id,
+        coordinate_system: source.coordinate_system,
+        paths: source.paths,
+        portals: source.portals,
+        boundaries: source.boundaries,
+        regions: source.regions,
+        movements: source
+            .movements
+            .into_iter()
+            .map(|movement| MovementSource {
+                id: movement.id,
+                from: movement.from,
+                to: movement.to,
+                path: movement.path,
+                priority: movement.priority,
+                stop_line_m: movement.stop_line_m,
+            })
+            .collect(),
+        crossings: source.crossings,
+        waiting_areas: source.waiting_areas,
+        pedestrian_routes: source.pedestrian_routes,
+        conflict_regions: source.conflict_regions,
+        rules: source.rules,
+        signals: source.signals,
+        demand,
+        pedestrian_demand,
+        profiles,
+        pedestrian_profiles,
+        population: population.unwrap_or_default(),
+    }
+}
+
+/// A zero-width placeholder range for an unreferenced profile slot.
+fn zero_range() -> ProfileRangeSource {
+    ProfileRangeSource { min: 0.0, max: 0.0 }
+}
+
+/// Materialize the passenger-car profile distributions from a version-2 template.
+fn car_profile_from_template(template: &ModeTemplateSource) -> ProfileSource {
+    let (length_m, width_m) = match &template.body {
+        ModeBodySource::Box { length_m, width_m } => (*length_m, *width_m),
+        ModeBodySource::Circle { .. } => (zero_range(), zero_range()),
+    };
+    ProfileSource {
+        speed_mps: profile_param(template, "speed_mps"),
+        length_m,
+        width_m,
+        time_gap_s: profile_param(template, "time_gap_s"),
+        max_accel_mps2: profile_param(template, "max_accel_mps2"),
+        comfortable_brake_mps2: profile_param(template, "comfortable_brake_mps2"),
+        compliance: profile_param(template, "compliance"),
+    }
+}
+
+/// Materialize the pedestrian profile distributions from a version-2 template.
+fn pedestrian_profile_from_template(template: &ModeTemplateSource) -> PedestrianProfileSource {
+    let radius_m = match &template.body {
+        ModeBodySource::Circle { radius_m } => *radius_m,
+        ModeBodySource::Box { .. } => zero_range(),
+    };
+    PedestrianProfileSource {
+        radius_m,
+        speed_mps: profile_param(template, "speed_mps"),
+        compliance: profile_param(template, "compliance"),
+    }
+}
+
+/// One profile parameter of a mode template that validation has already checked.
+fn profile_param(template: &ModeTemplateSource, name: &str) -> ProfileRangeSource {
+    *template.profiles.get(name).unwrap_or_else(|| {
+        panic!(
+            "validated mode template '{}' must declare '{name}'",
+            template.id
+        )
+    })
 }
 
 /// Convert authored points to world vectors.

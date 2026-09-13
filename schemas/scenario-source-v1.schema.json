@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ScenarioSourceV2",
-  "description": "A version-2 scenario document.\n\nVersion 2 replaces the version-1 `profiles`/`pedestrian_profiles`,\n`population`, `demand`, and `pedestrian_demand` fields with `mode_templates`\nand a mode-tagged `demand`, and makes each movement's `direction` explicit.\nEvery other version-1 field is carried forward unchanged.",
+  "title": "ScenarioSource",
+  "description": "A hand-authored scenario document before validation or compilation.",
   "type": "object",
   "properties": {
     "boundaries": {
@@ -33,31 +33,23 @@
       }
     },
     "demand": {
-      "description": "Mode-tagged demand sources for every mode.",
+      "description": "Portal demand generators; when non-empty they replace the static\nwalking-skeleton population.",
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "#/$defs/DemandSourceV2"
+        "$ref": "#/$defs/DemandSource"
       }
     },
     "id": {
       "description": "Stable scenario identifier recorded in run provenance.",
       "type": "string"
     },
-    "mode_templates": {
-      "description": "Named, validated mode bundles; demand references them by id.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ModeTemplateSource"
-      }
-    },
     "movements": {
-      "description": "Movement connectors with an explicit nominal direction.",
+      "description": "Movement connectors from one portal to another along a guide path.",
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "#/$defs/MovementSourceV2"
+        "$ref": "#/$defs/MovementSource"
       }
     },
     "paths": {
@@ -65,6 +57,32 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/PathSource"
+      }
+    },
+    "pedestrian_demand": {
+      "description": "Pedestrian demand generators; when non-empty they generate pedestrian\nagents and share the world with vehicle demand.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PedestrianDemandSource"
+      }
+    },
+    "pedestrian_profiles": {
+      "description": "Pedestrian physical and behavior profile distributions.",
+      "$ref": "#/$defs/PedestrianProfileSource",
+      "default": {
+        "compliance": {
+          "max": 1.0,
+          "min": 1.0
+        },
+        "radius_m": {
+          "max": 0.3,
+          "min": 0.2
+        },
+        "speed_mps": {
+          "max": 1.6,
+          "min": 1.0
+        }
       }
     },
     "pedestrian_routes": {
@@ -75,11 +93,56 @@
         "$ref": "#/$defs/PedestrianRouteSource"
       }
     },
+    "population": {
+      "description": "Walking-skeleton population tuning, used only when no demand source of\neither mode is declared.",
+      "$ref": "#/$defs/PopulationSource",
+      "default": {
+        "vehicle_count": 6,
+        "vehicle_length_m": 4.5,
+        "vehicle_spacing_m": 20.0,
+        "vehicle_speed_mps": 12.0,
+        "vehicle_width_m": 1.8
+      }
+    },
     "portals": {
       "description": "Entry and exit points attached to path ends.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/PortalSource"
+      }
+    },
+    "profiles": {
+      "description": "Passenger-car physical and behavior profile distributions.",
+      "$ref": "#/$defs/ProfileSource",
+      "default": {
+        "comfortable_brake_mps2": {
+          "max": 3.5,
+          "min": 2.0
+        },
+        "compliance": {
+          "max": 1.0,
+          "min": 1.0
+        },
+        "length_m": {
+          "max": 5.2,
+          "min": 4.0
+        },
+        "max_accel_mps2": {
+          "max": 2.5,
+          "min": 1.2
+        },
+        "speed_mps": {
+          "max": 15.0,
+          "min": 9.0
+        },
+        "time_gap_s": {
+          "max": 2.0,
+          "min": 1.0
+        },
+        "width_m": {
+          "max": 2.0,
+          "min": 1.7
+        }
       }
     },
     "regions": {
@@ -130,23 +193,6 @@
     "portals"
   ],
   "$defs": {
-    "AccessSource": {
-      "description": "Facility access of a version-2 mode template.",
-      "type": "object",
-      "properties": {
-        "facility_kinds": {
-          "description": "Traversable object kinds the mode may use.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/FacilityKind"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "facility_kinds"
-      ]
-    },
     "ConflictRegionSource": {
       "description": "An authored conflict region shared by two movements.\n\nThe geometry lets a renderer or metric show where two movement envelopes\ncross; the movement pair is what a signal check uses to reject conflicting\ngreens. A scenario may author it explicitly or, later, accept a derived one.",
       "type": "object",
@@ -235,315 +281,43 @@
         "movements"
       ]
     },
-    "DemandChoiceSource": {
-      "description": "Choice of movements or routes for a version-2 rate demand spawn.\n\nVehicle modes choose among movements; pedestrian modes choose among\npedestrian routes.",
-      "oneOf": [
-        {
-          "description": "Movements a generated vehicle may follow, with relative weights.",
-          "type": "object",
-          "properties": {
-            "movements": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/RouteShareSource"
-              }
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "movements"
-          ]
-        },
-        {
-          "description": "Pedestrian routes a generated pedestrian may follow, with weights.",
-          "type": "object",
-          "properties": {
-            "routes": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/PedestrianRouteShareSource"
-              }
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "routes"
-          ]
-        }
-      ]
-    },
-    "DemandPopulationSpawnSource": {
-      "description": "A fixed initial-population version-2 demand spawn, placed at `t = 0`.",
-      "type": "object",
-      "properties": {
-        "count": {
-          "description": "Number of agents in the population.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "path": {
-          "description": "Guide path the population is placed on.",
-          "type": "string"
-        },
-        "spacing_m": {
-          "description": "Longitudinal gap between adjacent agents in metres.",
-          "type": "number",
-          "format": "double"
-        },
-        "speed_mps": {
-          "description": "Constant speed in metres per second.",
-          "type": "number",
-          "format": "double"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "path",
-        "count",
-        "speed_mps",
-        "spacing_m"
-      ]
-    },
-    "DemandRateSpawnSource": {
-      "description": "A rate-driven version-2 demand spawn.",
-      "type": "object",
-      "properties": {
-        "choice": {
-          "description": "Movements or routes a generated agent may follow.",
-          "$ref": "#/$defs/DemandChoiceSource"
-        },
-        "interval_s": {
-          "description": "Interval over which the rate applies.",
-          "$ref": "#/$defs/TimeIntervalSource"
-        },
-        "portal": {
-          "description": "Entry portal where generated agents enter the world.",
-          "type": "string"
-        },
-        "rate_per_hour": {
-          "description": "Mean arrival rate in agents per hour.",
-          "type": "number",
-          "format": "double"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "portal",
-        "rate_per_hour",
-        "interval_s",
-        "choice"
-      ]
-    },
-    "DemandSourceV2": {
-      "description": "One mode-tagged version-2 demand source.",
+    "DemandSource": {
+      "description": "One portal demand generator: arrivals at an entry portal and the routes\nthose vehicles take.\n\nA demand source names an entry portal (the `from` portal of one or more\nmovements) and a mean arrival rate. Each generated vehicle is assigned one\nof the listed movements by relative weight, so route assignment is scenario\ndata rather than a simulator branch.",
       "type": "object",
       "properties": {
         "id": {
           "description": "Stable identifier, unique across all authored objects.",
           "type": "string"
         },
-        "mode": {
-          "description": "Mode-template id this demand produces.",
+        "portal": {
+          "description": "Entry portal where generated vehicles enter the world.",
           "type": "string"
         },
-        "spawn": {
-          "description": "How agents are placed.",
-          "$ref": "#/$defs/DemandSpawnSource"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "mode",
-        "spawn"
-      ]
-    },
-    "DemandSpawnSource": {
-      "description": "How a version-2 demand source places agents.",
-      "oneOf": [
-        {
-          "description": "Arrivals at a portal over a time interval.",
-          "type": "object",
-          "properties": {
-            "rate": {
-              "$ref": "#/$defs/DemandRateSpawnSource"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "rate"
-          ]
+        "rate_vph": {
+          "description": "Mean arrival rate in vehicles per hour.",
+          "type": "number",
+          "format": "double"
         },
-        {
-          "description": "A fixed population placed at `t = 0`.",
-          "type": "object",
-          "properties": {
-            "population": {
-              "$ref": "#/$defs/DemandPopulationSpawnSource"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "population"
-          ]
-        }
-      ]
-    },
-    "FacilityKind": {
-      "description": "Traversable object kind a version-2 mode may use.",
-      "oneOf": [
-        {
-          "description": "A guide path.",
-          "type": "string",
-          "const": "path"
-        },
-        {
-          "description": "A pedestrian crossing.",
-          "type": "string",
-          "const": "crossing"
-        },
-        {
-          "description": "A pedestrian waiting area.",
-          "type": "string",
-          "const": "waiting_area"
-        }
-      ]
-    },
-    "ModeBodySource": {
-      "description": "Body geometry distributions of one version-2 mode template.",
-      "oneOf": [
-        {
-          "description": "A rectangular body; dimensions are ranges in metres.",
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "box"
-            },
-            "length_m": {
-              "description": "Body length range in metres.",
-              "$ref": "#/$defs/ProfileRangeSource"
-            },
-            "width_m": {
-              "description": "Body width range in metres.",
-              "$ref": "#/$defs/ProfileRangeSource"
-            }
-          },
-          "required": [
-            "kind",
-            "length_m",
-            "width_m"
-          ]
-        },
-        {
-          "description": "A circular body; the radius is a range in metres.",
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "const": "circle"
-            },
-            "radius_m": {
-              "description": "Body radius range in metres.",
-              "$ref": "#/$defs/ProfileRangeSource"
-            }
-          },
-          "required": [
-            "kind",
-            "radius_m"
-          ]
-        }
-      ]
-    },
-    "ModeTemplateSource": {
-      "description": "One version-2 mode template: a named, validated bundle of body, motion,\ntactical capability, access, occupancy, and profile distributions.",
-      "type": "object",
-      "properties": {
-        "access": {
-          "description": "Traversable object kinds the mode may use.",
-          "$ref": "#/$defs/AccessSource"
-        },
-        "body": {
-          "description": "Body geometry distributions, tagged by `kind`.",
-          "$ref": "#/$defs/ModeBodySource"
-        },
-        "id": {
-          "description": "Stable template id, unique across authored objects.",
-          "type": "string"
-        },
-        "motion": {
-          "description": "Motion family the template uses.",
-          "$ref": "#/$defs/MotionKind"
-        },
-        "occupancy": {
-          "description": "Occupancy the template carries.",
-          "$ref": "#/$defs/OccupancyKind"
-        },
-        "profiles": {
-          "description": "Profile distributions keyed by parameter name.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/ProfileRangeSource"
-          }
-        },
-        "tactics": {
-          "description": "Tactical capabilities the template supports.",
+        "routes": {
+          "description": "Movements a generated vehicle may follow, with relative weights.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/TacticKind"
+            "$ref": "#/$defs/RouteShareSource"
           }
         }
       },
       "additionalProperties": false,
       "required": [
         "id",
-        "body",
-        "motion",
-        "tactics",
-        "access",
-        "occupancy",
-        "profiles"
+        "portal",
+        "rate_vph",
+        "routes"
       ]
     },
-    "MotionKind": {
-      "description": "Motion family a version-2 mode template uses.",
-      "oneOf": [
-        {
-          "description": "Walking on the Phase 1 pedestrian geometry.",
-          "type": "string",
-          "const": "holonomic_walking"
-        },
-        {
-          "description": "A single wheeled body following a reference path.",
-          "type": "string",
-          "const": "single_body_wheeled"
-        }
-      ]
-    },
-    "MovementDirection": {
-      "description": "Nominal traversal direction of a version-2 movement along its reference path.",
-      "oneOf": [
-        {
-          "description": "The movement follows the authored vertex order of its path.",
-          "type": "string",
-          "const": "forward"
-        },
-        {
-          "description": "The movement follows the reverse of the authored vertex order.",
-          "type": "string",
-          "const": "reverse"
-        }
-      ]
-    },
-    "MovementSourceV2": {
-      "description": "A version-2 movement connector with an explicit nominal direction.\n\nEvery version-1 movement field is carried forward unchanged; version 2 adds\n`direction` so the normalized document is self-describing instead of leaving\nthe direction implicit in the `from`/`to` portal order.",
+    "MovementSource": {
+      "description": "A movement connector from one portal to another along a guide path.\n\nA movement is the Phase 1 routing primitive: it names where an agent enters\nthe modeled area, where it leaves, and the guide path between them. Conflict\nregions, crossings, and control rules all reference movements rather than\nnaming a scenario kind, so a layout such as a four-leg intersection is data,\nnot a simulator branch.",
       "type": "object",
       "properties": {
-        "direction": {
-          "description": "Nominal traversal direction of `path`.",
-          "$ref": "#/$defs/MovementDirection"
-        },
         "from": {
           "description": "Portal where the movement begins.",
           "type": "string"
@@ -563,7 +337,7 @@
           "minimum": 0
         },
         "stop_line_m": {
-          "description": "Stop-line arc length in metres from the movement entry.",
+          "description": "Stop-line arc length in metres from the movement entry, measured along\nthe movement's direction of travel. Omitted means `0.0`, the entry\nportal. A controller that must stop holds the vehicle's front bumper at\nthis position.",
           "type": "number",
           "format": "double",
           "default": 0.0
@@ -579,18 +353,7 @@
         "from",
         "to",
         "path",
-        "priority",
-        "direction"
-      ]
-    },
-    "OccupancyKind": {
-      "description": "Occupancy of a version-2 mode template.",
-      "oneOf": [
-        {
-          "description": "One operator, no passengers.",
-          "type": "string",
-          "const": "operator_only"
-        }
+        "priority"
       ]
     },
     "PathEnd": {
@@ -628,6 +391,66 @@
       "required": [
         "id",
         "points"
+      ]
+    },
+    "PedestrianDemandSource": {
+      "description": "One pedestrian demand generator: pedestrian arrivals at an entry portal and\nthe routes those pedestrians take.\n\nThis mirrors [`DemandSource`] for the pedestrian mode and shares its shape,\nso a layout can generate both modes from the same authored primitives.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable identifier, unique across all authored objects.",
+          "type": "string"
+        },
+        "portal": {
+          "description": "Entry portal where generated pedestrians enter the world.",
+          "type": "string"
+        },
+        "rate_pph": {
+          "description": "Mean arrival rate in pedestrians per hour.",
+          "type": "number",
+          "format": "double"
+        },
+        "routes": {
+          "description": "Pedestrian routes a generated pedestrian may follow, with relative\nweights.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PedestrianRouteShareSource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "portal",
+        "rate_pph",
+        "routes"
+      ]
+    },
+    "PedestrianProfileSource": {
+      "description": "Pedestrian physical and behavior profile distributions.\n\nEvery generated pedestrian samples one value from each range from the\n`profile` random stream using its stable agent id, so its body and gait are\nstable for the run. Its signal-compliance propensity is sampled from the\nseparate `compliance` stream under the same agent id. A pedestrian body is a\ncircle, so the physical range is a radius rather than a length and width.",
+      "type": "object",
+      "properties": {
+        "compliance": {
+          "description": "Signal-compliance propensity, a fraction of the pedestrian's bounded\nstopping deceleration they are willing to use to wait at a crossing.\n\n`1.0` waits whenever a bounded stop is possible and `0.0` never waits.\nOne value per pedestrian is drawn from the `compliance` random stream.\nAdditive schema version 1 field: omitted means the fully compliant\ndefault.",
+          "$ref": "#/$defs/ProfileRangeSource",
+          "default": {
+            "max": 1.0,
+            "min": 1.0
+          }
+        },
+        "radius_m": {
+          "description": "Body radius in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "speed_mps": {
+          "description": "Desired walking speed in metres per second.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "radius_m",
+        "speed_mps"
       ]
     },
     "PedestrianRouteShareSource": {
@@ -775,6 +598,46 @@
         "points"
       ]
     },
+    "PopulationSource": {
+      "description": "Walking-skeleton population tuning.",
+      "type": "object",
+      "properties": {
+        "vehicle_count": {
+          "description": "Number of vehicles introduced on the guide path.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vehicle_length_m": {
+          "description": "Vehicle body length in metres.",
+          "type": "number",
+          "format": "double"
+        },
+        "vehicle_spacing_m": {
+          "description": "Longitudinal gap between adjacent vehicles in metres.",
+          "type": "number",
+          "format": "double"
+        },
+        "vehicle_speed_mps": {
+          "description": "Constant vehicle speed in metres per second.",
+          "type": "number",
+          "format": "double"
+        },
+        "vehicle_width_m": {
+          "description": "Vehicle body width in metres.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "vehicle_count",
+        "vehicle_speed_mps",
+        "vehicle_spacing_m",
+        "vehicle_length_m",
+        "vehicle_width_m"
+      ]
+    },
     "PortalSource": {
       "description": "An entry or exit point attached to one end of a path.",
       "type": "object",
@@ -824,6 +687,53 @@
       "required": [
         "min",
         "max"
+      ]
+    },
+    "ProfileSource": {
+      "description": "Passenger-car physical and behavior profile distributions.\n\nEvery generated vehicle samples one value from each physical/longitudinal\nrange from the `profile` random stream, so its body and longitudinal\nbehavior are stable for the run. The `compliance` propensity is sampled\nfrom the separate `compliance` stream. Pedestrian bodies and gait are the\nseparate [`PedestrianProfileSource`] distributions.",
+      "type": "object",
+      "properties": {
+        "comfortable_brake_mps2": {
+          "description": "Comfortable deceleration in metres per second squared.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "compliance": {
+          "description": "Signal-compliance propensity, a fraction of the driver's comfortable\nbraking they are willing to use to obey a stop-required head.\n\n`1.0` obeys whenever a comfortable stop is possible and `0.0` never\nyields to the head. One value per vehicle is drawn from the `compliance`\nrandom stream. Additive schema version 1 field: omitted means the fully\ncompliant default.",
+          "$ref": "#/$defs/ProfileRangeSource",
+          "default": {
+            "max": 1.0,
+            "min": 1.0
+          }
+        },
+        "length_m": {
+          "description": "Body length in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "max_accel_mps2": {
+          "description": "Maximum acceleration in metres per second squared.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "speed_mps": {
+          "description": "Desired free-flow speed in metres per second.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "time_gap_s": {
+          "description": "Desired following time gap in seconds.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "width_m": {
+          "description": "Body width in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed_mps",
+        "length_m",
+        "width_m",
+        "time_gap_s",
+        "max_accel_mps2",
+        "comfortable_brake_mps2"
       ]
     },
     "RouteShareSource": {
@@ -1012,49 +922,6 @@
       "required": [
         "head",
         "color"
-      ]
-    },
-    "TacticKind": {
-      "description": "Tactical capability a version-2 mode template supports.",
-      "oneOf": [
-        {
-          "description": "Follow the agent ahead.",
-          "type": "string",
-          "const": "follow"
-        },
-        {
-          "description": "Stop for a control or an obstruction.",
-          "type": "string",
-          "const": "stop"
-        },
-        {
-          "description": "Yield to a conflicting movement.",
-          "type": "string",
-          "const": "yield"
-        }
-      ]
-    },
-    "TimeIntervalSource": {
-      "description": "The time interval of a version-2 rate demand spawn.",
-      "type": "object",
-      "properties": {
-        "end_s": {
-          "description": "Interval end in seconds; `null` is unbounded.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "start_s": {
-          "description": "Interval start in seconds.",
-          "type": "number",
-          "format": "double"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "start_s"
       ]
     },
     "WaitingAreaSource": {

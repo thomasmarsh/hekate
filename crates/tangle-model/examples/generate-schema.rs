@@ -1,4 +1,4 @@
-//! Regenerate the checked-in JSON Schema for the authored scenario document.
+//! Regenerate the checked-in JSON Schemas for the authored scenario documents.
 //!
 //! Run from the workspace with:
 //!
@@ -10,7 +10,18 @@ use std::path::PathBuf;
 
 fn main() {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = workspace.join("schemas/scenario-source.schema.json");
-    std::fs::write(&output, tangle_model::scenario_schema_json()).expect("schema is writable");
-    println!("wrote {}", output.display());
+    for (file, json) in [
+        (
+            "scenario-source.schema.json",
+            tangle_model::scenario_schema_json(),
+        ),
+        (
+            "scenario-source-v1.schema.json",
+            tangle_model::scenario_schema_v1_json(),
+        ),
+    ] {
+        let output = workspace.join("schemas").join(file);
+        std::fs::write(&output, json).expect("schema is writable");
+        println!("wrote {}", output.display());
+    }
 }

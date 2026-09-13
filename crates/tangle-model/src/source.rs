@@ -4,11 +4,27 @@
 //! parsed with Serde and intentionally contain no derived geometry or dense
 //! identifiers: that is the job of [`crate::compile`].
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Scenario schema version understood by this build.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+///
+/// Version 2 is the supported source schema. Version 1 keeps a direct read path
+/// until the deterministic migration replaces it; see
+/// [`MIN_SUPPORTED_SCHEMA_VERSION`].
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 2;
+
+/// Lowest schema version this build still reads directly.
+///
+/// A version-1 document has a transitional direct path until the migration step
+/// (a later leaf) routes it through the version-1 to version-2 transform.
+pub const MIN_SUPPORTED_SCHEMA_VERSION: u32 = 1;
+
+/// Schema versions this build reads, lowest first.
+pub const READABLE_SCHEMA_VERSIONS: [u32; 2] =
+    [MIN_SUPPORTED_SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSION];
 
 /// A hand-authored scenario document before validation or compilation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -556,12 +572,317 @@ impl Default for PopulationSource {
     }
 }
 
+/// Nominal traversal direction of a version-2 movement along its reference path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MovementDirection {
+    /// The movement follows the authored vertex order of its path.
+    Forward,
+    /// The movement follows the reverse of the authored vertex order.
+    Reverse,
+}
+
+/// A version-2 movement connector with an explicit nominal direction.
+///
+/// Every version-1 movement field is carried forward unchanged; version 2 adds
+/// `direction` so the normalized document is self-describing instead of leaving
+/// the direction implicit in the `from`/`to` portal order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MovementSourceV2 {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Portal where the movement begins.
+    pub from: String,
+    /// Portal where the movement ends.
+    pub to: String,
+    /// Guide path the movement follows.
+    pub path: String,
+    /// Right-of-way rank; a lower value is honored before a higher one.
+    pub priority: u32,
+    /// Stop-line arc length in metres from the movement entry.
+    #[serde(default)]
+    pub stop_line_m: f64,
+    /// Nominal traversal direction of `path`.
+    pub direction: MovementDirection,
+}
+
+/// Body geometry distributions of one version-2 mode template.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModeBodySource {
+    /// A rectangular body; dimensions are ranges in metres.
+    Box {
+        /// Body length range in metres.
+        length_m: ProfileRangeSource,
+        /// Body width range in metres.
+        width_m: ProfileRangeSource,
+    },
+    /// A circular body; the radius is a range in metres.
+    Circle {
+        /// Body radius range in metres.
+        radius_m: ProfileRangeSource,
+    },
+}
+
+/// Motion family a version-2 mode template uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionKind {
+    /// Walking on the Phase 1 pedestrian geometry.
+    HolonomicWalking,
+    /// A single wheeled body following a reference path.
+    SingleBodyWheeled,
+}
+
+/// Tactical capability a version-2 mode template supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TacticKind {
+    /// Follow the agent ahead.
+    Follow,
+    /// Stop for a control or an obstruction.
+    Stop,
+    /// Yield to a conflicting movement.
+    Yield,
+}
+
+/// Traversable object kind a version-2 mode may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FacilityKind {
+    /// A guide path.
+    Path,
+    /// A pedestrian crossing.
+    Crossing,
+    /// A pedestrian waiting area.
+    WaitingArea,
+}
+
+/// Facility access of a version-2 mode template.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AccessSource {
+    /// Traversable object kinds the mode may use.
+    pub facility_kinds: Vec<FacilityKind>,
+}
+
+/// Occupancy of a version-2 mode template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OccupancyKind {
+    /// One operator, no passengers.
+    OperatorOnly,
+}
+
+/// One version-2 mode template: a named, validated bundle of body, motion,
+/// tactical capability, access, occupancy, and profile distributions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ModeTemplateSource {
+    /// Stable template id, unique across authored objects.
+    pub id: String,
+    /// Body geometry distributions, tagged by `kind`.
+    pub body: ModeBodySource,
+    /// Motion family the template uses.
+    pub motion: MotionKind,
+    /// Tactical capabilities the template supports.
+    pub tactics: Vec<TacticKind>,
+    /// Traversable object kinds the mode may use.
+    pub access: AccessSource,
+    /// Occupancy the template carries.
+    pub occupancy: OccupancyKind,
+    /// Profile distributions keyed by parameter name.
+    pub profiles: BTreeMap<String, ProfileRangeSource>,
+}
+
+/// The time interval of a version-2 rate demand spawn.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TimeIntervalSource {
+    /// Interval start in seconds.
+    pub start_s: f64,
+    /// Interval end in seconds; `null` is unbounded.
+    pub end_s: Option<f64>,
+}
+
+/// Choice of movements or routes for a version-2 rate demand spawn.
+///
+/// Vehicle modes choose among movements; pedestrian modes choose among
+/// pedestrian routes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DemandChoiceSource {
+    /// Movements a generated vehicle may follow, with relative weights.
+    Movements(Vec<RouteShareSource>),
+    /// Pedestrian routes a generated pedestrian may follow, with weights.
+    Routes(Vec<PedestrianRouteShareSource>),
+}
+
+/// A rate-driven version-2 demand spawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DemandRateSpawnSource {
+    /// Entry portal where generated agents enter the world.
+    pub portal: String,
+    /// Mean arrival rate in agents per hour.
+    pub rate_per_hour: f64,
+    /// Interval over which the rate applies.
+    pub interval_s: TimeIntervalSource,
+    /// Movements or routes a generated agent may follow.
+    pub choice: DemandChoiceSource,
+}
+
+/// A fixed initial-population version-2 demand spawn, placed at `t = 0`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DemandPopulationSpawnSource {
+    /// Guide path the population is placed on.
+    pub path: String,
+    /// Number of agents in the population.
+    pub count: u32,
+    /// Constant speed in metres per second.
+    pub speed_mps: f64,
+    /// Longitudinal gap between adjacent agents in metres.
+    pub spacing_m: f64,
+}
+
+/// How a version-2 demand source places agents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DemandSpawnSource {
+    /// Arrivals at a portal over a time interval.
+    Rate(DemandRateSpawnSource),
+    /// A fixed population placed at `t = 0`.
+    Population(DemandPopulationSpawnSource),
+}
+
+/// One mode-tagged version-2 demand source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DemandSourceV2 {
+    /// Stable identifier, unique across all authored objects.
+    pub id: String,
+    /// Mode-template id this demand produces.
+    pub mode: String,
+    /// How agents are placed.
+    pub spawn: DemandSpawnSource,
+}
+
+/// A version-2 scenario document.
+///
+/// Version 2 replaces the version-1 `profiles`/`pedestrian_profiles`,
+/// `population`, `demand`, and `pedestrian_demand` fields with `mode_templates`
+/// and a mode-tagged `demand`, and makes each movement's `direction` explicit.
+/// Every other version-1 field is carried forward unchanged.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioSourceV2 {
+    /// Schema version the document was written against.
+    pub schema_version: u32,
+    /// Stable scenario identifier recorded in run provenance.
+    pub id: String,
+    /// Human-facing names for the two world axes.
+    pub coordinate_system: CoordinateSystem,
+    /// Guide paths agents travel along.
+    pub paths: Vec<PathSource>,
+    /// Entry and exit points attached to path ends.
+    pub portals: Vec<PortalSource>,
+    /// Closed polygons marking the non-traversable world limits.
+    #[serde(default)]
+    pub boundaries: Vec<PolygonSource>,
+    /// Closed polygons marking traversable areas other than guide paths.
+    #[serde(default)]
+    pub regions: Vec<PolygonSource>,
+    /// Movement connectors with an explicit nominal direction.
+    #[serde(default)]
+    pub movements: Vec<MovementSourceV2>,
+    /// Pedestrian crossings over one or more movements.
+    #[serde(default)]
+    pub crossings: Vec<CrossingSource>,
+    /// Named waiting areas where pedestrians stage before crossing.
+    #[serde(default)]
+    pub waiting_areas: Vec<WaitingAreaSource>,
+    /// Pedestrian routes from one portal to another along a guide path.
+    #[serde(default)]
+    pub pedestrian_routes: Vec<PedestrianRouteSource>,
+    /// Authored conflict regions shared by pairs of movements.
+    #[serde(default)]
+    pub conflict_regions: Vec<ConflictRegionSource>,
+    /// Right-of-way or control rules attached to movements.
+    #[serde(default)]
+    pub rules: Vec<RuleSource>,
+    /// Fixed-time signal controllers with phased signal heads.
+    #[serde(default)]
+    pub signals: Vec<SignalSource>,
+    /// Named, validated mode bundles; demand references them by id.
+    #[serde(default)]
+    pub mode_templates: Vec<ModeTemplateSource>,
+    /// Mode-tagged demand sources for every mode.
+    #[serde(default)]
+    pub demand: Vec<DemandSourceV2>,
+}
+
 /// Failure to read a [`ScenarioSource`] from text.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
     /// The document was not well-formed JSON5 or did not match the schema.
     #[error("scenario source is not valid JSON5 for the source schema: {0}")]
     Json5(#[from] serde_json5::Error),
+}
+
+/// A parsed scenario document, tagged by its negotiated schema version.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScenarioDocument {
+    /// A version-1 document, read directly until the migration replaces this path.
+    V1(ScenarioSource),
+    /// A version-2 document.
+    V2(ScenarioSourceV2),
+}
+
+/// Failure to read a scenario document at any supported schema version.
+#[derive(Debug, thiserror::Error)]
+pub enum DocumentReadError {
+    /// The document did not match the shape of its declared schema version.
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+    /// The document names a schema version this build cannot read.
+    #[error(
+        "schema_version {version} is not supported; this build reads versions \
+         {min} through {max}",
+        min = MIN_SUPPORTED_SCHEMA_VERSION,
+        max = SUPPORTED_SCHEMA_VERSION
+    )]
+    UnsupportedVersion {
+        /// The version the document declared.
+        version: u32,
+    },
+}
+
+impl DocumentReadError {
+    /// The stable `E_SCHEMA_VERSION` diagnostic for an unsupported version.
+    ///
+    /// Returns `None` for a structural parse failure, which carries no schema
+    /// version to report.
+    pub fn diagnostic(&self) -> Option<crate::validate::Diagnostic> {
+        match self {
+            Self::UnsupportedVersion { version } => Some(crate::validate::Diagnostic {
+                code: crate::validate::DiagnosticCode::UnsupportedSchemaVersion,
+                object: None,
+                message: format!(
+                    "schema_version {version} is not supported; this build reads versions \
+                     {MIN_SUPPORTED_SCHEMA_VERSION} through {SUPPORTED_SCHEMA_VERSION}"
+                ),
+            }),
+            Self::Parse(_) => None,
+        }
+    }
+}
+
+/// Read the declared schema version of a JSON5 scenario document.
+#[derive(Deserialize)]
+struct SchemaVersionProbe {
+    schema_version: u32,
 }
 
 /// Parse a JSON5 scenario document into its source representation.
@@ -572,6 +893,31 @@ pub enum ParseError {
 pub fn parse_scenario_source(input: &str) -> Result<ScenarioSource, ParseError> {
     let source: ScenarioSource = serde_json5::from_str(input)?;
     Ok(source)
+}
+
+/// Parse a JSON5 version-2 scenario document into its source representation.
+///
+/// This performs structural parsing only; a missing version-2 field is a parse
+/// error rather than a fallback to a version-1 default. Semantic validation is
+/// the separate [`crate::validate::validate_v2`] step.
+pub fn parse_scenario_source_v2(input: &str) -> Result<ScenarioSourceV2, ParseError> {
+    let source: ScenarioSourceV2 = serde_json5::from_str(input)?;
+    Ok(source)
+}
+
+/// Parse a JSON5 scenario document, negotiating its declared schema version.
+///
+/// Version 1 and version 2 are accepted; any other version is rejected as
+/// [`DocumentReadError::UnsupportedVersion`], whose [`DocumentReadError::diagnostic`]
+/// is the stable `E_SCHEMA_VERSION` diagnostic. The reader never guesses a
+/// version and never applies a default for an absent field.
+pub fn parse_scenario_document(input: &str) -> Result<ScenarioDocument, DocumentReadError> {
+    let probe: SchemaVersionProbe = serde_json5::from_str(input).map_err(ParseError::from)?;
+    match probe.schema_version {
+        MIN_SUPPORTED_SCHEMA_VERSION => Ok(ScenarioDocument::V1(parse_scenario_source(input)?)),
+        SUPPORTED_SCHEMA_VERSION => Ok(ScenarioDocument::V2(parse_scenario_source_v2(input)?)),
+        version => Err(DocumentReadError::UnsupportedVersion { version }),
+    }
 }
 
 #[cfg(test)]
@@ -604,7 +950,7 @@ mod tests {
     #[test]
     fn parses_a_json5_scenario_with_comments_and_trailing_commas() {
         let source = parse_scenario_source(WALKING).expect("walking scenario parses");
-        assert_eq!(source.schema_version, SUPPORTED_SCHEMA_VERSION);
+        assert_eq!(source.schema_version, MIN_SUPPORTED_SCHEMA_VERSION);
         assert_eq!(source.id, "walking_guide_v1");
         assert_eq!(source.paths.len(), 1);
         assert_eq!(source.portals.len(), 2);
