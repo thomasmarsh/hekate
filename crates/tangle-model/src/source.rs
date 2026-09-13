@@ -623,6 +623,16 @@ pub enum ModeBodySource {
         /// Body radius range in metres.
         radius_m: ProfileRangeSource,
     },
+    /// A capsule body: a segment of `length_m` with a constant `radius_m`.
+    ///
+    /// Additive Increment 1 kind for the narrow wheeled family; it compiles to
+    /// the existing `AgentBody::Capsule` and the `wheeled_capsule` family.
+    Capsule {
+        /// Body length range in metres.
+        length_m: ProfileRangeSource,
+        /// Body radius range in metres.
+        radius_m: ProfileRangeSource,
+    },
 }
 
 /// Motion family a version-2 mode template uses.
@@ -686,12 +696,90 @@ pub enum LateralUse {
     Centered,
 }
 
+/// An enforced speed limit: a finite positive value, or an explicit `null` for
+/// no enforced limit beyond the mode's own motion limits.
+///
+/// The value is a required, nullable field, so an absent `limit_mps` is a parse
+/// error rather than a silent default; a present `null` is the explicit "no
+/// limit" form and mirrors the unbounded `TimeIntervalSource.end_s` precedent.
+/// Deserialization is written by hand so a missing field is rejected: serde's
+/// `Option`-derived newtype would otherwise treat absence as `null`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(transparent)]
+pub struct SpeedLimitMps(Option<f64>);
+
+impl SpeedLimitMps {
+    /// No enforced limit (the explicit `null` form).
+    pub const fn unlimited() -> Self {
+        Self(None)
+    }
+
+    /// An enforced limit in metres per second.
+    pub const fn limited(limit_mps: f64) -> Self {
+        Self(Some(limit_mps))
+    }
+
+    /// The limit in metres per second, or `None` for an explicit `null`.
+    pub const fn value(self) -> Option<f64> {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for SpeedLimitMps {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct SpeedLimitVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for SpeedLimitVisitor {
+            type Value = SpeedLimitMps;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a metres-per-second limit or null")
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(SpeedLimitMps(None))
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(SpeedLimitMps(None))
+            }
+
+            fn visit_some<D2>(self, deserializer: D2) -> Result<Self::Value, D2::Error>
+            where
+                D2: serde::Deserializer<'de>,
+            {
+                Ok(SpeedLimitMps(Some(<f64 as Deserialize>::deserialize(
+                    deserializer,
+                )?)))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(SpeedLimitMps(Some(value)))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(SpeedLimitMps(Some(value as f64)))
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(SpeedLimitMps(Some(value as f64)))
+            }
+        }
+
+        deserializer.deserialize_any(SpeedLimitVisitor)
+    }
+}
+
 /// A speed policy: a finite positive limit, or none.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpeedPolicySource {
     /// Enforced limit in metres per second; `null` means no enforced limit.
-    pub limit_mps: Option<f64>,
+    pub limit_mps: SpeedLimitMps,
 }
 
 /// Facility access of a version-2 mode template.
@@ -1347,7 +1435,7 @@ mod tests {
         assert_eq!(facility.nominal_direction, FacilityDirection::Forward);
         assert_eq!(facility.lateral_use, LateralUse::Shared);
         assert_eq!(facility.access.modes, ["bicycle"]);
-        assert_eq!(facility.speed_policy.limit_mps, None);
+        assert_eq!(facility.speed_policy.limit_mps.value(), None);
 
         assert!(
             source.mode_templates[0]
@@ -1361,7 +1449,9 @@ mod tests {
         );
         assert_eq!(
             source.mode_templates[0].access.speed_policy,
-            Some(SpeedPolicySource { limit_mps: None })
+            Some(SpeedPolicySource {
+                limit_mps: SpeedLimitMps::unlimited()
+            })
         );
 
         assert_eq!(source.permissions.len(), 1);

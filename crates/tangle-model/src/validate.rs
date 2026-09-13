@@ -11,15 +11,18 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::compiled::CompiledReferencePath;
 use crate::mode_template::body_motion_pair_has_family;
 use crate::source::{
-    ConflictRegionSource, CrossingSource, DemandChoiceSource, DemandSpawnSource,
-    MIN_SUPPORTED_SCHEMA_VERSION, ModeTemplateSource, MotionKind, MovementDirection, PathEnd,
-    PathSource, PedestrianRouteShareSource, PedestrianRouteSource, PointSource, PolygonSource,
+    ConflictRegionSource, CrossingSource, DemandChoiceSource, DemandSpawnSource, FacilityDirection,
+    FacilityKind, FacilitySource, MIN_SUPPORTED_SCHEMA_VERSION, ModeBodySource, ModeTemplateSource,
+    MotionKind, MovementDirection, PathEnd, PathSource, PedestrianRouteShareSource,
+    PedestrianRouteSource, PermissionEffect, PermissionKind, PointSource, PolygonSource,
     PortalSource, ProfileRangeSource, RouteShareSource, RuleKind, RuleSource,
     SUPPORTED_SCHEMA_VERSION, ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource,
     WaitingAreaSource,
 };
+use glam::DVec2;
 
 /// Stable, machine-readable diagnostic codes.
 ///
@@ -155,6 +158,44 @@ pub enum DiagnosticCode {
     DemandIntervalInvalid,
     /// A version-2 document declares an unusable population demand.
     DemandPopulationInvalid,
+    /// A version-2 facility references a region that is not declared.
+    FacilityUnknownRegion,
+    /// A version-2 facility references a reference path that is not declared.
+    FacilityUnknownPath,
+    /// A version-2 facility's access names a mode template that is not declared.
+    FacilityUnknownMode,
+    /// A version-2 facility permits no mode.
+    FacilityAccessEmpty,
+    /// A version-2 facility's nominal direction needs a reference path.
+    FacilityDirectionWithoutPath,
+    /// A version-2 facility width is non-finite or non-positive.
+    FacilityWidthInvalid,
+    /// A version-2 facility speed limit is non-finite or non-positive.
+    FacilitySpeedLimitInvalid,
+    /// A version-2 facility region lies outside the traversable world.
+    FacilityOutsideWorld,
+    /// A version-2 facility cannot fit an eligible body plus its clearance.
+    FacilityTooNarrow,
+    /// A version-2 facility's reference curvature exceeds a mode's turning limit.
+    FacilityCurvature,
+    /// A version-2 facility connector references a facility that is not declared.
+    FacilityConnectorUnknownFacility,
+    /// A version-2 facility connector attaches a facility with no reference path.
+    FacilityConnectorWithoutReference,
+    /// A version-2 facility connector's leaving and entering ends do not coincide.
+    FacilityConnectorDiscontinuous,
+    /// A version-2 facility's nominal direction is not physically possible.
+    FacilityUnreachableDirection,
+    /// A version-2 facility permits a mode whose template does not serve facilities.
+    FacilityAccessDenied,
+    /// A version-2 permission names a holder mode template that is not declared.
+    PermissionUnknownHolder,
+    /// A version-2 permission names a target object that is not declared.
+    PermissionUnknownTarget,
+    /// A version-2 permission prohibits a route the facility otherwise grants.
+    PermissionRouteProhibited,
+    /// A profile range is non-finite, negative, or inverted.
+    ProfileNonNegativeInvalid,
 }
 
 impl DiagnosticCode {
@@ -227,6 +268,25 @@ impl DiagnosticCode {
             Self::DemandChoiceMismatch => "E_DEMAND_CHOICE_MISMATCH",
             Self::DemandIntervalInvalid => "E_DEMAND_INTERVAL",
             Self::DemandPopulationInvalid => "E_DEMAND_POPULATION",
+            Self::FacilityUnknownRegion => "E_FACILITY_UNKNOWN_REGION",
+            Self::FacilityUnknownPath => "E_FACILITY_UNKNOWN_PATH",
+            Self::FacilityUnknownMode => "E_FACILITY_UNKNOWN_MODE",
+            Self::FacilityAccessEmpty => "E_FACILITY_ACCESS_EMPTY",
+            Self::FacilityDirectionWithoutPath => "E_FACILITY_DIRECTION_WITHOUT_PATH",
+            Self::FacilityWidthInvalid => "E_FACILITY_WIDTH",
+            Self::FacilitySpeedLimitInvalid => "E_FACILITY_SPEED_LIMIT",
+            Self::FacilityOutsideWorld => "E_FACILITY_OUTSIDE_WORLD",
+            Self::FacilityTooNarrow => "E_FACILITY_TOO_NARROW",
+            Self::FacilityCurvature => "E_FACILITY_CURVATURE",
+            Self::FacilityConnectorUnknownFacility => "E_FACILITY_CONNECTOR_UNKNOWN_FACILITY",
+            Self::FacilityConnectorWithoutReference => "E_FACILITY_CONNECTOR_WITHOUT_REFERENCE",
+            Self::FacilityConnectorDiscontinuous => "E_FACILITY_CONNECTOR_DISCONTINUOUS",
+            Self::FacilityUnreachableDirection => "E_FACILITY_UNREACHABLE_DIRECTION",
+            Self::FacilityAccessDenied => "E_FACILITY_ACCESS_DENIED",
+            Self::PermissionUnknownHolder => "E_PERMISSION_UNKNOWN_HOLDER",
+            Self::PermissionUnknownTarget => "E_PERMISSION_UNKNOWN_TARGET",
+            Self::PermissionRouteProhibited => "E_PERMISSION_ROUTE_PROHIBITED",
+            Self::ProfileNonNegativeInvalid => "E_PROFILE_NON_NEGATIVE",
         }
     }
 }
@@ -293,6 +353,10 @@ pub fn validate_v2(source: &ScenarioSourceV2) -> Vec<Diagnostic> {
     validate_ids(&source.id, v2_ids(source), &mut diagnostics);
     validate_common(&common_v2(source), &mut diagnostics);
     validate_mode_templates(&source.mode_templates, &mut diagnostics);
+    validate_facilities(source, &mut diagnostics);
+    validate_facility_connectors(source, &mut diagnostics);
+    validate_facility_reachability(source, &mut diagnostics);
+    validate_permissions(source, &mut diagnostics);
     validate_demand_v2(source, &mut diagnostics);
     diagnostics
 }
@@ -928,6 +992,28 @@ fn validate_compliance_range(
     }
 }
 
+/// A lateral-clearance preference is a distance, so unlike the strictly
+/// positive physical ranges a zero clearance is allowed; only a negative,
+/// non-finite, or inverted range is rejected.
+fn validate_non_negative_range(
+    object: &str,
+    field: &str,
+    range: ProfileRangeSource,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let finite = range.min.is_finite() && range.max.is_finite();
+    if !finite || range.min < 0.0 || range.min > range.max {
+        diagnostics.push(Diagnostic::new(
+            DiagnosticCode::ProfileNonNegativeInvalid,
+            Some(object.to_owned()),
+            format!(
+                "{field} must be finite, non-negative, and non-inverted, got [{}, {}]",
+                range.min, range.max
+            ),
+        ));
+    }
+}
+
 fn validate_profile_range(
     object: &str,
     field: &str,
@@ -1508,20 +1594,35 @@ fn validate_signals(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// The profile parameters each Increment 0 body/motion family requires.
+/// The profile parameters each version-2 body/motion family requires.
 ///
 /// Shared with the template compiler ([`crate::mode_template`]) so the
-/// parameters a family needs have a single definition.
-pub(crate) fn required_profile_params(motion: MotionKind) -> &'static [&'static str] {
-    match motion {
-        MotionKind::SingleBodyWheeled => &[
+/// parameters a family needs have a single definition. The narrow wheeled
+/// family — a capsule body steering on a reference path — additionally needs
+/// its steering response and lateral-clearance preference alongside the
+/// Increment 0 wheeled parameters; every other family keeps its Increment 0 set.
+pub(crate) fn required_profile_params(
+    body: &ModeBodySource,
+    motion: MotionKind,
+) -> &'static [&'static str] {
+    match (body, motion) {
+        (ModeBodySource::Capsule { .. }, MotionKind::SingleBodyWheeled) => &[
+            "speed_mps",
+            "max_accel_mps2",
+            "comfortable_brake_mps2",
+            "time_gap_s",
+            "steering_rate_max_rad_s",
+            "lateral_clearance_m",
+            "compliance",
+        ],
+        (_, MotionKind::SingleBodyWheeled) => &[
             "speed_mps",
             "max_accel_mps2",
             "comfortable_brake_mps2",
             "time_gap_s",
             "compliance",
         ],
-        MotionKind::HolonomicWalking => &["speed_mps", "compliance"],
+        (_, MotionKind::HolonomicWalking) => &["speed_mps", "compliance"],
     }
 }
 
@@ -1540,7 +1641,7 @@ fn validate_mode_templates(templates: &[ModeTemplateSource], diagnostics: &mut V
             ));
         }
 
-        let required = required_profile_params(template.motion);
+        let required = required_profile_params(&template.body, template.motion);
         for name in required {
             if !template.profiles.contains_key(*name) {
                 diagnostics.push(Diagnostic::new(
@@ -1568,6 +1669,8 @@ fn validate_mode_templates(templates: &[ModeTemplateSource], diagnostics: &mut V
             }
             if name == "compliance" {
                 validate_compliance_range(&template.id, name, *range, diagnostics);
+            } else if name == "lateral_clearance_m" {
+                validate_non_negative_range(&template.id, name, *range, diagnostics);
             } else {
                 validate_profile_range(&template.id, name, *range, diagnostics);
             }
@@ -1856,6 +1959,540 @@ fn validate_demand_v2(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnosti
                 format!(
                     "demand '{id}' declares a population spawn alongside other demand; a \
                      population must be the only demand in the document"
+                ),
+            ));
+        }
+    }
+}
+
+/// Tolerance, in metres, within which two connector ends count as coincident.
+const CONNECTOR_CONTINUITY_TOLERANCE_M: f64 = 1e-6;
+
+/// Tolerance, in `1/m`, within which a reference curvature counts as within a
+/// mode's turning limit.
+const TURNING_CURVATURE_TOLERANCE: f64 = 1e-9;
+
+/// Largest lateral envelope width of a version-2 mode template's body, in
+/// metres: `2 * radius` for a circle or capsule, `width` for a box.
+fn body_envelope_width_m(body: &ModeBodySource) -> f64 {
+    match body {
+        ModeBodySource::Box { width_m, .. } => width_m.max,
+        ModeBodySource::Circle { radius_m } => 2.0 * radius_m.max,
+        ModeBodySource::Capsule { radius_m, .. } => 2.0 * radius_m.max,
+    }
+}
+
+/// A mode template's preferred lateral clearance, in metres; zero when it
+/// declares none.
+fn mode_lateral_clearance_m(template: &ModeTemplateSource) -> f64 {
+    template
+        .profiles
+        .get("lateral_clearance_m")
+        .map(|range| range.max)
+        .filter(|clearance| clearance.is_finite() && *clearance >= 0.0)
+        .unwrap_or(0.0)
+}
+
+/// The tightest steady-turn curvature a wheeled mode can follow at its top
+/// desired speed from its authored maximum steering/heading rate, or `None`
+/// when the mode declares no steering response.
+fn mode_turning_limit_curvature(template: &ModeTemplateSource) -> Option<f64> {
+    let steering = template.profiles.get("steering_rate_max_rad_s")?.max;
+    let speed = template.profiles.get("speed_mps")?.max;
+    if steering.is_finite() && steering > 0.0 && speed.is_finite() && speed > 0.0 {
+        Some(steering / speed)
+    } else {
+        None
+    }
+}
+
+/// The largest absolute curvature anywhere on a compiled reference path.
+///
+/// Curvature is piecewise constant between vertices, so sampling densely enough
+/// to visit every compiled segment recovers the maximum on both the straight
+/// polylines authored facilities use and the analytic arcs the compiled
+/// geometry exposes.
+fn reference_max_abs_curvature(reference: &CompiledReferencePath) -> f64 {
+    let length = reference.length();
+    if length <= 0.0 {
+        return 0.0;
+    }
+    const SAMPLE_INTERVAL_M: f64 = 0.5;
+    let samples = (length / SAMPLE_INTERVAL_M).ceil().max(1.0) as usize;
+    let mut max = 0.0_f64;
+    for index in 0..=samples {
+        let s = length * index as f64 / samples as f64;
+        max = max.max(reference.curvature_at(s).abs());
+    }
+    max
+}
+
+/// The curvature diagnostics for one facility reference against the turning
+/// limits of the modes permitted on it.
+fn facility_curvature_diagnostics(
+    facility_id: &str,
+    reference: &CompiledReferencePath,
+    modes: &[&ModeTemplateSource],
+) -> Vec<Diagnostic> {
+    let curvature = reference_max_abs_curvature(reference);
+    for template in modes {
+        if let Some(limit) = mode_turning_limit_curvature(template)
+            && curvature > limit + TURNING_CURVATURE_TOLERANCE
+        {
+            return vec![Diagnostic::new(
+                DiagnosticCode::FacilityCurvature,
+                Some(facility_id.to_owned()),
+                format!(
+                    "facility '{facility_id}' reference curvature {curvature} exceeds the \
+                     turning limit {limit} of mode '{}'",
+                    template.id
+                ),
+            )];
+        }
+    }
+    Vec::new()
+}
+
+/// Ray-casting point-in-polygon test over an implicitly closed ring.
+fn point_in_polygon(point: PointSource, ring: &[PointSource]) -> bool {
+    let count = ring.len();
+    if count < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut previous = count - 1;
+    for current in 0..count {
+        let a = ring[current];
+        let b = ring[previous];
+        if (a.y > point.y) != (b.y > point.y) {
+            let x = a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x);
+            if point.x < x {
+                inside = !inside;
+            }
+        }
+        previous = current;
+    }
+    inside
+}
+
+/// Whether every vertex of a facility region lies inside the traversable world.
+///
+/// The world limit is the union of the declared `boundaries` polygons; with no
+/// boundary authored there is no world limit to contain the region.
+fn polygon_inside_world(region: &[PointSource], boundaries: &[PolygonSource]) -> bool {
+    region.iter().all(|vertex| {
+        boundaries
+            .iter()
+            .any(|boundary| point_in_polygon(*vertex, &boundary.points))
+    })
+}
+
+/// Compile one facility's authored reference path into its `(s, d)` geometry,
+/// or `None` when the facility declares no path or the path is undeclared.
+fn facility_reference(
+    source: &ScenarioSourceV2,
+    facility: &FacilitySource,
+) -> Option<CompiledReferencePath> {
+    let name = facility.reference_path.as_ref()?;
+    let path = source.paths.iter().find(|path| path.id == *name)?;
+    let points: Vec<DVec2> = path
+        .points
+        .iter()
+        .map(|point| DVec2::new(point.x, point.y))
+        .collect();
+    Some(CompiledReferencePath::from_polyline(&points))
+}
+
+/// The world point at which a connector meets a reference-path traversal.
+///
+/// A forward traversal leaves at the reference path's end and enters at its
+/// start; a reverse traversal leaves at its start and enters at its end.
+fn traversal_end(
+    reference: &CompiledReferencePath,
+    direction: MovementDirection,
+    leaving: bool,
+) -> DVec2 {
+    let at_end = leaving == (direction == MovementDirection::Forward);
+    if at_end {
+        reference.position_at(reference.length())
+    } else {
+        reference.position_at(0.0)
+    }
+}
+
+/// Push `direction` unless it is already present.
+fn push_direction(directions: &mut Vec<MovementDirection>, direction: MovementDirection) {
+    if !directions.contains(&direction) {
+        directions.push(direction);
+    }
+}
+
+/// Validate a version-2 facility's references, dimensions, containment, usable
+/// width, curvature, and mode access.
+fn validate_facilities(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    for facility in &source.facilities {
+        let object = Some(facility.id.clone());
+
+        // Reference integrity first: `CompiledScenario::compile_v2` indexes
+        // these references after validation, so an undeclared one must be
+        // rejected here rather than panicking during compilation.
+        let region = source
+            .regions
+            .iter()
+            .find(|region| region.id == facility.region);
+        if region.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityUnknownRegion,
+                object.clone(),
+                format!(
+                    "facility '{}' occupies undeclared region '{}'",
+                    facility.id, facility.region
+                ),
+            ));
+        }
+
+        let reference_path = facility
+            .reference_path
+            .as_ref()
+            .and_then(|name| source.paths.iter().find(|path| path.id == *name));
+        if let Some(name) = &facility.reference_path
+            && reference_path.is_none()
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityUnknownPath,
+                object.clone(),
+                format!(
+                    "facility '{}' references undeclared path '{name}'",
+                    facility.id
+                ),
+            ));
+        }
+
+        if facility.access.modes.is_empty() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityAccessEmpty,
+                object.clone(),
+                format!("facility '{}' permits no mode", facility.id),
+            ));
+        }
+
+        if matches!(
+            facility.nominal_direction,
+            FacilityDirection::Forward | FacilityDirection::Reverse
+        ) && facility.reference_path.is_none()
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityDirectionWithoutPath,
+                object.clone(),
+                format!(
+                    "facility '{}' declares a directional nominal_direction without a \
+                     reference_path; only 'either' may omit one",
+                    facility.id
+                ),
+            ));
+        }
+
+        if !facility.width_m.is_finite() || facility.width_m <= 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityWidthInvalid,
+                object.clone(),
+                format!(
+                    "facility '{}' width_m must be finite and positive, got {}",
+                    facility.id, facility.width_m
+                ),
+            ));
+        }
+
+        if let Some(limit) = facility.speed_policy.limit_mps.value()
+            && (!limit.is_finite() || limit <= 0.0)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilitySpeedLimitInvalid,
+                object.clone(),
+                format!(
+                    "facility '{}' speed_policy.limit_mps must be finite and positive, got \
+                     {limit}",
+                    facility.id
+                ),
+            ));
+        }
+
+        // Resolve the permitted modes once: an undeclared one is reported here,
+        // and every later geometric rule uses only the resolved templates.
+        let mut modes: Vec<&ModeTemplateSource> = Vec::new();
+        for mode in &facility.access.modes {
+            match source
+                .mode_templates
+                .iter()
+                .find(|template| template.id == *mode)
+            {
+                Some(template) => modes.push(template),
+                None => diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::FacilityUnknownMode,
+                    object.clone(),
+                    format!(
+                        "facility '{}' permits undeclared mode template '{mode}'",
+                        facility.id
+                    ),
+                )),
+            }
+        }
+
+        // Mode-to-facility access: a permitted mode's template must serve the
+        // continuous facility kind.
+        for template in &modes {
+            if !template
+                .access
+                .facility_kinds
+                .contains(&FacilityKind::Facility)
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::FacilityAccessDenied,
+                    object.clone(),
+                    format!(
+                        "facility '{}' permits mode '{}', which does not list the 'facility' \
+                         access kind",
+                        facility.id, template.id
+                    ),
+                ));
+            }
+        }
+
+        // Containment: the facility region lies inside the traversable world.
+        if !source.boundaries.is_empty()
+            && let Some(region) = region
+            && !polygon_inside_world(&region.points, &source.boundaries)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityOutsideWorld,
+                object.clone(),
+                format!(
+                    "facility '{}' region '{}' lies outside the traversable world",
+                    facility.id, facility.region
+                ),
+            ));
+        }
+
+        // Usable width, which is also the spawn-clearance rule: with a constant
+        // authored width the usable lateral interval is the same at every arc
+        // length, so a spawn point on the facility has room exactly when every
+        // permitted mode's largest body plus its lateral clearance fits.
+        if facility.width_m.is_finite() && facility.width_m > 0.0 {
+            for template in &modes {
+                let envelope = body_envelope_width_m(&template.body);
+                let clearance = mode_lateral_clearance_m(template);
+                if envelope + 2.0 * clearance > facility.width_m {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::FacilityTooNarrow,
+                        object.clone(),
+                        format!(
+                            "facility '{}' width_m {} cannot fit mode '{}' (body {envelope} m \
+                             plus 2 x clearance {clearance} m)",
+                            facility.id, facility.width_m, template.id
+                        ),
+                    ));
+                    break;
+                }
+            }
+        }
+
+        // Curvature against the turning limits of every permitted mode.
+        if let Some(reference) = facility_reference(source, facility) {
+            diagnostics.extend(facility_curvature_diagnostics(
+                &facility.id,
+                &reference,
+                &modes,
+            ));
+        }
+    }
+}
+
+/// Validate a version-2 facility connector's endpoints and continuity.
+fn validate_facility_connectors(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    for connector in &source.facility_connectors {
+        let object = Some(connector.id.clone());
+        let from = source
+            .facilities
+            .iter()
+            .find(|facility| facility.id == connector.from.facility);
+        let to = source
+            .facilities
+            .iter()
+            .find(|facility| facility.id == connector.to.facility);
+
+        if from.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityConnectorUnknownFacility,
+                object.clone(),
+                format!(
+                    "connector '{}' leaves undeclared facility '{}'",
+                    connector.id, connector.from.facility
+                ),
+            ));
+        }
+        if to.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityConnectorUnknownFacility,
+                object.clone(),
+                format!(
+                    "connector '{}' enters undeclared facility '{}'",
+                    connector.id, connector.to.facility
+                ),
+            ));
+        }
+
+        let (Some(from), Some(to)) = (from, to) else {
+            continue;
+        };
+
+        let from_reference = facility_reference(source, from);
+        let to_reference = facility_reference(source, to);
+        if from_reference.is_none() || to_reference.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityConnectorWithoutReference,
+                object.clone(),
+                format!(
+                    "connector '{}' attaches a facility without a compiled reference path; a \
+                     connector joins two reference traversals",
+                    connector.id
+                ),
+            ));
+            continue;
+        }
+        let (Some(from_reference), Some(to_reference)) = (from_reference, to_reference) else {
+            continue;
+        };
+
+        let leaving = traversal_end(&from_reference, connector.from.direction, true);
+        let entering = traversal_end(&to_reference, connector.to.direction, false);
+        let gap = leaving.distance(entering);
+        if gap > CONNECTOR_CONTINUITY_TOLERANCE_M {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityConnectorDiscontinuous,
+                object.clone(),
+                format!(
+                    "connector '{}' leaving end and entering end do not coincide (gap {gap} m)",
+                    connector.id
+                ),
+            ));
+        }
+    }
+}
+
+/// Validate that each facility's declared nominal direction is physically
+/// possible through the connector graph.
+///
+/// Physical possibility is decided only by the connector graph and stays
+/// separate from the authored nominal direction and any permitted direction.
+fn validate_facility_reachability(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    let mut possible: Vec<Vec<MovementDirection>> = vec![Vec::new(); source.facilities.len()];
+    let mut attached = vec![false; source.facilities.len()];
+    for connector in &source.facility_connectors {
+        if let Some(index) = source
+            .facilities
+            .iter()
+            .position(|facility| facility.id == connector.from.facility)
+        {
+            attached[index] = true;
+            push_direction(&mut possible[index], connector.from.direction);
+        }
+        if let Some(index) = source
+            .facilities
+            .iter()
+            .position(|facility| facility.id == connector.to.facility)
+        {
+            attached[index] = true;
+            push_direction(&mut possible[index], connector.to.direction);
+        }
+    }
+
+    for (index, facility) in source.facilities.iter().enumerate() {
+        let nominal = match facility.nominal_direction {
+            FacilityDirection::Forward => Some(MovementDirection::Forward),
+            FacilityDirection::Reverse => Some(MovementDirection::Reverse),
+            FacilityDirection::Either => None,
+        };
+        if let Some(nominal) = nominal
+            && attached[index]
+            && !possible[index].contains(&nominal)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityUnreachableDirection,
+                Some(facility.id.clone()),
+                format!(
+                    "facility '{}' declares nominal direction {:?}, which the connector graph \
+                     does not make physically possible",
+                    facility.id, nominal
+                ),
+            ));
+        }
+    }
+}
+
+/// Validate version-2 permission statements: a declared holder, a declared
+/// target for the populated `nominal_direction` kind, and the legal-versus-
+/// physically-possible separation.
+///
+/// A `prohibit` that contradicts a facility's granted access is an illegal
+/// route and is reported with [`DiagnosticCode::PermissionRouteProhibited`],
+/// distinct from the codes a physically impossible route carries
+/// ([`DiagnosticCode::FacilityUnreachableDirection`],
+/// [`DiagnosticCode::FacilityCurvature`], [`DiagnosticCode::FacilityTooNarrow`]).
+fn validate_permissions(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    for permission in &source.permissions {
+        let object = Some(permission.id.clone());
+        let holder = source
+            .mode_templates
+            .iter()
+            .find(|template| template.id == permission.holder);
+        if holder.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PermissionUnknownHolder,
+                object.clone(),
+                format!(
+                    "permission '{}' binds undeclared mode template '{}'",
+                    permission.id, permission.holder
+                ),
+            ));
+        }
+
+        // Increment 1 populates only `nominal_direction`; the other kinds target
+        // objects owned by later increments and are shape-only here.
+        if permission.kind != PermissionKind::NominalDirection {
+            continue;
+        }
+
+        let target_facility = source
+            .facilities
+            .iter()
+            .find(|facility| facility.id == permission.target);
+        let target_movement = source
+            .movements
+            .iter()
+            .find(|movement| movement.id == permission.target);
+        if target_facility.is_none() && target_movement.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PermissionUnknownTarget,
+                object.clone(),
+                format!(
+                    "permission '{}' names undeclared target '{}'",
+                    permission.id, permission.target
+                ),
+            ));
+            continue;
+        }
+
+        if permission.effect == PermissionEffect::Prohibit
+            && let (Some(facility), Some(holder)) = (target_facility, holder)
+            && facility.access.modes.iter().any(|mode| mode == &holder.id)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PermissionRouteProhibited,
+                object.clone(),
+                format!(
+                    "permission '{}' prohibits mode '{}' on facility '{}', which grants it \
+                     access; the route is illegal",
+                    permission.id, holder.id, facility.id
                 ),
             ));
         }
@@ -2460,5 +3097,57 @@ mod tests {
              ] } ]",
         );
         assert!(codes(&source).contains(&"E_ID_DUPLICATE"));
+    }
+
+    /// A capsule `bicycle` template tolerant of only a gentle curve, for the
+    /// curvature-against-turning-limit fixtures.
+    const CURVING_BICYCLE: &str = r#"{
+        schema_version: 2, id: 'curving', coordinate_system: { x: 'a', y: 'b' },
+        paths: [], portals: [],
+        mode_templates: [ {
+            id: 'bicycle',
+            body: { kind: 'capsule', length_m: { min: 1.6, max: 1.9 },
+                radius_m: { min: 0.30, max: 0.40 } },
+            motion: 'single_body_wheeled',
+            tactics: [ 'follow', 'stop', 'yield' ],
+            access: { facility_kinds: [ 'facility' ] },
+            occupancy: 'operator_only',
+            profiles: {
+                speed_mps: { min: 3.5, max: 6.5 },
+                max_accel_mps2: { min: 0.8, max: 1.5 },
+                comfortable_brake_mps2: { min: 1.5, max: 3.0 },
+                time_gap_s: { min: 0.8, max: 1.4 },
+                steering_rate_max_rad_s: { min: 0.6, max: 1.2 },
+                lateral_clearance_m: { min: 0.20, max: 0.50 },
+                compliance: { min: 0.8, max: 1.0 },
+            },
+        } ],
+    }"#;
+
+    #[test]
+    fn rejects_a_reference_curved_beyond_a_modes_turning_limit() {
+        let source =
+            crate::source::parse_scenario_source_v2(CURVING_BICYCLE).expect("template parses");
+        let modes: Vec<&ModeTemplateSource> = source.mode_templates.iter().collect();
+
+        // The turning limit is `steering_rate_max / speed_max`, the tightest
+        // steady curve the mode can hold at its top desired speed.
+        let limit =
+            mode_turning_limit_curvature(&source.mode_templates[0]).expect("a steering limit");
+        assert!((limit - 1.2 / 6.5).abs() < 1e-12);
+
+        // A 3 m radius arc (`kappa = 1/3`) is far tighter than the limit.
+        let tight = CompiledReferencePath::arc(DVec2::ZERO, 3.0, 0.0, std::f64::consts::FRAC_PI_2);
+        let diagnostics = facility_curvature_diagnostics("west", &tight, &modes);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, DiagnosticCode::FacilityCurvature);
+
+        // A 50 m radius arc (`kappa = 1/50`) is inside the limit, and a straight
+        // polyline reference has zero curvature everywhere.
+        let gentle =
+            CompiledReferencePath::arc(DVec2::ZERO, 50.0, 0.0, std::f64::consts::FRAC_PI_2);
+        assert!(facility_curvature_diagnostics("west", &gentle, &modes).is_empty());
+        let straight = CompiledReferencePath::from_polyline(&[DVec2::ZERO, DVec2::new(80.0, 0.0)]);
+        assert!(facility_curvature_diagnostics("west", &straight, &modes).is_empty());
     }
 }

@@ -648,6 +648,29 @@
             "kind",
             "radius_m"
           ]
+        },
+        {
+          "description": "A capsule body: a segment of `length_m` with a constant `radius_m`.\n\nAdditive Increment 1 kind for the narrow wheeled family; it compiles to\nthe existing `AgentBody::Capsule` and the `wheeled_capsule` family.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "capsule"
+            },
+            "length_m": {
+              "description": "Body length range in metres.",
+              "$ref": "#/$defs/ProfileRangeSource"
+            },
+            "radius_m": {
+              "description": "Body radius range in metres.",
+              "$ref": "#/$defs/ProfileRangeSource"
+            }
+          },
+          "required": [
+            "kind",
+            "length_m",
+            "radius_m"
+          ]
         }
       ]
     },
@@ -1293,20 +1316,27 @@
         "color"
       ]
     },
+    "SpeedLimitMps": {
+      "description": "An enforced speed limit: a finite positive value, or an explicit `null` for\nno enforced limit beyond the mode's own motion limits.\n\nThe value is a required, nullable field, so an absent `limit_mps` is a parse\nerror rather than a silent default; a present `null` is the explicit \"no\nlimit\" form and mirrors the unbounded `TimeIntervalSource.end_s` precedent.\nDeserialization is written by hand so a missing field is rejected: serde's\n`Option`-derived newtype would otherwise treat absence as `null`.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
     "SpeedPolicySource": {
       "description": "A speed policy: a finite positive limit, or none.",
       "type": "object",
       "properties": {
         "limit_mps": {
           "description": "Enforced limit in metres per second; `null` means no enforced limit.",
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
+          "$ref": "#/$defs/SpeedLimitMps"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "limit_mps"
+      ]
     },
     "TacticKind": {
       "description": "Tactical capability a version-2 mode template supports.",

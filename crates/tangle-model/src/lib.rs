@@ -61,8 +61,8 @@ pub use source::{
     ProfileRangeSource, ProfileSource, READABLE_SCHEMA_VERSIONS, RouteShareSource, RuleKind,
     RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioDocument, ScenarioSource, ScenarioSourceV2,
     SignalColor, SignalHeadSource, SignalPhaseSource, SignalSource, SignalStateSource,
-    SpeedPolicySource, TacticKind, TimeIntervalSource, WaitingAreaSource, parse_scenario_document,
-    parse_scenario_source, parse_scenario_source_v2,
+    SpeedLimitMps, SpeedPolicySource, TacticKind, TimeIntervalSource, WaitingAreaSource,
+    parse_scenario_document, parse_scenario_source, parse_scenario_source_v2,
 };
 pub use validate::{Diagnostic, DiagnosticCode, validate, validate_v2};
 

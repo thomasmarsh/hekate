@@ -262,6 +262,10 @@ pub(crate) fn compiled_body(body: &ModeBodySource) -> AgentBody {
         ModeBodySource::Circle { radius_m } => AgentBody::Circle {
             radius_m: range(*radius_m),
         },
+        ModeBodySource::Capsule { length_m, radius_m } => AgentBody::Capsule {
+            length_m: range(*length_m),
+            radius_m: range(*radius_m),
+        },
     }
 }
 
@@ -316,7 +320,7 @@ pub(crate) fn compiled_nominal_direction(direction: FacilityDirection) -> Nomina
 
 /// Map an authored speed policy onto its compiled access policy.
 pub(crate) fn compiled_speed_policy(policy: SpeedPolicySource) -> SpeedPolicy {
-    match policy.limit_mps {
+    match policy.limit_mps.value() {
         Some(limit_mps) => SpeedPolicy::limited(limit_mps),
         None => SpeedPolicy::unlimited(),
     }
@@ -339,7 +343,7 @@ fn compiled_profile(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<AgentBehaviorProfile> {
     let mut missing = false;
-    for name in required_profile_params(template.motion) {
+    for name in required_profile_params(&template.body, template.motion) {
         if !template.profiles.contains_key(*name) {
             missing = true;
             diagnostics.push(Diagnostic {
