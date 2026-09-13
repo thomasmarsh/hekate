@@ -21,6 +21,27 @@ Repo-specific conventions layered on the skill:
 - Run `braintree check` before every handoff and before committing graph
   changes; a failing check blocks the commit. Fix the graph, not the checker.
 
+## One session, one coherent slice (mandatory)
+
+A Braintree node is a durable outcome, not a session: one node may span many
+sessions and one session may advance several frontier nodes. Size the work to the
+session, not the session to the node.
+
+- Before writing code, read the frontier node's `# Done when` and state the slice
+  you will deliver and what explicitly stays out of scope. If that slice would
+  exceed roughly one focused session, or touch more than a few subsystems, stop
+  and confirm the split with the user before starting.
+- If a node's `# Done when` cannot be met in one session, do not expand the
+  session to meet it. Deliver the smallest coherent slice that clears its blocker
+  or completes one deliverable, record the exact remaining scope and evidence in
+  the node, and leave the node `proposed`/`active` with a `next` naming the first
+  remaining action. A session that unblocks a node has not completed it.
+- Do not reinterpret a request as larger than asked. A node that bundles several
+  independent deliverables is several sessions; split it into child nodes only
+  with the user's agreement, never silently.
+- Do not add deliverables, new nodes, or plan documents because the node "really
+  needs" them. Record them as ledger scope, not as this session's work.
+
 ## Record Braintree friction (mandatory)
 
 Whenever planning, implementation, or analysis work that uses the Braintree
