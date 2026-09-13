@@ -1,0 +1,991 @@
+{
+  "metric_definition_version": 2,
+  "manifest_sha256": "d8ead0e918e1b1bee18fdd039be16f88fcc51a7416619222aa2a6cd38ec35b8e",
+  "minimum_ttc_s": {
+    "status": "reported",
+    "value": 0.0,
+    "agent": 4,
+    "other": 10,
+    "mode_pair": "vehicle_vehicle",
+    "tick": 988
+  },
+  "minimum_separation_m": {
+    "status": "reported",
+    "value": -1.2921811565325385,
+    "agent": 4,
+    "other": 10,
+    "mode_pair": "vehicle_vehicle",
+    "tick": 991
+  },
+  "minimum_post_encroachment_s": {
+    "status": "reported",
+    "value": 0.3000000000000007,
+    "agent": 0,
+    "other": 3,
+    "mode_pair": "vehicle_vehicle"
+  },
+  "mode_pair_minimum_separation_m": {
+    "pedestrian_pedestrian": {
+      "status": "reported",
+      "value": 0.049999999999998934,
+      "agent": 21,
+      "other": 23,
+      "mode_pair": "pedestrian_pedestrian",
+      "tick": 1054
+    },
+    "vehicle_pedestrian": {
+      "status": "reported",
+      "value": 1.6342658887565804,
+      "agent": 17,
+      "other": 19,
+      "mode_pair": "vehicle_pedestrian",
+      "tick": 1050
+    },
+    "vehicle_vehicle": {
+      "status": "reported",
+      "value": -1.2921811565325385,
+      "agent": 4,
+      "other": 10,
+      "mode_pair": "vehicle_vehicle",
+      "tick": 991
+    }
+  },
+  "movement_minima": {
+    "movement:ew_through|movement:ew_through": {
+      "movement_keys": [
+        "movement:ew_through",
+        "movement:ew_through"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 1.1028433525977377,
+        "agent": 15,
+        "other": 26,
+        "mode_pair": "vehicle_vehicle"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 1.5557891130447388,
+        "agent": 4,
+        "other": 11,
+        "mode_pair": "vehicle_vehicle"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "reported",
+        "value": 0.3000000000000007,
+        "agent": 0,
+        "other": 3,
+        "mode_pair": "vehicle_vehicle"
+      }
+    },
+    "movement:ew_through|movement:ns_through": {
+      "movement_keys": [
+        "movement:ew_through",
+        "movement:ns_through"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": -1.2921811565325385,
+        "agent": 4,
+        "other": 10,
+        "mode_pair": "vehicle_vehicle"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 0.0,
+        "agent": 4,
+        "other": 10,
+        "mode_pair": "vehicle_vehicle"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "reported",
+        "value": 1.8499999999999943,
+        "agent": 17,
+        "other": 11,
+        "mode_pair": "vehicle_vehicle"
+      }
+    },
+    "movement:ew_through|pedestrian_route:south_to_east": {
+      "movement_keys": [
+        "movement:ew_through",
+        "pedestrian_route:south_to_east"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 6.791167797390834,
+        "agent": 4,
+        "other": 21,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "movement:ew_through|pedestrian_route:south_to_west": {
+      "movement_keys": [
+        "movement:ew_through",
+        "pedestrian_route:south_to_west"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 6.3111443454772616,
+        "agent": 4,
+        "other": 19,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "movement:ew_through|pedestrian_route:west_to_north": {
+      "movement_keys": [
+        "movement:ew_through",
+        "pedestrian_route:west_to_north"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 1.642272464050639,
+        "agent": 4,
+        "other": 8,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 2.0359504222869873,
+        "agent": 4,
+        "other": 6,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "reported",
+        "value": 0.5500000000000043,
+        "agent": 20,
+        "other": 4,
+        "mode_pair": "vehicle_pedestrian"
+      }
+    },
+    "movement:ew_through|pedestrian_route:west_to_south": {
+      "movement_keys": [
+        "movement:ew_through",
+        "pedestrian_route:west_to_south"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 19.27028344663038,
+        "agent": 12,
+        "other": 25,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "movement:ns_through|movement:ns_through": {
+      "movement_keys": [
+        "movement:ns_through",
+        "movement:ns_through"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 1.0655276850462911,
+        "agent": 1,
+        "other": 2,
+        "mode_pair": "vehicle_vehicle"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 1.2435126304626465,
+        "agent": 10,
+        "other": 17,
+        "mode_pair": "vehicle_vehicle"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "reported",
+        "value": 0.3999999999999986,
+        "agent": 5,
+        "other": 9,
+        "mode_pair": "vehicle_vehicle"
+      }
+    },
+    "movement:ns_through|pedestrian_route:south_to_east": {
+      "movement_keys": [
+        "movement:ns_through",
+        "pedestrian_route:south_to_east"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 2.0033200118402266,
+        "agent": 10,
+        "other": 22,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 2.097085118293762,
+        "agent": 10,
+        "other": 21,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "reported",
+        "value": 0.45000000000000284,
+        "agent": 22,
+        "other": 10,
+        "mode_pair": "vehicle_pedestrian"
+      }
+    },
+    "movement:ns_through|pedestrian_route:south_to_west": {
+      "movement_keys": [
+        "movement:ns_through",
+        "pedestrian_route:south_to_west"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 1.6342658887565804,
+        "agent": 17,
+        "other": 19,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 2.100924253463745,
+        "agent": 18,
+        "other": 19,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "reported",
+        "value": 2.5,
+        "agent": 7,
+        "other": 2,
+        "mode_pair": "vehicle_pedestrian"
+      }
+    },
+    "movement:ns_through|pedestrian_route:west_to_north": {
+      "movement_keys": [
+        "movement:ns_through",
+        "pedestrian_route:west_to_north"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 6.2656105365653465,
+        "agent": 2,
+        "other": 16,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "movement:ns_through|pedestrian_route:west_to_south": {
+      "movement_keys": [
+        "movement:ns_through",
+        "pedestrian_route:west_to_south"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 6.8808062818123386,
+        "agent": 17,
+        "other": 25,
+        "mode_pair": "vehicle_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "pedestrian_route:south_to_east|pedestrian_route:south_to_east": {
+      "movement_keys": [
+        "pedestrian_route:south_to_east",
+        "pedestrian_route:south_to_east"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 0.05000000000000021,
+        "agent": 21,
+        "other": 22,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 0.046364665031433105,
+        "agent": 21,
+        "other": 22,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "pedestrian_route:south_to_east|pedestrian_route:south_to_west": {
+      "movement_keys": [
+        "pedestrian_route:south_to_east",
+        "pedestrian_route:south_to_west"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 0.049999999999998934,
+        "agent": 21,
+        "other": 23,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 0.05615353584289551,
+        "agent": 19,
+        "other": 21,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "pedestrian_route:south_to_east|pedestrian_route:west_to_north": {
+      "movement_keys": [
+        "pedestrian_route:south_to_east",
+        "pedestrian_route:west_to_north"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 3.460161992312361,
+        "agent": 20,
+        "other": 21,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "pedestrian_route:south_to_west|pedestrian_route:south_to_west": {
+      "movement_keys": [
+        "pedestrian_route:south_to_west",
+        "pedestrian_route:south_to_west"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 7.307099019711313,
+        "agent": 19,
+        "other": 23,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "pedestrian_route:south_to_west|pedestrian_route:west_to_north": {
+      "movement_keys": [
+        "pedestrian_route:south_to_west",
+        "pedestrian_route:west_to_north"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 4.553563166848118,
+        "agent": 7,
+        "other": 16,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "not_applicable"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    },
+    "pedestrian_route:west_to_north|pedestrian_route:west_to_north": {
+      "movement_keys": [
+        "pedestrian_route:west_to_north",
+        "pedestrian_route:west_to_north"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 0.050000000000000044,
+        "agent": 8,
+        "other": 16,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 0.1111149787902832,
+        "agent": 8,
+        "other": 16,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "reported",
+        "value": 13.25,
+        "agent": 6,
+        "other": 16,
+        "mode_pair": "pedestrian_pedestrian"
+      }
+    },
+    "pedestrian_route:west_to_north|pedestrian_route:west_to_south": {
+      "movement_keys": [
+        "pedestrian_route:west_to_north",
+        "pedestrian_route:west_to_south"
+      ],
+      "minimum_separation_m": {
+        "status": "reported",
+        "value": 0.04999999999999999,
+        "agent": 16,
+        "other": 25,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_ttc_s": {
+        "status": "reported",
+        "value": 0.048577189445495605,
+        "agent": 16,
+        "other": 25,
+        "mode_pair": "pedestrian_pedestrian"
+      },
+      "minimum_post_encroachment_s": {
+        "status": "not_applicable"
+      }
+    }
+  },
+  "event_counts": {
+    "total": 286,
+    "by_family": {
+      "collisions": 1,
+      "control_transitions": 43,
+      "despawns": 12,
+      "near_misses": 12,
+      "queue_events": 108,
+      "region_entries": 32,
+      "region_exits": 28,
+      "spawns": 29,
+      "violations": 3,
+      "yields": 18
+    },
+    "by_family_kind": {
+      "control_transitions": {
+        "crossing_wait": 15,
+        "signal_stop": 28
+      },
+      "violations": {
+        "crossed_against_signal": 0,
+        "ran_red_light": 3
+      }
+    },
+    "by_family_mode": {
+      "collisions": {
+        "vehicle": 1
+      },
+      "control_transitions": {
+        "pedestrian": 15,
+        "vehicle": 28
+      },
+      "despawns": {
+        "pedestrian": 3,
+        "vehicle": 9
+      },
+      "near_misses": {
+        "pedestrian": 10,
+        "vehicle": 2
+      },
+      "queue_events": {
+        "pedestrian": 44,
+        "vehicle": 64
+      },
+      "region_entries": {
+        "pedestrian": 9,
+        "vehicle": 23
+      },
+      "region_exits": {
+        "pedestrian": 8,
+        "vehicle": 20
+      },
+      "spawns": {
+        "pedestrian": 11,
+        "vehicle": 18
+      },
+      "violations": {
+        "vehicle": 3
+      },
+      "yields": {
+        "vehicle": 18
+      }
+    },
+    "by_family_movement": {
+      "collisions": {
+        "movement:ew_through": 1
+      },
+      "control_transitions": {
+        "movement:ew_through": 12,
+        "movement:ns_through": 16,
+        "pedestrian_route:south_to_east": 4,
+        "pedestrian_route:south_to_west": 4,
+        "pedestrian_route:west_to_north": 6,
+        "pedestrian_route:west_to_south": 1
+      },
+      "despawns": {
+        "movement:ew_through": 3,
+        "movement:ns_through": 6,
+        "pedestrian_route:south_to_west": 2,
+        "pedestrian_route:west_to_north": 1
+      },
+      "near_misses": {
+        "movement:ew_through": 2,
+        "pedestrian_route:south_to_east": 3,
+        "pedestrian_route:south_to_west": 2,
+        "pedestrian_route:west_to_north": 5
+      },
+      "queue_events": {
+        "movement:ew_through": 27,
+        "movement:ns_through": 37,
+        "pedestrian_route:south_to_east": 14,
+        "pedestrian_route:south_to_west": 11,
+        "pedestrian_route:west_to_north": 13,
+        "pedestrian_route:west_to_south": 6
+      },
+      "region_entries": {
+        "movement:ew_through": 9,
+        "movement:ns_through": 14,
+        "pedestrian_route:south_to_east": 2,
+        "pedestrian_route:south_to_west": 3,
+        "pedestrian_route:west_to_north": 4
+      },
+      "region_exits": {
+        "movement:ew_through": 8,
+        "movement:ns_through": 12,
+        "pedestrian_route:south_to_east": 2,
+        "pedestrian_route:south_to_west": 2,
+        "pedestrian_route:west_to_north": 4
+      },
+      "spawns": {
+        "movement:ew_through": 9,
+        "movement:ns_through": 9,
+        "pedestrian_route:south_to_east": 2,
+        "pedestrian_route:south_to_west": 4,
+        "pedestrian_route:west_to_north": 4,
+        "pedestrian_route:west_to_south": 1
+      },
+      "violations": {
+        "movement:ew_through": 1,
+        "movement:ns_through": 2
+      },
+      "yields": {
+        "movement:ew_through": 6,
+        "movement:ns_through": 12
+      }
+    }
+  },
+  "operational": {
+    "run": {
+      "throughput_agents_per_s": {
+        "status": "reported",
+        "value": 0.2
+      },
+      "mean_travel_time_s": {
+        "status": "reported",
+        "value": 30.012500000000003
+      },
+      "total_travel_time_s": {
+        "status": "reported",
+        "value": 360.15000000000003
+      },
+      "mean_stopped_delay_s": {
+        "status": "reported",
+        "value": 2.7458333333333336
+      },
+      "total_stopped_delay_s": {
+        "status": "reported",
+        "value": 32.95
+      },
+      "mean_control_delay_s": {
+        "status": "reported",
+        "value": 12.504166666666668
+      },
+      "total_control_delay_s": {
+        "status": "reported",
+        "value": 150.05
+      },
+      "maximum_queue_length_agents": {
+        "status": "reported",
+        "value": 7.0,
+        "tick": 675
+      },
+      "maximum_queue_duration_s": {
+        "status": "reported",
+        "value": 29.75,
+        "agent": 4,
+        "tick": 907
+      },
+      "mean_queue_duration_s": {
+        "status": "reported",
+        "value": 1.3620370370370378
+      }
+    },
+    "by_mode": {
+      "pedestrian": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.05
+        },
+        "mean_travel_time_s": {
+          "status": "reported",
+          "value": 24.400000000000006
+        },
+        "total_travel_time_s": {
+          "status": "reported",
+          "value": 73.20000000000002
+        },
+        "mean_stopped_delay_s": {
+          "status": "reported",
+          "value": 0.20000000000000048
+        },
+        "total_stopped_delay_s": {
+          "status": "reported",
+          "value": 0.6000000000000014
+        },
+        "mean_control_delay_s": {
+          "status": "reported",
+          "value": 7.966666666666669
+        },
+        "total_control_delay_s": {
+          "status": "reported",
+          "value": 23.900000000000006
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 3.0,
+          "tick": 963
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 20.75,
+          "agent": 8,
+          "tick": 680
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 0.6272727272727271
+        }
+      },
+      "vehicle": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.15
+        },
+        "mean_travel_time_s": {
+          "status": "reported",
+          "value": 31.883333333333333
+        },
+        "total_travel_time_s": {
+          "status": "reported",
+          "value": 286.95
+        },
+        "mean_stopped_delay_s": {
+          "status": "reported",
+          "value": 3.5944444444444446
+        },
+        "total_stopped_delay_s": {
+          "status": "reported",
+          "value": 32.35
+        },
+        "mean_control_delay_s": {
+          "status": "reported",
+          "value": 14.016666666666667
+        },
+        "total_control_delay_s": {
+          "status": "reported",
+          "value": 126.15
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 6.0,
+          "tick": 709
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 29.75,
+          "agent": 4,
+          "tick": 907
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 1.8671875000000004
+        }
+      }
+    },
+    "by_movement": {
+      "movement:ew_through": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.05
+        },
+        "mean_travel_time_s": {
+          "status": "reported",
+          "value": 24.566666666666666
+        },
+        "total_travel_time_s": {
+          "status": "reported",
+          "value": 73.7
+        },
+        "mean_stopped_delay_s": {
+          "status": "reported",
+          "value": 10.166666666666666
+        },
+        "total_stopped_delay_s": {
+          "status": "reported",
+          "value": 30.5
+        },
+        "mean_control_delay_s": {
+          "status": "reported",
+          "value": 0.0
+        },
+        "total_control_delay_s": {
+          "status": "reported",
+          "value": 0.0
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 6.0,
+          "tick": 709
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 29.75,
+          "agent": 4,
+          "tick": 907
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 4.357407407407408
+        }
+      },
+      "movement:ns_through": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.1
+        },
+        "mean_travel_time_s": {
+          "status": "reported",
+          "value": 35.541666666666664
+        },
+        "total_travel_time_s": {
+          "status": "reported",
+          "value": 213.25
+        },
+        "mean_stopped_delay_s": {
+          "status": "reported",
+          "value": 0.30833333333333385
+        },
+        "total_stopped_delay_s": {
+          "status": "reported",
+          "value": 1.8500000000000032
+        },
+        "mean_control_delay_s": {
+          "status": "reported",
+          "value": 21.025000000000002
+        },
+        "total_control_delay_s": {
+          "status": "reported",
+          "value": 126.15
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 1.0,
+          "tick": 280
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 0.05000000000000426,
+          "agent": 10,
+          "tick": 923
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 0.050000000000000086
+        }
+      },
+      "pedestrian_route:south_to_east": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.0
+        },
+        "mean_travel_time_s": {
+          "status": "not_observed"
+        },
+        "total_travel_time_s": {
+          "status": "not_observed"
+        },
+        "mean_stopped_delay_s": {
+          "status": "not_observed"
+        },
+        "total_stopped_delay_s": {
+          "status": "not_observed"
+        },
+        "mean_control_delay_s": {
+          "status": "not_observed"
+        },
+        "total_control_delay_s": {
+          "status": "not_observed"
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 2.0,
+          "tick": 963
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 0.6000000000000014,
+          "agent": 21,
+          "tick": 969
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 0.16071428571428673
+        }
+      },
+      "pedestrian_route:south_to_west": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.03333333333333333
+        },
+        "mean_travel_time_s": {
+          "status": "reported",
+          "value": 22.700000000000003
+        },
+        "total_travel_time_s": {
+          "status": "reported",
+          "value": 45.400000000000006
+        },
+        "mean_stopped_delay_s": {
+          "status": "reported",
+          "value": 0.3000000000000007
+        },
+        "total_stopped_delay_s": {
+          "status": "reported",
+          "value": 0.6000000000000014
+        },
+        "mean_control_delay_s": {
+          "status": "reported",
+          "value": 9.700000000000003
+        },
+        "total_control_delay_s": {
+          "status": "reported",
+          "value": 19.400000000000006
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 1.0,
+          "tick": 955
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 0.6000000000000014,
+          "agent": 19,
+          "tick": 967
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 0.16363636363636208
+        }
+      },
+      "pedestrian_route:west_to_north": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.016666666666666666
+        },
+        "mean_travel_time_s": {
+          "status": "reported",
+          "value": 27.8
+        },
+        "total_travel_time_s": {
+          "status": "reported",
+          "value": 27.8
+        },
+        "mean_stopped_delay_s": {
+          "status": "reported",
+          "value": 0.0
+        },
+        "total_stopped_delay_s": {
+          "status": "reported",
+          "value": 0.0
+        },
+        "mean_control_delay_s": {
+          "status": "reported",
+          "value": 4.500000000000001
+        },
+        "total_control_delay_s": {
+          "status": "reported",
+          "value": 4.500000000000001
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 2.0,
+          "tick": 617
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 20.75,
+          "agent": 8,
+          "tick": 680
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 1.7384615384615385
+        }
+      },
+      "pedestrian_route:west_to_south": {
+        "throughput_agents_per_s": {
+          "status": "reported",
+          "value": 0.0
+        },
+        "mean_travel_time_s": {
+          "status": "not_observed"
+        },
+        "total_travel_time_s": {
+          "status": "not_observed"
+        },
+        "mean_stopped_delay_s": {
+          "status": "not_observed"
+        },
+        "total_stopped_delay_s": {
+          "status": "not_observed"
+        },
+        "mean_control_delay_s": {
+          "status": "not_observed"
+        },
+        "total_control_delay_s": {
+          "status": "not_observed"
+        },
+        "maximum_queue_length_agents": {
+          "status": "reported",
+          "value": 1.0,
+          "tick": 1113
+        },
+        "maximum_queue_duration_s": {
+          "status": "reported",
+          "value": 0.5,
+          "agent": 25,
+          "tick": 1123
+        },
+        "mean_queue_duration_s": {
+          "status": "reported",
+          "value": 0.15833333333333263
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "summary_version": 1,
+  "metric_definition_version": 2,
+  "manifest_sha256": "d8ead0e918e1b1bee18fdd039be16f88fcc51a7416619222aa2a6cd38ec35b8e",
+  "ticks": 1200,
+  "spawned": 29,
+  "despawned": 12,
+  "remaining": 17,
+  "elapsed_s": 60.0
+}

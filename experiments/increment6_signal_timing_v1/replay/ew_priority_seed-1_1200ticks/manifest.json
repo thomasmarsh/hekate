@@ -1,0 +1,38 @@
+{
+  "manifest_version": 1,
+  "scenario": {
+    "id": "four_leg_pedestrian_ew_priority_v1",
+    "source_path": "scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5",
+    "schema_version": 1,
+    "content_sha256": "3fe1150e29cd91a5447ed5c5e155868cdb77e2a519aa00dc987cb5e8e8a9ca7d"
+  },
+  "seed": 1,
+  "ticks": 1200,
+  "fidelity": "standard",
+  "step_s": 0.05,
+  "event_version": 2,
+  "model_version": "0.0.0",
+  "build_revision": "0.0.0",
+  "sampling": {
+    "policy_version": 1,
+    "events": "all",
+    "trajectories": {
+      "retention": "sampled",
+      "stride_ticks": 10,
+      "max_samples": 100000
+    }
+  },
+  "stream": {
+    "path": "events.jsonl.gz",
+    "compression": "gzip",
+    "records": 423,
+    "uncompressed_bytes": 35443,
+    "uncompressed_sha256": "a9666e0a5bfca56df071954b07a7e6fdd64d9009c27f6dd41d47c887b78f6def"
+  },
+  "trajectories": {
+    "path": "trajectories.parquet",
+    "format": "parquet",
+    "rows": 1636,
+    "sha256": "578134b5dc63ba6e066dfef3e478cb6b9ebaff9a93d63d58a9947910d6705020"
+  }
+}
