@@ -22,6 +22,14 @@
 //! marker is re-run — and `--jobs` runs whole independent single-threaded runs
 //! concurrently without changing any per-run trace hash.
 //!
+//! `aggregate` reads a completed batch and writes the batch-level experiment
+//! record `aggregation.json`: for every metric the runs report, the across-seed
+//! count, mean, spread, and 95% Student-t confidence interval, disaggregated by
+//! mode pair and by movement, with every number linked to the manifests it came
+//! from. It reports not-applicable and not-observed values as statuses and
+//! counts them per seed rather than reading them as zero, and it mutates no run
+//! artifact.
+//!
 //! `replay` reproduces a completed run directory from its manifest: it re-loads
 //! the recorded scenario source, checks the recorded content hash, and re-runs
 //! the kernel with the recorded seed, step, and tick count, emitting the
@@ -40,10 +48,10 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
-    BATCH_MANIFEST_FILE, BatchRequest, CaptureRequest, RunDirectoryRequest, SamplingPolicy,
-    ScenarioProvenance, canonical_run, canonical_run_captured, capture, load_scenario_hashed,
-    render_validation_failure, replay_run_directory, run_batch, validate_scenario,
-    write_run_directory,
+    AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, CaptureRequest, RunDirectoryRequest,
+    SamplingPolicy, ScenarioProvenance, aggregate_batch, canonical_run, canonical_run_captured,
+    capture, load_scenario_hashed, render_validation_failure, replay_run_directory, run_batch,
+    validate_scenario, write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -77,6 +85,9 @@ enum Command {
     /// Run a scenario once per seed into an output root and write a batch manifest.
     #[command(long_about = BATCH_LONG_ABOUT)]
     Batch(BatchArgs),
+    /// Aggregate a completed batch into a machine-readable metric distribution file.
+    #[command(long_about = AGGREGATE_LONG_ABOUT)]
+    Aggregate(AggregateArgs),
     /// Reproduce a completed run directory's canonical event stream.
     #[command(long_about = REPLAY_LONG_ABOUT)]
     Replay(ReplayArgs),
@@ -117,6 +128,36 @@ Exit codes:
   0  every run in the batch is complete
   1  a run failed, a run directory did not match the batch, or an artifact could
      not be written
+  2  command-line usage error";
+
+/// The `aggregate` contract shown by `--help`: inputs, output, method, exits.
+const AGGREGATE_LONG_ABOUT: &str = "\
+Aggregate a completed batch into one machine-readable aggregation.json: for every
+metric the batch's runs report, the across-seed count, mean, spread, and two-sided
+95% Student-t confidence interval, disaggregated by mode pair and by movement,
+with every number linked to its run manifest and to metric_definition_version 1.
+
+Usage:
+  tangle-cli aggregate <BATCH_ROOT> [--output <PATH>]
+
+Inputs:
+  <BATCH_ROOT>  A completed batch root holding batch.json and one run directory
+                per seed, each with its manifest.json and metrics.json.
+  --output      Destination for the aggregation; `-` writes it to stdout.
+                Defaults to aggregation.json inside the batch root.
+
+Output:
+  aggregation.json names the batch manifest, the seeds read, the interval
+  method, and one distribution per metric, mode-pair slice, and movement slice.
+  A value the runs call not applicable or not observed is counted as a seed
+  behind that status, never averaged in as zero. The output orders metrics,
+  slices, and seeds deterministically.
+
+Exit codes:
+  0  every run's metrics were read, checked, and aggregated
+  1  the batch root holds no readable batch.json, a run's artifacts are missing,
+     unreadable, or disagree with what the batch recorded, or the aggregation
+     could not be written
   2  command-line usage error";
 
 /// The `replay` contract shown by `--help`: usage, inputs, output, exit codes.
@@ -208,6 +249,7 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Run(args) => run(args),
         Command::Batch(args) => batch(args),
+        Command::Aggregate(args) => aggregate(args),
         Command::Replay(args) => replay(args),
         Command::Validate(args) => validate(args),
         Command::Baseline(args) => baseline(args),
@@ -363,6 +405,48 @@ fn batch(args: BatchArgs) -> ExitCode {
         "batch manifest: {} ({} runs)",
         out_root.join(BATCH_MANIFEST_FILE).display(),
         manifest.runs.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Arguments for `aggregate`.
+#[derive(Args)]
+struct AggregateArgs {
+    /// Completed batch root holding batch.json and one run directory per seed.
+    batch_root: PathBuf,
+
+    /// Destination for the aggregation; `-` writes it to stdout.
+    ///
+    /// Defaults to `aggregation.json` inside the batch root. The aggregation is
+    /// derived and deterministic, so writing it again is a no-op in content;
+    /// no run artifact is ever written.
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+/// Aggregate a completed batch's per-seed metrics into one machine-readable
+/// file of across-seed distributions and confidence intervals.
+fn aggregate(args: AggregateArgs) -> ExitCode {
+    let aggregation = match aggregate_batch(&args.batch_root) {
+        Ok(aggregation) => aggregation,
+        Err(error) => return fail(error),
+    };
+
+    let output = args
+        .output
+        .unwrap_or_else(|| args.batch_root.join(AGGREGATION_FILE));
+    if let Err(error) = write_json(&output, &aggregation) {
+        return fail(format_args!(
+            "cannot write aggregation to '{}': {error}",
+            output.display()
+        ));
+    }
+
+    eprintln!(
+        "aggregation: {} ({} metrics over {} seeds)",
+        output.display(),
+        aggregation.metrics.len(),
+        aggregation.seeds.len()
     );
     ExitCode::SUCCESS
 }

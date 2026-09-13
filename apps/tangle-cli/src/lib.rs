@@ -9,6 +9,7 @@
 //! The kernel crates remain filesystem-free and free of those dependencies, and
 //! this crate depends on them rather than the other way around.
 
+mod aggregate;
 mod baseline;
 mod batch;
 mod replay;
@@ -22,6 +23,12 @@ use std::path::{Path, PathBuf};
 
 use tangle_model::{CompiledScenario, Diagnostic, ParseError, parse_scenario_source};
 
+pub use aggregate::{
+    AGGREGATION_FILE, AGGREGATION_VERSION, AggregateError, AggregatedBatch, AggregatedSeed,
+    Aggregation, CONFIDENCE_LEVEL, ConfidenceInterval, INTERVAL_METHOD,
+    LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MetricDistribution,
+    NORMAL_CRITICAL_975, Spread, StatisticsMethod, T_CRITICAL_975, aggregate_batch,
+};
 pub use baseline::{
     BASELINE_VERSION, Baseline, CaptureError, CaptureRequest, Convergence,
     PERFORMANCE_REPORT_VERSION, PRESETS, PerformanceReport, Preset, PresetPerformance, PresetTrace,
