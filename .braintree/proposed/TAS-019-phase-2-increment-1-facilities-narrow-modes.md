@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T18:29:58Z
+updated: 2026-09-13T18:36:16Z
 summary: Increment 1 adds continuous-width facilities and bicycle/scooter modes with longitudinal behavior and isolated fixtures.
-next: [[TAS-073-extend-the-version-2-schema-contract-with-increm]]
+next: [[TAS-074-compile-version-2-facility-and-connector-shapes]]
 ---
 
 # Outcome
