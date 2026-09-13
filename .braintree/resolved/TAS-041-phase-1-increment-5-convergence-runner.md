@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T02:23:09Z
+updated: 2026-09-13T02:31:00Z
 summary: Slice D of Phase 1 Increment 5 adds a Fast/Standard/Fine convergence runner that evaluates a scenario at three fidelities over one seed bank and writes a machine-readable sensitivity report, disaggregated by mode and movement and linked to every run manifest and metric_definition_version 1.
-next: Resolve the node once the five gates pass on the committed tree, recording per-criterion evidence in `# Resolution`.
 ---
 
 # Outcome
@@ -206,3 +205,89 @@ trace hash golden, the Phase 1 baseline, and all goldens stay byte-identical and
 `EVENT_VERSION` stays 2. No existing artifact shape changed: `converge` reads
 `batch.json`, `manifest.json`, and `metrics.json` and writes one new derived
 file.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (implementation in
+`b1b767d`), verified by rerunning the five gates on it:
+
+1. **`converge` runs one scenario at Fast, Standard, and Fine over a shared seed
+   bank and writes a machine-readable sensitivity report.** `main.rs:806`
+   (`converge`) loads the one scenario and the one bank, then loops `PRESETS`
+   calling `run_batch` per fidelity into `out-root/<fidelity>` with
+   `fidelity_ticks(preset.step_s, args.ticks)` steps, and writes the report
+   through the crate's JSON writer. `converge_batches` (`converge.rs:406`) reads
+   the three roots and returns `ConvergenceReport` (`converge.rs:270`). Asserted
+   by `tests/converge.rs:1254` through the binary (three fidelities, 30/60/150
+   steps, one scenario, one bank) and by every synthetic test through the
+   library.
+2. **The report gives per-metric values per fidelity, the refinement change, and
+   a convergence verdict against a declared tolerance, flagging material
+   sensitivity.** `MetricSensitivity` (`converge.rs:245`) holds `FidelityValue`
+   per fidelity (`converge.rs:212`, the aggregation's `MetricDistribution`),
+   `RefinementStep` per step (`converge.rs:223`, the comparison's
+   `PairedDistribution` plus `relative_change` and `materially_sensitive`), and
+   the `verdict`; `sensitivity` (`converge.rs:651`), `refinement`
+   (`converge.rs:687`), and `assess` (`converge.rs:715`) build them, and
+   `CONVERGENCE_TOLERANCE` (`converge.rs:132`) with the recorded `Tolerance`
+   block (`converge.rs:168`) is the declared tolerance. Asserted by
+   `tests/converge.rs:517` (engineered 100% and 50% changes flagged, 1% change
+   converged, zero-reference change material, exact means and differences) and
+   `:629`.
+3. **The report is disaggregated by mode and by movement.**
+   `ConvergenceReport.mode_pair_slices` and `.movement_slices`
+   (`converge.rs:270`) are built at `converge.rs:466` and `:512` from the
+   aggregation's and the comparison's own slice keys, with
+   `MovementSensitivity` (`converge.rs:260`) carrying the bucket's two movement
+   keys. Asserted by `tests/converge.rs:690` (mode labels, a bucket missing at
+   one fidelity, a bucket only the coarsest carries) and by `:1254`, which finds
+   the `vehicle_vehicle` mode slice and the `movement:through|movement:through`
+   bucket on a real run.
+4. **Every reported metric links to its manifests at each fidelity and to
+   `metric_definition_version: 1`.** Every value is the aggregation's
+   `MetricDistribution` (its `manifests`, `reported_seeds`, and
+   `metric_definition_version`) and every change the comparison's
+   `PairedDistribution` (its `a_manifests`, `b_manifests`, `paired_seeds`, and
+   `metric_definition_version`); `FidelityBatch` (`converge.rs:194`) records each
+   fidelity's batch manifest and its per-seed run directories and artifact
+   hashes, and the report carries `metric_definition_version` once at the top
+   (`converge.rs:569`). Asserted by `tests/converge.rs:849`, which resolves every
+   manifest hash against the fidelity's own seed table and the paired sides
+   against the right fidelity, plus `:1254`.
+5. **The ordering is deterministic, covered by a test.** The fidelities and
+   refinement steps are declared-order `Vec`s (`converge.rs:651`),
+   `ConvergenceVerdict::of` (`converge.rs:674`) reads the standard-to-fine step,
+   and every map is a `BTreeMap`. Asserted by `tests/converge.rs:1045` and by
+   `:1254`, which re-runs the command and compares the report bytes and the tree
+   hashes of all three batch roots.
+6. **The canonical trace, trace golden, trace hash golden, Phase 1 baseline, and
+   all goldens are unchanged; `EVENT_VERSION` stays 2.** The change touches only
+   `apps/tangle-cli/src/{converge.rs,lib.rs,main.rs}` and
+   `apps/tangle-cli/tests/converge.rs`; no file under `tests/golden/`,
+   `baselines/`, `scenarios/`, or `schemas/` changed, no kernel crate changed,
+   `EVENT_VERSION` stays 2 (`crates/tangle-sim/src/event.rs:66`),
+   `Cargo.toml`/`Cargo.lock` are unchanged, and the golden, hash-golden, and
+   baseline guards (`tests/golden_trace.rs`, `tests/baseline.rs`) passed in gate
+   7.
+7. **The five gates pass on the final tree** (2026-09-13):
+   `cargo test --workspace --all-features` passed with 547 tests and 0 failures;
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings` was
+   clean; `cargo fmt --all --check` was clean;
+   `./scripts/check-dependency-direction.sh` printed `dependency direction OK`;
+   and `braintree check` printed `graph check: passed (72 nodes)`.
+
+Outcome complete: the three-fidelity runner, the machine-readable sensitivity
+report, the declared 5% relative tolerance and its verdicts, the mode and
+movement disaggregation, the manifest and definition-version links, the counted
+statuses, the declared fidelity rule, and the deterministic ordering are on the
+committed tree.
+
+## Handoff note
+
+`TAS-031`'s `next` still names this node after its resolution; per this node's
+exclusive write set (the `TAS-041` file only) that parent advance is reported to
+the coordinator rather than authored here (settled precedent: `FBK-011`). No
+`FBK` node was recorded: the Braintree commands used here (bare-ID hash, claim
+with `--base-hash`, `mv` between status directories, `braintree check`) behaved
+exactly as the coordination reference describes, so this session produced no
+friction to record.
