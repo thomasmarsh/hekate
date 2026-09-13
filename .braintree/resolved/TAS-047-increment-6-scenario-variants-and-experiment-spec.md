@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T12:33:42Z
+updated: 2026-09-13T12:35:14Z
 summary: Slice B of Phase 1 Increment 6 authors the two freely described variants of one small intersection that differ only through scenario data, the checked-in experiment spec and seed bank, and the evidence that a geometrically different benchmark scenario can be added without changing simulator logic.
-next: Resolve once the coordinator advances TAS-045's next to its run-and-comparison-report child.
 ---
 
 # Context
@@ -204,14 +203,58 @@ All five green on the committed tree (`a9ee7ef`, `7396058`, `b85cf20`):
 printed `dependency direction OK`; `braintree check` printed
 `graph check: passed (87 nodes)`.
 
-## Handoff
+## Closeout
 
-Every `# Done when` criterion is met. The node stays `active` because TAS-045's
-`next` still names it and moving it to `resolved` while that route names it
-fails `braintree check` (FBK-011/012/017); the coordinator advances that route,
-after which this node moves to `.braintree/resolved/` with its `next` removed
-and a `Closes TAS-047` commit. The `next` above spells no wikilink, because a
-checker reads a wikilink in a `next` as the route form and this node has no
-direct child (FBK-019). No pinned consumer exists:
+Every `# Done when` criterion is met, so the node resolves. The coordinator
+advanced TAS-045's `next` from this node to
+[[TAS-048-increment-6-run-and-comparison-report]] (commit `7632768`,
+`braintree check` green), which is what unblocked the move; the `Closes TAS-047`
+commit moves the node to `.braintree/resolved/` with its `next` removed. The
+`next` this node carried until then spelled no wikilink, because a checker reads
+a wikilink in a `next` as the route form and this node has no direct child
+(FBK-019). No pinned consumer exists:
 `rg -n -F 'Depends on [[TAS-047' .braintree` returns nothing, and no other node
-changed, so `context_rev` stays 1.
+changed, so `context_rev` stays 1. The experiment-spec format gap is recorded as
+`FBK-020`.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree, with the evidence in
+`# Result`:
+
+1. **Both variants validate and run through the existing CLI without source
+   changes.** `both_variants_validate_and_run_through_the_cli` invokes
+   `tangle-cli validate` and `tangle-cli run --seed 1 --ticks 600` on each
+   checked-in variant through the unmodified binary and requires a non-empty
+   canonical trace from each; the variants' traces differ at that seed.
+2. **The variants are equivalent except for the independent variable, and the
+   equivalence is stated.** The suite proves it twice — only the `id` line and
+   the six `duration_s` lines differ byte-for-byte, and the parsed
+   `ScenarioSource` documents are equal once the id and every phase duration are
+   normalized — and `# Result` names the differing fields and the controlled
+   data explicitly.
+3. **The experiment spec and seed bank are checked in.**
+   `experiments/increment6_signal_timing_v1/experiment.json` and
+   `seed_bank.json` are committed,
+   `the_experiment_spec_and_bank_name_the_checked_in_inputs` parses both and
+   checks the variants, the Phase 1 preset, the ticks/duration, the bounded
+   default sampling policy, and the ordered seeds, and
+   `the_checked_in_experiment_runs_paired_from_the_seed_bank` runs both variants
+   from that bank through `batch` and pairs them with `compare`.
+4. **A geometrically different benchmark scenario exists, is validated, and is
+   shown to need no change to `tangle-model` or `tangle-sim`.**
+   `scenarios/benchmarks/offset_junction_v1.json5` is a six-arm staggered
+   junction that validates and runs through the CLI, is structurally different
+   from the variants (3 movements, 2 conflict regions, no signals), and the
+   commit that adds it (`7396058`) touches only that scenario file:
+   `git diff --stat 7396058^ 7396058 -- crates/tangle-model crates/tangle-sim`
+   is empty (the whole slice's range is empty there too).
+5. **Schema validation, the regenerated JSON Schema, and the drift test are
+   green; no schema version changes.** No schema change was needed — every field
+   the new scenarios use already exists in version 1 — so
+   `schemas/scenario-source.schema.json` is unchanged,
+   `SUPPORTED_SCHEMA_VERSION` stays 1, and
+   `checked_in_schema_matches_the_generated_schema` passes untouched.
+6. **The five gates pass.** Rerun on the committed tree: 564 tests passed, 0
+   failed; clippy clean with `-D warnings`; `cargo fmt --all --check` clean;
+   `dependency direction OK`; `braintree check` passed (88 nodes).
