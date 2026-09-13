@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T18:36:16Z
+updated: 2026-09-13T18:54:41Z
 summary: Increment 1 adds continuous-width facilities and bicycle/scooter modes with longitudinal behavior and isolated fixtures.
-next: [[TAS-074-compile-version-2-facility-and-connector-shapes]]
+next: [[TAS-075-add-increment-1-facility-and-narrow-mode-validat]]
 ---
 
 # Outcome

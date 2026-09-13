@@ -68,6 +68,9 @@ pub fn migrate_v1_to_v2(source: &ScenarioSource) -> ScenarioSourceV2 {
             passenger_car_template(source, population_in_use),
             pedestrian_template(source),
         ],
+        facilities: Vec::new(),
+        facility_connectors: Vec::new(),
+        permissions: Vec::new(),
         demand: migrate_demand(source, population_in_use),
     }
 }
@@ -146,6 +149,8 @@ fn passenger_car_template(source: &ScenarioSource, population_in_use: bool) -> M
         tactics: vec![TacticKind::Follow, TacticKind::Stop, TacticKind::Yield],
         access: AccessSource {
             facility_kinds: vec![FacilityKind::Path],
+            nominal_direction: None,
+            speed_policy: None,
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles,
@@ -174,6 +179,8 @@ fn pedestrian_template(source: &ScenarioSource) -> ModeTemplateSource {
                 FacilityKind::Crossing,
                 FacilityKind::WaitingArea,
             ],
+            nominal_direction: None,
+            speed_policy: None,
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles,

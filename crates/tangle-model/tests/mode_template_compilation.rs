@@ -46,6 +46,8 @@ fn passenger_car_template() -> ModeTemplateSource {
         tactics: vec![TacticKind::Follow, TacticKind::Stop, TacticKind::Yield],
         access: AccessSource {
             facility_kinds: vec![FacilityKind::Path],
+            nominal_direction: None,
+            speed_policy: None,
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles: profiles(&[
@@ -73,6 +75,8 @@ fn pedestrian_template() -> ModeTemplateSource {
                 FacilityKind::Crossing,
                 FacilityKind::WaitingArea,
             ],
+            nominal_direction: None,
+            speed_policy: None,
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles: profiles(&[("speed_mps", 1.0, 1.6), ("compliance", 1.0, 1.0)]),
@@ -365,6 +369,8 @@ fn the_compiler_rejects_an_impossible_source_combination_naming_the_template() {
         tactics: vec![TacticKind::Follow],
         access: AccessSource {
             facility_kinds: vec![FacilityKind::Path],
+            nominal_direction: None,
+            speed_policy: None,
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles: profiles(&[("speed_mps", 1.0, 1.6), ("compliance", 1.0, 1.0)]),

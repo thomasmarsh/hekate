@@ -10,11 +10,15 @@ use std::collections::HashMap;
 
 use glam::DVec2;
 
+use crate::components::{NominalDirection, SpeedPolicy};
+use crate::mode_template::{
+    CompiledModeTemplate, compile_mode_template, compiled_nominal_direction, compiled_speed_policy,
+};
 use crate::source::{
-    DemandChoiceSource, DemandSource, DemandSpawnSource, ModeBodySource, ModeTemplateSource,
-    MovementSource, PathEnd, PedestrianDemandSource, PedestrianProfileSource, PopulationSource,
-    ProfileRangeSource, ProfileSource, RuleKind, ScenarioSource, ScenarioSourceV2, SignalColor,
-    SignalSource,
+    DemandChoiceSource, DemandSource, DemandSpawnSource, LateralUse, ModeBodySource,
+    ModeTemplateSource, MovementDirection, MovementSource, PathEnd, PedestrianDemandSource,
+    PedestrianProfileSource, PopulationSource, ProfileRangeSource, ProfileSource, RuleKind,
+    ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource,
 };
 use crate::validate::{Diagnostic, validate, validate_v2};
 
@@ -291,6 +295,69 @@ impl PedestrianDemandId {
     }
 }
 
+/// Dense index of a compiled mode template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ModeTemplateId(u32);
+
+impl ModeTemplateId {
+    /// Construct a dense mode-template identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this template.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled continuous-width facility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FacilityId(u32);
+
+impl FacilityId {
+    /// Construct a dense facility identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this facility.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled facility connector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FacilityConnectorId(u32);
+
+impl FacilityConnectorId {
+    /// Construct a dense connector identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this connector.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Stable string identifiers in dense-index order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdMap {
@@ -307,6 +374,8 @@ pub struct IdMap {
     signals: Vec<String>,
     demand: Vec<String>,
     pedestrian_demand: Vec<String>,
+    facilities: Vec<String>,
+    facility_connectors: Vec<String>,
 }
 
 impl IdMap {
@@ -375,6 +444,16 @@ impl IdMap {
         &self.pedestrian_demand
     }
 
+    /// Facility identifiers indexed by [`FacilityId`].
+    pub fn facilities(&self) -> &[String] {
+        &self.facilities
+    }
+
+    /// Facility-connector identifiers indexed by [`FacilityConnectorId`].
+    pub fn facility_connectors(&self) -> &[String] {
+        &self.facility_connectors
+    }
+
     /// Look up the authored name of a compiled path.
     pub fn path_name(&self, id: PathId) -> Option<&str> {
         lookup(&self.paths, id.index())
@@ -438,6 +517,16 @@ impl IdMap {
     /// Look up the authored name of a compiled pedestrian demand source.
     pub fn pedestrian_demand_name(&self, id: PedestrianDemandId) -> Option<&str> {
         lookup(&self.pedestrian_demand, id.index())
+    }
+
+    /// Look up the authored name of a compiled facility.
+    pub fn facility_name(&self, id: FacilityId) -> Option<&str> {
+        lookup(&self.facilities, id.index())
+    }
+
+    /// Look up the authored name of a compiled facility connector.
+    pub fn facility_connector_name(&self, id: FacilityConnectorId) -> Option<&str> {
+        lookup(&self.facility_connectors, id.index())
     }
 }
 
@@ -512,6 +601,613 @@ impl CompiledPath {
             .cumulative
             .partition_point(|&length| length <= distance);
         upper.saturating_sub(1).min(self.points.len() - 2)
+    }
+}
+
+/// One segment of a compiled reference path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ReferenceSegment {
+    /// A straight segment from `start` to `end`.
+    Line {
+        /// Segment start point in metres.
+        start: DVec2,
+        /// Segment end point in metres.
+        end: DVec2,
+    },
+    /// A circular arc of constant signed curvature, swept from
+    /// `start_angle_rad` by `sweep_rad` about `center`.
+    Arc {
+        /// Circle center in metres.
+        center: DVec2,
+        /// Circle radius in metres, strictly positive.
+        radius: f64,
+        /// World angle of the arc's start point in radians.
+        start_angle_rad: f64,
+        /// Signed sweep in radians; positive is counter-clockwise.
+        sweep_rad: f64,
+    },
+}
+
+impl ReferenceSegment {
+    /// Arc length of this segment in metres.
+    fn length(self) -> f64 {
+        match self {
+            Self::Line { start, end } => start.distance(end),
+            Self::Arc {
+                radius, sweep_rad, ..
+            } => radius * sweep_rad.abs(),
+        }
+    }
+
+    /// Point at local arc length `distance` from the segment start.
+    fn position_at(self, distance: f64) -> DVec2 {
+        match self {
+            Self::Line { start, end } => {
+                let length = start.distance(end);
+                if length <= 0.0 {
+                    return start;
+                }
+                start.lerp(end, (distance / length).clamp(0.0, 1.0))
+            }
+            Self::Arc { center, radius, .. } => {
+                center
+                    + radius
+                        * self
+                            .angle_at(distance)
+                            .map_or(DVec2::ZERO, |angle| DVec2::new(angle.cos(), angle.sin()))
+            }
+        }
+    }
+
+    /// The world angle at local arc length `distance`, or `None` for a
+    /// degenerate arc.
+    fn angle_at(self, distance: f64) -> Option<f64> {
+        let Self::Arc {
+            radius,
+            start_angle_rad,
+            sweep_rad,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let length = radius * sweep_rad.abs();
+        if length <= 0.0 {
+            return Some(start_angle_rad);
+        }
+        Some(start_angle_rad + sweep_rad * (distance / length).clamp(0.0, 1.0))
+    }
+
+    /// Tangent heading in radians at local arc length `distance`.
+    fn heading_at(self, distance: f64) -> f64 {
+        match self {
+            Self::Line { start, end } => {
+                let delta = end - start;
+                delta.y.atan2(delta.x)
+            }
+            Self::Arc { sweep_rad, .. } => {
+                let angle = self.angle_at(distance).unwrap_or(0.0);
+                angle + sweep_rad.signum() * std::f64::consts::FRAC_PI_2
+            }
+        }
+    }
+
+    /// Signed curvature in `1/m`, positive for a counter-clockwise turn.
+    fn curvature(self) -> f64 {
+        match self {
+            Self::Line { .. } => 0.0,
+            Self::Arc {
+                radius, sweep_rad, ..
+            } => {
+                if radius <= 0.0 {
+                    0.0
+                } else {
+                    sweep_rad.signum() / radius
+                }
+            }
+        }
+    }
+
+    /// Nearest point on the segment to `point`, with its local arc length.
+    fn nearest(self, point: DVec2) -> (DVec2, f64) {
+        match self {
+            Self::Line { start, end } => {
+                let delta = end - start;
+                let length_sq = delta.length_squared();
+                let t = if length_sq <= 0.0 {
+                    0.0
+                } else {
+                    ((point - start).dot(delta) / length_sq).clamp(0.0, 1.0)
+                };
+                (start + delta * t, t * length_sq.max(0.0).sqrt())
+            }
+            Self::Arc {
+                center,
+                radius,
+                start_angle_rad,
+                sweep_rad,
+            } => {
+                let length = radius * sweep_rad.abs();
+                if length <= 0.0 {
+                    return (self.position_at(0.0), 0.0);
+                }
+                // Both endpoints are candidates; the radial projection is a
+                // third candidate only when it falls inside the swept arc.
+                let mut best = (self.position_at(0.0), 0.0);
+                let mut best_distance = best.0.distance_squared(point);
+                let end = self.position_at(length);
+                let end_distance = end.distance_squared(point);
+                if end_distance < best_distance {
+                    best = (end, length);
+                    best_distance = end_distance;
+                }
+                let phi = (point - center).y.atan2((point - center).x);
+                // Signed angular offset from the arc start, measured along the
+                // direction of travel, in `[0, TAU)`.
+                let swept = if sweep_rad >= 0.0 {
+                    (phi - start_angle_rad).rem_euclid(std::f64::consts::TAU)
+                } else {
+                    (start_angle_rad - phi).rem_euclid(std::f64::consts::TAU)
+                };
+                if swept <= sweep_rad.abs() {
+                    let local = length * (swept / sweep_rad.abs());
+                    let foot = self.position_at(local);
+                    let distance = foot.distance_squared(point);
+                    if distance < best_distance {
+                        best = (foot, local);
+                    }
+                }
+                best
+            }
+        }
+    }
+}
+
+/// Route coordinates of a world point: arc length `s` along a reference path
+/// and signed lateral offset `d`, positive to the left of the direction of
+/// travel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RouteCoordinate {
+    s: f64,
+    d: f64,
+}
+
+impl RouteCoordinate {
+    /// Construct a route coordinate from its arc length and lateral offset.
+    pub const fn new(s: f64, d: f64) -> Self {
+        Self { s, d }
+    }
+
+    /// Arc length along the reference path in metres.
+    pub const fn s(self) -> f64 {
+        self.s
+    }
+
+    /// Signed lateral offset in metres, positive to the left of travel.
+    pub const fn d(self) -> f64 {
+        self.d
+    }
+}
+
+/// A compiled reference path: an ordered sequence of straight and circular-arc
+/// segments with cached arc-length parameterization.
+///
+/// An authored `paths[]` polyline compiles to straight segments through
+/// [`Self::from_polyline`]. [`Self::arc`] builds the exact constant-curvature
+/// reference the analytic `T-RT` fixtures use. The `(s, d) <-> world` mapping is
+/// `p(s, d) = position_at(s) + d * normal_at(s)` with `s` clamped to
+/// `[0, length]`; the inverse is the nearest point on the reference.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledReferencePath {
+    segments: Vec<ReferenceSegment>,
+    /// Arc length at the start of each segment, plus the total at the end.
+    starts: Vec<f64>,
+    length: f64,
+}
+
+impl CompiledReferencePath {
+    /// Build the reference of an authored polyline path.
+    pub fn from_polyline(points: &[DVec2]) -> Self {
+        let segments = points
+            .windows(2)
+            .map(|pair| ReferenceSegment::Line {
+                start: pair[0],
+                end: pair[1],
+            })
+            .collect();
+        Self::new(segments)
+    }
+
+    /// Build a single circular-arc reference of constant signed curvature.
+    ///
+    /// `sweep_rad` is signed: positive sweeps counter-clockwise (positive
+    /// curvature) and negative clockwise. A non-positive `radius` produces a
+    /// degenerate, zero-length reference.
+    pub fn arc(center: DVec2, radius: f64, start_angle_rad: f64, sweep_rad: f64) -> Self {
+        Self::new(vec![ReferenceSegment::Arc {
+            center,
+            radius,
+            start_angle_rad,
+            sweep_rad,
+        }])
+    }
+
+    fn new(segments: Vec<ReferenceSegment>) -> Self {
+        let mut starts = Vec::with_capacity(segments.len() + 1);
+        starts.push(0.0);
+        for segment in &segments {
+            let next = starts.last().copied().unwrap_or(0.0) + segment.length();
+            starts.push(next);
+        }
+        let length = starts.last().copied().unwrap_or(0.0);
+        Self {
+            segments,
+            starts,
+            length,
+        }
+    }
+
+    /// Total reference arc length in metres.
+    pub fn length(&self) -> f64 {
+        self.length
+    }
+
+    /// Whether the reference carries any geometry.
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// World point at arc length `s`, clamped to `[0, length]`.
+    pub fn position_at(&self, s: f64) -> DVec2 {
+        match self.locate(s) {
+            Some((index, local)) => self.segments[index].position_at(local),
+            None => DVec2::ZERO,
+        }
+    }
+
+    /// Tangent heading in radians, counter-clockwise from the world x axis, at
+    /// arc length `s`, clamped to `[0, length]`.
+    pub fn heading_at(&self, s: f64) -> f64 {
+        match self.locate(s) {
+            Some((index, local)) => self.segments[index].heading_at(local),
+            None => 0.0,
+        }
+    }
+
+    /// Unit tangent `(cos heading, sin heading)` at arc length `s`.
+    pub fn tangent_at(&self, s: f64) -> DVec2 {
+        let heading = self.heading_at(s);
+        DVec2::new(heading.cos(), heading.sin())
+    }
+
+    /// Unit left normal, the tangent rotated `+90` degrees.
+    pub fn normal_at(&self, s: f64) -> DVec2 {
+        let heading = self.heading_at(s);
+        DVec2::new(-heading.sin(), heading.cos())
+    }
+
+    /// Signed curvature `kappa(s) = d theta / ds` in `1/m`, positive for a
+    /// counter-clockwise turn.
+    ///
+    /// A straight segment has zero curvature. A circular arc reports its
+    /// constant `+1 / radius` or `-1 / radius`. A polyline reports the
+    /// containing segment's curvature, so a vertex is attributed to the
+    /// segment it starts (`position_at` clamps to the segment start there).
+    pub fn curvature_at(&self, s: f64) -> f64 {
+        match self.locate(s) {
+            Some((index, _)) => self.segments[index].curvature(),
+            None => 0.0,
+        }
+    }
+
+    /// World position of the route coordinate `(s, d)`.
+    pub fn point_at(&self, s: f64, d: f64) -> DVec2 {
+        self.position_at(s) + d * self.normal_at(s)
+    }
+
+    /// Project a world point onto the reference: `s` from the nearest point on
+    /// the reference and `d = (point - position_at(s)) . normal_at(s)`.
+    pub fn project(&self, point: DVec2) -> RouteCoordinate {
+        let mut best: Option<(f64, DVec2, f64)> = None;
+        for (index, segment) in self.segments.iter().enumerate() {
+            let (foot, local) = segment.nearest(point);
+            let distance = foot.distance_squared(point);
+            if best.is_none_or(|(_, _, best_distance)| distance < best_distance) {
+                best = Some((self.starts[index] + local, foot, distance));
+            }
+        }
+        match best {
+            Some((s, foot, _)) => RouteCoordinate {
+                s,
+                d: (point - foot).dot(self.normal_at(s)),
+            },
+            None => RouteCoordinate { s: 0.0, d: 0.0 },
+        }
+    }
+
+    /// Index of the segment containing `s` and the local arc length within it,
+    /// or `None` for a reference with no geometry.
+    fn locate(&self, s: f64) -> Option<(usize, f64)> {
+        if self.segments.is_empty() {
+            return None;
+        }
+        let s = s.clamp(0.0, self.length);
+        let index = self
+            .starts
+            .partition_point(|&start| start <= s)
+            .saturating_sub(1)
+            .min(self.segments.len() - 1);
+        Some((index, s - self.starts[index]))
+    }
+}
+
+/// The compiled reference path of a facility: the authored path it came from
+/// and the compiled geometry that gives the facility its `(s, d)` frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledFacilityReference {
+    path: PathId,
+    geometry: CompiledReferencePath,
+}
+
+impl CompiledFacilityReference {
+    /// The authored reference path this geometry was compiled from.
+    pub fn path(&self) -> PathId {
+        self.path
+    }
+
+    /// The compiled reference geometry.
+    pub fn geometry(&self) -> &CompiledReferencePath {
+        &self.geometry
+    }
+}
+
+/// A compiled traversable region and reference path: a continuous-width
+/// facility with usable width, nominal direction, mode access, lateral-use
+/// policy, speed policy, and connector adjacency.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledFacility {
+    id: FacilityId,
+    name: String,
+    region: RegionId,
+    reference: Option<CompiledFacilityReference>,
+    width_m: f64,
+    nominal_direction: NominalDirection,
+    access: Vec<ModeTemplateId>,
+    lateral_use: LateralUse,
+    speed_policy: SpeedPolicy,
+    outgoing: Vec<FacilityConnectorId>,
+    incoming: Vec<FacilityConnectorId>,
+    physically_possible: Vec<MovementDirection>,
+}
+
+impl CompiledFacility {
+    /// Dense identifier of this facility.
+    pub fn id(&self) -> FacilityId {
+        self.id
+    }
+
+    /// Authored name of this facility.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The traversable region the facility occupies.
+    pub fn region(&self) -> RegionId {
+        self.region
+    }
+
+    /// The compiled reference path, when the facility declares one.
+    pub fn reference(&self) -> Option<&CompiledFacilityReference> {
+        self.reference.as_ref()
+    }
+
+    /// The authored reference path, when the facility declares one.
+    pub fn reference_path(&self) -> Option<PathId> {
+        self.reference.as_ref().map(CompiledFacilityReference::path)
+    }
+
+    /// Reference arc length in metres, when the facility has a reference path.
+    pub fn length(&self) -> Option<f64> {
+        self.reference
+            .as_ref()
+            .map(|reference| reference.geometry.length())
+    }
+
+    /// World point at reference arc length `s`, when the facility has a
+    /// reference path.
+    pub fn position_at(&self, s: f64) -> Option<DVec2> {
+        self.reference
+            .as_ref()
+            .map(|reference| reference.geometry.position_at(s))
+    }
+
+    /// Tangent heading at arc length `s` in radians, when the facility has a
+    /// reference path.
+    pub fn heading_at(&self, s: f64) -> Option<f64> {
+        self.reference
+            .as_ref()
+            .map(|reference| reference.geometry.heading_at(s))
+    }
+
+    /// Unit tangent at arc length `s`, when the facility has a reference path.
+    pub fn tangent_at(&self, s: f64) -> Option<DVec2> {
+        self.reference
+            .as_ref()
+            .map(|reference| reference.geometry.tangent_at(s))
+    }
+
+    /// Unit left normal at arc length `s`, when the facility has a reference
+    /// path.
+    pub fn normal_at(&self, s: f64) -> Option<DVec2> {
+        self.reference
+            .as_ref()
+            .map(|reference| reference.geometry.normal_at(s))
+    }
+
+    /// Signed curvature at arc length `s` in `1/m`, when the facility has a
+    /// reference path.
+    pub fn curvature_at(&self, s: f64) -> Option<f64> {
+        self.reference
+            .as_ref()
+            .map(|reference| reference.geometry.curvature_at(s))
+    }
+
+    /// Usable traversable width in metres, measured across the reference path.
+    pub fn width_m(&self) -> f64 {
+        self.width_m
+    }
+
+    /// The authored nominal direction of the reference path.
+    pub fn nominal_direction(&self) -> NominalDirection {
+        self.nominal_direction
+    }
+
+    /// Mode templates permitted to use this facility, in authored order.
+    pub fn access(&self) -> &[ModeTemplateId] {
+        &self.access
+    }
+
+    /// Whether the facility permits `mode`.
+    pub fn permits_mode(&self, mode: ModeTemplateId) -> bool {
+        self.access.contains(&mode)
+    }
+
+    /// Whether the usable lateral interval is shared or centered.
+    pub fn lateral_use(&self) -> LateralUse {
+        self.lateral_use
+    }
+
+    /// The facility's own speed policy; the effective limit on the facility is
+    /// the more restrictive of this and the permitting mode's policy.
+    pub fn speed_policy(&self) -> SpeedPolicy {
+        self.speed_policy
+    }
+
+    /// The directed connectors that leave this facility, in authored order.
+    pub fn outgoing_connectors(&self) -> &[FacilityConnectorId] {
+        &self.outgoing
+    }
+
+    /// The directed connectors that enter this facility, in authored order.
+    pub fn incoming_connectors(&self) -> &[FacilityConnectorId] {
+        &self.incoming
+    }
+
+    /// The traversal directions an attached connector makes physically
+    /// possible, in authored connector order.
+    ///
+    /// This is the third direction property, kept separate from the authored
+    /// [`Self::nominal_direction`] and the mode-dependent permitted direction:
+    /// a direction is possible when a connector leaves or enters the facility
+    /// along it.
+    pub fn physically_possible_directions(&self) -> &[MovementDirection] {
+        &self.physically_possible
+    }
+
+    /// Whether a connected traversal exists in `direction`.
+    pub fn is_physically_possible(&self, direction: MovementDirection) -> bool {
+        self.physically_possible.contains(&direction)
+    }
+
+    /// The usable lateral interval for a body of envelope width
+    /// `envelope_width_m` and lateral clearance `clearance_m`.
+    ///
+    /// The band is centred on the reference path with total width
+    /// `width_m`, so a body fits when `|d| + envelope/2 + clearance <= W/2`,
+    /// giving `d_min = -(W/2 - envelope/2 - clearance)` and its negation. The
+    /// interval is empty when `envelope + 2 * clearance > W`.
+    pub fn usable_lateral_interval(
+        &self,
+        envelope_width_m: f64,
+        clearance_m: f64,
+    ) -> UsableLateralInterval {
+        let half = self.width_m * 0.5 - envelope_width_m * 0.5 - clearance_m;
+        UsableLateralInterval {
+            d_min: -half,
+            d_max: half,
+        }
+    }
+}
+
+/// The signed lateral offsets a body of a given envelope and clearance may
+/// occupy inside a facility band.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UsableLateralInterval {
+    d_min: f64,
+    d_max: f64,
+}
+
+impl UsableLateralInterval {
+    /// Lowest usable signed lateral offset in metres.
+    pub fn d_min(self) -> f64 {
+        self.d_min
+    }
+
+    /// Highest usable signed lateral offset in metres.
+    pub fn d_max(self) -> f64 {
+        self.d_max
+    }
+
+    /// Whether no offset fits: the body envelope plus clearance exceeds the
+    /// facility width.
+    pub fn is_empty(self) -> bool {
+        self.d_max < self.d_min
+    }
+
+    /// Whether `d` lies within the interval.
+    pub fn contains(self, d: f64) -> bool {
+        !self.is_empty() && (self.d_min..=self.d_max).contains(&d)
+    }
+}
+
+/// One facility traversal named by a connector: a facility and the direction
+/// of travel along its reference path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FacilityTraversal {
+    facility: FacilityId,
+    direction: MovementDirection,
+}
+
+impl FacilityTraversal {
+    /// The facility traversed.
+    pub fn facility(self) -> FacilityId {
+        self.facility
+    }
+
+    /// The traversal direction along that facility.
+    pub fn direction(self) -> MovementDirection {
+        self.direction
+    }
+}
+
+/// A compiled directed connector joining two facility traversals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledFacilityConnector {
+    id: FacilityConnectorId,
+    name: String,
+    from: FacilityTraversal,
+    to: FacilityTraversal,
+}
+
+impl CompiledFacilityConnector {
+    /// Dense identifier of this connector.
+    pub fn id(&self) -> FacilityConnectorId {
+        self.id
+    }
+
+    /// Authored name of this connector.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The traversal the connector leaves.
+    pub fn from(&self) -> FacilityTraversal {
+        self.from
+    }
+
+    /// The traversal the connector enters.
+    pub fn to(&self) -> FacilityTraversal {
+        self.to
     }
 }
 
@@ -1383,6 +2079,9 @@ pub struct CompiledScenario {
     profiles: CompiledProfile,
     pedestrian_profiles: CompiledPedestrianProfile,
     population: PopulationSource,
+    mode_templates: Vec<CompiledModeTemplate>,
+    facilities: Vec<CompiledFacility>,
+    facility_connectors: Vec<CompiledFacilityConnector>,
     id_map: IdMap,
 }
 
@@ -1401,17 +2100,44 @@ impl CompiledScenario {
 
     /// Validate and compile a version-2 source scenario.
     ///
-    /// Version 2 does not change compiled behavior in Increment 0: mode
+    /// Version 2 does not change the Increment 0 compiled fields: mode
     /// templates and mode-tagged demand are materialized into the version-1
-    /// compiled fields (profiles, pedestrian profiles, population, demand), so
-    /// the kernel consumes the same compiled representation. Compiling the
-    /// authored shapes into agent components is a later leaf.
+    /// fields (profiles, pedestrian profiles, population, demand), so the
+    /// kernel consumes the same compiled representation. Alongside that view,
+    /// the Increment 1 authored shapes populate the compiled facilities, their
+    /// connectors, and the compiled mode-template bundles; a version-1 source
+    /// has none of these.
     pub fn compile_v2(source: ScenarioSourceV2) -> Result<Self, Vec<Diagnostic>> {
         let diagnostics = validate_v2(&source);
         if !diagnostics.is_empty() {
             return Err(diagnostics);
         }
-        Ok(Self::compile_validated(v2_to_v1_view(source)))
+
+        let mode_templates = compile_mode_templates(&source.mode_templates)?;
+        let mode_template_index = index_by_id(
+            source
+                .mode_templates
+                .iter()
+                .map(|template| template.id.as_str()),
+        );
+        let facilities = compile_facilities(&source, &mode_template_index);
+        let facility_connectors = compile_facility_connectors(&source);
+        let facilities = attach_facility_adjacency(facilities, &facility_connectors);
+        let facility_names = names(source.facilities.iter().map(|facility| &facility.id));
+        let facility_connector_names = names(
+            source
+                .facility_connectors
+                .iter()
+                .map(|connector| &connector.id),
+        );
+
+        let mut scenario = Self::compile_validated(v2_to_v1_view(source));
+        scenario.mode_templates = mode_templates;
+        scenario.facilities = facilities;
+        scenario.facility_connectors = facility_connectors;
+        scenario.id_map.facilities = facility_names;
+        scenario.id_map.facility_connectors = facility_connector_names;
+        Ok(scenario)
     }
 
     /// Compile a source scenario that has already passed validation.
@@ -1654,6 +2380,8 @@ impl CompiledScenario {
             signals: names(source.signals.iter().map(|signal| &signal.id)),
             demand: names(source.demand.iter().map(|demand| &demand.id)),
             pedestrian_demand: names(source.pedestrian_demand.iter().map(|demand| &demand.id)),
+            facilities: Vec::new(),
+            facility_connectors: Vec::new(),
         };
 
         Self {
@@ -1675,6 +2403,11 @@ impl CompiledScenario {
             profiles: CompiledProfile::from_source(source.profiles),
             pedestrian_profiles: CompiledPedestrianProfile::from_source(source.pedestrian_profiles),
             population: source.population,
+            // The Increment 1 compiled shapes are version-2 only; `compile_v2`
+            // fills them after this shared version-1 view.
+            mode_templates: Vec::new(),
+            facilities: Vec::new(),
+            facility_connectors: Vec::new(),
             id_map,
         }
     }
@@ -1769,6 +2502,24 @@ impl CompiledScenario {
         &self.population
     }
 
+    /// Compiled mode-template bundles in dense-index order.
+    ///
+    /// A version-1 source has none; `compile_v2` populates one bundle per
+    /// authored `mode_templates[]` entry.
+    pub fn mode_templates(&self) -> &[CompiledModeTemplate] {
+        &self.mode_templates
+    }
+
+    /// Compiled continuous-width facilities in dense-index order.
+    pub fn facilities(&self) -> &[CompiledFacility] {
+        &self.facilities
+    }
+
+    /// Compiled facility connectors in dense-index order.
+    pub fn facility_connectors(&self) -> &[CompiledFacilityConnector] {
+        &self.facility_connectors
+    }
+
     /// Stable string-to-dense-integer mapping for run provenance.
     pub fn id_map(&self) -> &IdMap {
         &self.id_map
@@ -1841,6 +2592,24 @@ impl CompiledScenario {
     ) -> Option<&CompiledPedestrianDemand> {
         self.pedestrian_demand.get(id.index())
     }
+
+    /// Look up a compiled mode-template bundle by dense identifier.
+    pub fn mode_template(&self, id: ModeTemplateId) -> Option<&CompiledModeTemplate> {
+        self.mode_templates.get(id.index())
+    }
+
+    /// Look up a compiled facility by dense identifier.
+    pub fn facility(&self, id: FacilityId) -> Option<&CompiledFacility> {
+        self.facilities.get(id.index())
+    }
+
+    /// Look up a compiled facility connector by dense identifier.
+    pub fn facility_connector(
+        &self,
+        id: FacilityConnectorId,
+    ) -> Option<&CompiledFacilityConnector> {
+        self.facility_connectors.get(id.index())
+    }
 }
 
 /// Map each identifier to its dense array index.
@@ -1851,6 +2620,128 @@ fn index_by_id<'a>(ids: impl Iterator<Item = &'a str>) -> HashMap<&'a str, usize
 /// Clone a sequence of authored identifiers.
 fn names<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
     ids.map(String::clone).collect()
+}
+
+/// Compile every authored version-2 mode template, or return every diagnostic.
+fn compile_mode_templates(
+    templates: &[ModeTemplateSource],
+) -> Result<Vec<CompiledModeTemplate>, Vec<Diagnostic>> {
+    let mut compiled = Vec::with_capacity(templates.len());
+    let mut diagnostics = Vec::new();
+    for template in templates {
+        match compile_mode_template(template) {
+            Ok(bundle) => compiled.push(bundle),
+            Err(mut template_diagnostics) => diagnostics.append(&mut template_diagnostics),
+        }
+    }
+    if diagnostics.is_empty() {
+        Ok(compiled)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+/// Compile the version-2 facilities into their reference-path geometry.
+///
+/// A facility with a `reference_path` gets a compiled [`CompiledReferencePath`]
+/// over that path's vertices; a facility without one exposes region geometry
+/// only. Adjacency is attached afterwards by [`attach_facility_adjacency`].
+fn compile_facilities(
+    source: &ScenarioSourceV2,
+    mode_template_index: &HashMap<&str, usize>,
+) -> Vec<CompiledFacility> {
+    let region_index = index_by_id(source.regions.iter().map(|region| region.id.as_str()));
+    let path_index = index_by_id(source.paths.iter().map(|path| path.id.as_str()));
+    source
+        .facilities
+        .iter()
+        .enumerate()
+        .map(|(index, facility)| {
+            let reference = facility.reference_path.as_ref().map(|name| {
+                let path = PathId::from_index(path_index[name.as_str()]);
+                let points = points_of(&source.paths[path.index()].points);
+                CompiledFacilityReference {
+                    path,
+                    geometry: CompiledReferencePath::from_polyline(&points),
+                }
+            });
+            CompiledFacility {
+                id: FacilityId::from_index(index),
+                name: facility.id.clone(),
+                region: RegionId::from_index(region_index[facility.region.as_str()]),
+                reference,
+                width_m: facility.width_m,
+                nominal_direction: compiled_nominal_direction(facility.nominal_direction),
+                access: facility
+                    .access
+                    .modes
+                    .iter()
+                    .map(|mode| ModeTemplateId::from_index(mode_template_index[mode.as_str()]))
+                    .collect(),
+                lateral_use: facility.lateral_use,
+                speed_policy: compiled_speed_policy(facility.speed_policy),
+                outgoing: Vec::new(),
+                incoming: Vec::new(),
+                physically_possible: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// Compile the version-2 facility connectors into dense traversal endpoints.
+fn compile_facility_connectors(source: &ScenarioSourceV2) -> Vec<CompiledFacilityConnector> {
+    let facility_index = index_by_id(
+        source
+            .facilities
+            .iter()
+            .map(|facility| facility.id.as_str()),
+    );
+    source
+        .facility_connectors
+        .iter()
+        .enumerate()
+        .map(|(index, connector)| CompiledFacilityConnector {
+            id: FacilityConnectorId::from_index(index),
+            name: connector.id.clone(),
+            from: FacilityTraversal {
+                facility: FacilityId::from_index(facility_index[connector.from.facility.as_str()]),
+                direction: connector.from.direction,
+            },
+            to: FacilityTraversal {
+                facility: FacilityId::from_index(facility_index[connector.to.facility.as_str()]),
+                direction: connector.to.direction,
+            },
+        })
+        .collect()
+}
+
+/// Attach each connector to the facilities it leaves and enters, recording the
+/// traversal directions the connector graph makes physically possible.
+fn attach_facility_adjacency(
+    mut facilities: Vec<CompiledFacility>,
+    connectors: &[CompiledFacilityConnector],
+) -> Vec<CompiledFacility> {
+    for (index, connector) in connectors.iter().enumerate() {
+        let id = FacilityConnectorId::from_index(index);
+        let from = connector.from();
+        let to = connector.to();
+
+        let outgoing = &mut facilities[from.facility().index()];
+        outgoing.outgoing.push(id);
+        push_direction(&mut outgoing.physically_possible, from.direction());
+
+        let incoming = &mut facilities[to.facility().index()];
+        incoming.incoming.push(id);
+        push_direction(&mut incoming.physically_possible, to.direction());
+    }
+    facilities
+}
+
+/// Push `direction` unless it is already present, keeping authored order.
+fn push_direction(directions: &mut Vec<MovementDirection>, direction: MovementDirection) {
+    if !directions.contains(&direction) {
+        directions.push(direction);
+    }
 }
 
 /// Materialize the version-1 reader view the Increment 0 compiler consumes.
@@ -2108,7 +2999,7 @@ fn compile_portal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::parse_scenario_source;
+    use crate::source::{parse_scenario_source, parse_scenario_source_v2};
 
     const WALKING: &str = r#"
     {
@@ -2563,5 +3454,277 @@ mod tests {
             id_map.pedestrian_demand().len(),
             scenario.pedestrian_demand().len()
         );
+    }
+
+    /// A version-2 document with two continuous-width facilities joined by a
+    /// directed connector.
+    const FACILITIES: &str = "
+    {
+      schema_version: 2,
+      id: 'facility_geometry',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [
+        { id: 'west_centerline', points: [ { x: 0.0, y: 0.0 }, { x: 100.0, y: 0.0 } ] },
+        { id: 'east_centerline', points: [ { x: 100.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] },
+      ],
+      portals: [],
+      regions: [
+        { id: 'west_band', points: [
+          { x: 0.0, y: -1.5 }, { x: 100.0, y: -1.5 },
+          { x: 100.0, y: 1.5 }, { x: 0.0, y: 1.5 } ] },
+        { id: 'east_band', points: [
+          { x: 100.0, y: -1.5 }, { x: 200.0, y: -1.5 },
+          { x: 200.0, y: 1.5 }, { x: 100.0, y: 1.5 } ] },
+      ],
+      mode_templates: [
+        {
+          id: 'cycle',
+          body: { kind: 'box', length_m: { min: 1.6, max: 1.9 },
+            width_m: { min: 0.6, max: 0.8 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 3.5, max: 6.5 },
+            max_accel_mps2: { min: 0.8, max: 1.5 },
+            comfortable_brake_mps2: { min: 1.5, max: 3.0 },
+            time_gap_s: { min: 0.8, max: 1.4 },
+            compliance: { min: 0.8, max: 1.0 },
+          },
+        },
+      ],
+      facilities: [
+        { id: 'west_lane', region: 'west_band', reference_path: 'west_centerline',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: { modes: [ 'cycle' ] }, lateral_use: 'shared',
+          speed_policy: { limit_mps: 8.0 } },
+        { id: 'east_lane', region: 'east_band', reference_path: 'east_centerline',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: { modes: [ 'cycle' ] }, lateral_use: 'shared',
+          speed_policy: { limit_mps: null } },
+      ],
+      facility_connectors: [
+        { id: 'west_to_east', from: { facility: 'west_lane', direction: 'forward' },
+          to: { facility: 'east_lane', direction: 'forward' } },
+      ],
+    }
+    ";
+
+    fn facilities() -> CompiledScenario {
+        let source = parse_scenario_source_v2(FACILITIES).expect("facility document parses");
+        CompiledScenario::compile_v2(source).expect("facility document compiles")
+    }
+
+    #[test]
+    fn compiles_facilities_with_reference_coordinates_access_and_connectors() {
+        let scenario = facilities();
+
+        assert_eq!(scenario.mode_templates().len(), 1);
+        assert_eq!(
+            scenario
+                .mode_template(ModeTemplateId::from_index(0))
+                .map(CompiledModeTemplate::id),
+            Some("cycle")
+        );
+
+        assert_eq!(scenario.facilities().len(), 2);
+        let west = scenario
+            .facility(FacilityId::from_index(0))
+            .expect("west lane exists");
+        assert_eq!(west.name(), "west_lane");
+        assert_eq!(west.region(), RegionId::from_index(0));
+        assert_eq!(west.reference_path(), Some(PathId::from_index(0)));
+        assert_eq!(west.width_m(), 3.0);
+        assert_eq!(west.nominal_direction(), NominalDirection::Forward);
+        assert_eq!(west.access(), [ModeTemplateId::from_index(0)]);
+        assert!(west.permits_mode(ModeTemplateId::from_index(0)));
+        assert_eq!(west.lateral_use(), LateralUse::Shared);
+        assert_eq!(west.speed_policy().limit_mps(), Some(8.0));
+
+        assert_eq!(west.length(), Some(100.0));
+        assert_eq!(west.position_at(25.0), Some(DVec2::new(25.0, 0.0)));
+        assert_eq!(west.tangent_at(25.0), Some(DVec2::new(1.0, 0.0)));
+        assert_eq!(west.normal_at(25.0), Some(DVec2::new(0.0, 1.0)));
+        assert_eq!(west.curvature_at(25.0), Some(0.0));
+
+        let east = scenario
+            .facility(FacilityId::from_index(1))
+            .expect("east lane exists");
+        assert_eq!(east.reference_path(), Some(PathId::from_index(1)));
+        assert_eq!(east.speed_policy().limit_mps(), None);
+
+        // The connector is a directed edge in the facility graph.
+        assert_eq!(scenario.facility_connectors().len(), 1);
+        let connector = scenario
+            .facility_connector(FacilityConnectorId::from_index(0))
+            .expect("connector exists");
+        assert_eq!(connector.name(), "west_to_east");
+        assert_eq!(
+            connector.from(),
+            FacilityTraversal {
+                facility: FacilityId::from_index(0),
+                direction: MovementDirection::Forward,
+            }
+        );
+        assert_eq!(connector.to().facility(), FacilityId::from_index(1));
+        assert_eq!(
+            west.outgoing_connectors(),
+            [FacilityConnectorId::from_index(0)]
+        );
+        assert_eq!(
+            east.incoming_connectors(),
+            [FacilityConnectorId::from_index(0)]
+        );
+
+        // The physically possible direction is separate from the nominal one:
+        // only the traversals an attached connector actually joins are possible.
+        assert!(west.is_physically_possible(MovementDirection::Forward));
+        assert!(!west.is_physically_possible(MovementDirection::Reverse));
+        assert!(east.is_physically_possible(MovementDirection::Forward));
+        assert!(!east.is_physically_possible(MovementDirection::Reverse));
+
+        // The provenance id map names the Increment 1 objects.
+        assert_eq!(
+            scenario.id_map().facility_name(FacilityId::from_index(0)),
+            Some("west_lane")
+        );
+        assert_eq!(
+            scenario
+                .id_map()
+                .facility_connector_name(FacilityConnectorId::from_index(0)),
+            Some("west_to_east")
+        );
+        assert_eq!(
+            scenario.facilities().len(),
+            scenario.id_map().facilities().len()
+        );
+        assert_eq!(
+            scenario.facility_connectors().len(),
+            scenario.id_map().facility_connectors().len()
+        );
+    }
+
+    /// Largest `(s, d)` round-trip error in metres over the given route
+    /// coordinates, including the reconstructed world distance.
+    fn max_round_trip_error(
+        reference: &CompiledReferencePath,
+        distances: &[f64],
+        offsets: &[f64],
+    ) -> f64 {
+        let mut max = 0.0_f64;
+        for &s in distances {
+            for &d in offsets {
+                let world = reference.point_at(s, d);
+                let route = reference.project(world);
+                max = max.max((route.s() - s).abs()).max((route.d() - d).abs());
+                let reconstructed = reference.point_at(route.s(), route.d());
+                max = max.max((reconstructed - world).length());
+            }
+        }
+        max
+    }
+
+    /// The checked-in `T-RT` evidence: `(s, d) -> world -> (s, d)` is exact
+    /// within `1e-9 m` on a straight facility and on a constant-curvature
+    /// facility, and the usable lateral interval subtracts the body envelope
+    /// and clearance.
+    #[test]
+    fn facility_reference_round_trips_path_world_path_within_trt() {
+        let scenario = facilities();
+        let straight = scenario
+            .facility(FacilityId::from_index(0))
+            .expect("west lane exists")
+            .reference()
+            .expect("west lane has a reference path")
+            .geometry();
+
+        let straight_error = max_round_trip_error(
+            straight,
+            &[0.0, 1.0, 25.0, 50.0, 99.0, 100.0],
+            &[-1.0, 0.0, 0.5, 1.0],
+        );
+        assert!(
+            straight_error <= 1e-9,
+            "straight T-RT error {straight_error} m exceeds 1e-9 m"
+        );
+
+        // A constant-curvature facility: a counter-clockwise quarter circle of
+        // radius 50 m. A single authored polyline cannot be an exact arc, so
+        // the analytic reference is built through the compiled geometry.
+        let curved_facility = CompiledFacility {
+            id: FacilityId::from_index(0),
+            name: "curved".to_owned(),
+            region: RegionId::from_index(0),
+            reference: Some(CompiledFacilityReference {
+                path: PathId::from_index(0),
+                geometry: CompiledReferencePath::arc(
+                    DVec2::new(0.0, 0.0),
+                    50.0,
+                    0.0,
+                    std::f64::consts::FRAC_PI_2,
+                ),
+            }),
+            width_m: 3.0,
+            nominal_direction: NominalDirection::Forward,
+            access: vec![ModeTemplateId::from_index(0)],
+            lateral_use: LateralUse::Shared,
+            speed_policy: SpeedPolicy::unlimited(),
+            outgoing: Vec::new(),
+            incoming: Vec::new(),
+            physically_possible: Vec::new(),
+        };
+        let geometry = curved_facility
+            .reference()
+            .expect("the curved facility has a reference path")
+            .geometry();
+        for s in [0.0, 10.0, 25.0, 50.0, 75.0] {
+            assert!(
+                (geometry.curvature_at(s) - 1.0 / 50.0).abs() < 1e-12,
+                "curvature at s = {s} is the constant 1 / radius"
+            );
+        }
+        let curved_error = max_round_trip_error(
+            geometry,
+            &[5.0, 20.0, 40.0, 60.0, 75.0],
+            &[-2.0, -0.5, 0.0, 0.5, 2.0],
+        );
+        assert!(
+            curved_error <= 1e-9,
+            "constant-curvature T-RT error {curved_error} m exceeds 1e-9 m"
+        );
+
+        // A clockwise arc reports negative curvature and round-trips too.
+        let clockwise = CompiledReferencePath::arc(
+            DVec2::new(0.0, 0.0),
+            50.0,
+            0.0,
+            -std::f64::consts::FRAC_PI_2,
+        );
+        assert!((clockwise.curvature_at(20.0) + 1.0 / 50.0).abs() < 1e-12);
+        let clockwise_error = max_round_trip_error(
+            &clockwise,
+            &[5.0, 20.0, 40.0, 60.0, 75.0],
+            &[-2.0, 0.0, 2.0],
+        );
+        assert!(
+            clockwise_error <= 1e-9,
+            "clockwise T-RT error {clockwise_error} m exceeds 1e-9 m"
+        );
+
+        // The usable lateral interval is the band minus the body envelope and
+        // lateral clearance: W/2 - envelope/2 - clearance on each side.
+        let interval = curved_facility.usable_lateral_interval(0.6, 0.2);
+        assert!((interval.d_min() + 1.0).abs() < 1e-12);
+        assert!((interval.d_max() - 1.0).abs() < 1e-12);
+        assert!(!interval.is_empty());
+        assert!(interval.contains(0.5));
+        assert!(!interval.contains(1.5));
+
+        // A band narrower than the envelope plus twice the clearance is empty.
+        let too_narrow = curved_facility.usable_lateral_interval(1.2, 1.0);
+        assert!(too_narrow.is_empty());
+        assert!(!too_narrow.contains(0.0));
     }
 }

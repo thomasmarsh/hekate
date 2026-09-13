@@ -27,8 +27,8 @@ use crate::components::{
     TacticalCapabilities, TacticalCapability, derive_family,
 };
 use crate::source::{
-    AccessSource, ModeBodySource, ModeTemplateSource, MotionKind, OccupancyKind,
-    ProfileRangeSource, TacticKind,
+    AccessSource, FacilityDirection, ModeBodySource, ModeTemplateSource, MotionKind, OccupancyKind,
+    ProfileRangeSource, SpeedPolicySource, TacticKind,
 };
 use crate::validate::{Diagnostic, DiagnosticCode, required_profile_params};
 
@@ -284,16 +284,42 @@ fn compiled_tactic(tactic: TacticKind) -> TacticalCapability {
 
 /// Map an authored access onto its compiled access component.
 ///
-/// Increment 0 authors only facility kinds; nominal direction, speed policy,
-/// and rule kinds are deferred, so a compiled template permits either
-/// direction, enforces no speed limit of its own, and carries no rule kinds.
+/// Increment 0 fixed the compiled direction as `either` and the speed policy as
+/// unlimited because nothing authored them; the Increment 1 `nominal_direction`
+/// and `speed_policy` fields, when present, override those values. An omitted
+/// field keeps the Increment 0 meaning, so an Increment 0 template compiles
+/// unchanged. Rule kinds are still deferred, so a compiled template carries
+/// none.
 fn compiled_access(access: &AccessSource) -> AgentAccess {
     AgentAccess::new(
         access.facility_kinds.clone(),
-        NominalDirection::Either,
-        SpeedPolicy::unlimited(),
+        access
+            .nominal_direction
+            .map(compiled_nominal_direction)
+            .unwrap_or(NominalDirection::Either),
+        access
+            .speed_policy
+            .map(compiled_speed_policy)
+            .unwrap_or_else(SpeedPolicy::unlimited),
         Vec::new(),
     )
+}
+
+/// Map an authored facility direction onto its compiled access direction.
+pub(crate) fn compiled_nominal_direction(direction: FacilityDirection) -> NominalDirection {
+    match direction {
+        FacilityDirection::Forward => NominalDirection::Forward,
+        FacilityDirection::Reverse => NominalDirection::Reverse,
+        FacilityDirection::Either => NominalDirection::Either,
+    }
+}
+
+/// Map an authored speed policy onto its compiled access policy.
+pub(crate) fn compiled_speed_policy(policy: SpeedPolicySource) -> SpeedPolicy {
+    match policy.limit_mps {
+        Some(limit_mps) => SpeedPolicy::limited(limit_mps),
+        None => SpeedPolicy::unlimited(),
+    }
 }
 
 /// Map an authored occupancy onto its compiled occupancy component.

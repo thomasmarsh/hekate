@@ -26,13 +26,15 @@ mod validate;
 
 pub use compiled::{
     BoundaryId, CompiledBoundary, CompiledConflictRegion, CompiledCrossing, CompiledDemand,
-    CompiledMovement, CompiledPath, CompiledPedestrianDemand, CompiledPedestrianProfile,
-    CompiledPedestrianRoute, CompiledPedestrianRouteShare, CompiledPedestrianSignal,
-    CompiledPedestrianSignalPhase, CompiledPolygon, CompiledPortal, CompiledProfile,
-    CompiledRegion, CompiledRouteShare, CompiledRule, CompiledScenario, CompiledSignal,
-    CompiledSignalHead, CompiledSignalPhase, CompiledWaitingArea, ConflictRegionId, CrossingId,
-    DemandId, IdMap, MovementId, PathId, PedestrianDemandId, PedestrianRouteId, PortalId,
-    ProfileRange, RegionId, RuleId, SignalId, WaitingAreaId,
+    CompiledFacility, CompiledFacilityConnector, CompiledFacilityReference, CompiledMovement,
+    CompiledPath, CompiledPedestrianDemand, CompiledPedestrianProfile, CompiledPedestrianRoute,
+    CompiledPedestrianRouteShare, CompiledPedestrianSignal, CompiledPedestrianSignalPhase,
+    CompiledPolygon, CompiledPortal, CompiledProfile, CompiledReferencePath, CompiledRegion,
+    CompiledRouteShare, CompiledRule, CompiledScenario, CompiledSignal, CompiledSignalHead,
+    CompiledSignalPhase, CompiledWaitingArea, ConflictRegionId, CrossingId, DemandId,
+    FacilityConnectorId, FacilityId, FacilityTraversal, IdMap, ModeTemplateId, MovementId, PathId,
+    PedestrianDemandId, PedestrianRouteId, PortalId, ProfileRange, RegionId, RouteCoordinate,
+    RuleId, SignalId, UsableLateralInterval, WaitingAreaId,
 };
 pub use components::{
     AgentAccess, AgentBehaviorProfile, AgentBody, AgentComponents, AgentCore, AgentFamily,
@@ -49,16 +51,18 @@ pub use schema::{
 pub use source::{
     AccessSource, ConflictRegionSource, CoordinateSystem, CrossingSource, DemandChoiceSource,
     DemandPopulationSpawnSource, DemandRateSpawnSource, DemandSource, DemandSourceV2,
-    DemandSpawnSource, DocumentReadError, FacilityKind, MIN_SUPPORTED_SCHEMA_VERSION,
-    ModeBodySource, ModeTemplateSource, MotionKind, MovementDirection, MovementSource,
-    MovementSourceV2, OccupancyKind, ParseError, PathEnd, PathSource, PedestrianDemandSource,
-    PedestrianProfileSource, PedestrianRouteShareSource, PedestrianRouteSource,
-    PedestrianSignalPhaseSource, PedestrianSignalSource, PointSource, PolygonSource,
-    PopulationSource, PortalSource, ProfileRangeSource, ProfileSource, READABLE_SCHEMA_VERSIONS,
-    RouteShareSource, RuleKind, RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioDocument,
-    ScenarioSource, ScenarioSourceV2, SignalColor, SignalHeadSource, SignalPhaseSource,
-    SignalSource, SignalStateSource, TacticKind, TimeIntervalSource, WaitingAreaSource,
-    parse_scenario_document, parse_scenario_source, parse_scenario_source_v2,
+    DemandSpawnSource, DocumentReadError, FacilityAccessSource, FacilityConnectorEndSource,
+    FacilityConnectorSource, FacilityDirection, FacilityKind, FacilitySource, LateralUse,
+    MIN_SUPPORTED_SCHEMA_VERSION, ModeBodySource, ModeTemplateSource, MotionKind,
+    MovementDirection, MovementSource, MovementSourceV2, OccupancyKind, ParseError, PathEnd,
+    PathSource, PedestrianDemandSource, PedestrianProfileSource, PedestrianRouteShareSource,
+    PedestrianRouteSource, PedestrianSignalPhaseSource, PedestrianSignalSource, PermissionEffect,
+    PermissionKind, PermissionSource, PointSource, PolygonSource, PopulationSource, PortalSource,
+    ProfileRangeSource, ProfileSource, READABLE_SCHEMA_VERSIONS, RouteShareSource, RuleKind,
+    RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioDocument, ScenarioSource, ScenarioSourceV2,
+    SignalColor, SignalHeadSource, SignalPhaseSource, SignalSource, SignalStateSource,
+    SpeedPolicySource, TacticKind, TimeIntervalSource, WaitingAreaSource, parse_scenario_document,
+    parse_scenario_source, parse_scenario_source_v2,
 };
 pub use validate::{Diagnostic, DiagnosticCode, validate, validate_v2};
 

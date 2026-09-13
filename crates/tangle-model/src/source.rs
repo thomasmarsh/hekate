@@ -657,6 +657,41 @@ pub enum FacilityKind {
     Crossing,
     /// A pedestrian waiting area.
     WaitingArea,
+    /// A continuous-width facility: a region with an optional reference path.
+    /// Additive Increment 1 kind, so an Increment 0 template keeps its meaning.
+    Facility,
+}
+
+/// Direction a mode may travel along a facility reference path, relative to
+/// the authored vertex order of that path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FacilityDirection {
+    /// Only the authored forward direction.
+    Forward,
+    /// Only the reverse of the authored direction.
+    Reverse,
+    /// Either direction.
+    Either,
+}
+
+/// Whether a facility's usable lateral interval is one shared space or a
+/// centered lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LateralUse {
+    /// Agents may occupy any position within the usable lateral interval.
+    Shared,
+    /// Agents hold the reference centerline.
+    Centered,
+}
+
+/// A speed policy: a finite positive limit, or none.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SpeedPolicySource {
+    /// Enforced limit in metres per second; `null` means no enforced limit.
+    pub limit_mps: Option<f64>,
 }
 
 /// Facility access of a version-2 mode template.
@@ -665,6 +700,120 @@ pub enum FacilityKind {
 pub struct AccessSource {
     /// Traversable object kinds the mode may use.
     pub facility_kinds: Vec<FacilityKind>,
+    /// Direction the mode may travel on its facilities.
+    ///
+    /// Omitted means `either`, the value Increment 0 fixed for the compiled
+    /// access direction because nothing authored it. Additive Increment 1
+    /// field: an Increment 0 template omits it and keeps that meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nominal_direction: Option<FacilityDirection>,
+    /// Speed policy the mode travels under.
+    ///
+    /// Omitted means no enforced limit, the value Increment 0 fixed for the
+    /// compiled access. Additive Increment 1 field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_policy: Option<SpeedPolicySource>,
+}
+
+/// Mode-template access of a version-2 facility.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacilityAccessSource {
+    /// Mode-template ids permitted to use the facility; non-empty.
+    pub modes: Vec<String>,
+}
+
+/// One version-2 continuous-width facility: a traversable region plus an
+/// optional reference path, usable width, nominal direction, mode access,
+/// lateral-use policy, and speed policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacilitySource {
+    /// Stable facility id, unique across all authored objects.
+    pub id: String,
+    /// Region the facility occupies.
+    pub region: String,
+    /// Guide path giving the facility its `(s, d)` frame; omitted means the
+    /// facility exposes region geometry only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_path: Option<String>,
+    /// Usable traversable width in metres, measured across the reference path.
+    pub width_m: f64,
+    /// Nominal direction relative to the authored vertex order of
+    /// `reference_path`.
+    pub nominal_direction: FacilityDirection,
+    /// Mode templates permitted to use the facility.
+    pub access: FacilityAccessSource,
+    /// Whether the usable lateral interval is shared or centered.
+    pub lateral_use: LateralUse,
+    /// Speed policy on the facility; a missing field is a parse error.
+    pub speed_policy: SpeedPolicySource,
+}
+
+/// One end of a version-2 facility connector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacilityConnectorEndSource {
+    /// Facility the connector joins.
+    pub facility: String,
+    /// Traversal direction along that facility: `forward` or `reverse`.
+    pub direction: MovementDirection,
+}
+
+/// A version-2 directed connector joining two facility traversals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacilityConnectorSource {
+    /// Stable connector id, unique across all authored objects.
+    pub id: String,
+    /// Facility and traversal direction the connector leaves.
+    pub from: FacilityConnectorEndSource,
+    /// Facility and traversal direction the connector enters.
+    pub to: FacilityConnectorEndSource,
+}
+
+/// What an authored permission or obligation statement is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionKind {
+    /// Travel against a facility's or movement's nominal direction.
+    NominalDirection,
+    /// Permitted lateral position or lane use on a facility.
+    LaneUse,
+    /// Overtaking or passing on a facility.
+    Overtake,
+    /// Permission or obligation at a crossing.
+    Crossing,
+    /// Stop-service obligation and priority.
+    StopService,
+}
+
+/// Whether a permission statement permits, prohibits, or obligates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionEffect {
+    /// The holder may do the statement's action.
+    Permit,
+    /// The holder must not do it.
+    Prohibit,
+    /// The holder must do it.
+    Obligate,
+}
+
+/// One authored permission or obligation statement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionSource {
+    /// Stable id, unique across all authored objects.
+    pub id: String,
+    /// Kind of statement; it fixes the target object kind.
+    pub kind: PermissionKind,
+    /// Mode-template id the statement binds.
+    pub holder: String,
+    /// Id of the object the statement is about.
+    pub target: String,
+    /// Whether the statement permits, prohibits, or obligates.
+    pub effect: PermissionEffect,
 }
 
 /// Occupancy of a version-2 mode template.
@@ -774,7 +923,9 @@ pub struct DemandSourceV2 {
 /// Version 2 replaces the version-1 `profiles`/`pedestrian_profiles`,
 /// `population`, `demand`, and `pedestrian_demand` fields with `mode_templates`
 /// and a mode-tagged `demand`, and makes each movement's `direction` explicit.
-/// Every other version-1 field is carried forward unchanged.
+/// The Increment 1 additive arrays `facilities`, `facility_connectors`, and
+/// `permissions` extend it in place. Every other version-1 field is carried
+/// forward unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScenarioSourceV2 {
@@ -794,6 +945,15 @@ pub struct ScenarioSourceV2 {
     /// Closed polygons marking traversable areas other than guide paths.
     #[serde(default)]
     pub regions: Vec<PolygonSource>,
+    /// Continuous-width facilities with usable width, nominal direction, mode
+    /// access, lateral-use policy, and speed policy. Additive Increment 1
+    /// array; omitted or empty means no facilities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facilities: Vec<FacilitySource>,
+    /// Directed connectors joining two facility traversals. Additive
+    /// Increment 1 array.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facility_connectors: Vec<FacilityConnectorSource>,
     /// Movement connectors with an explicit nominal direction.
     #[serde(default)]
     pub movements: Vec<MovementSourceV2>,
@@ -815,6 +975,11 @@ pub struct ScenarioSourceV2 {
     /// Fixed-time signal controllers with phased signal heads.
     #[serde(default)]
     pub signals: Vec<SignalSource>,
+    /// Authored permission and obligation statements. Additive Increment 1
+    /// array; the shape is fixed in full, while only `nominal_direction`
+    /// statements are populated in Increment 1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<PermissionSource>,
     /// Named, validated mode bundles; demand references them by id.
     #[serde(default)]
     pub mode_templates: Vec<ModeTemplateSource>,
@@ -1129,5 +1294,113 @@ mod tests {
             default_compliance(),
             "an omitted pedestrian compliance range defaults to fully compliant"
         );
+    }
+
+    const FACILITY_V2: &str = r#"{
+        schema_version: 2, id: 'bikeway', coordinate_system: { x: 'east_m', y: 'north_m' },
+        paths: [ { id: 'bikeway_centerline',
+            points: [ { x: 0.0, y: 0.0 }, { x: 80.0, y: 0.0 } ] } ],
+        portals: [],
+        regions: [ { id: 'bikeway_band', points: [
+            { x: 0.0, y: -1.0 }, { x: 80.0, y: -1.0 },
+            { x: 80.0, y: 1.0 }, { x: 0.0, y: 1.0 } ] } ],
+        mode_templates: [ {
+            id: 'bicycle',
+            body: { kind: 'box', length_m: { min: 1.6, max: 1.9 },
+                width_m: { min: 0.6, max: 0.8 } },
+            motion: 'single_body_wheeled',
+            tactics: [ 'follow', 'stop', 'yield' ],
+            access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+                speed_policy: { limit_mps: null } },
+            occupancy: 'operator_only',
+            profiles: {
+                speed_mps: { min: 3.5, max: 6.5 },
+                max_accel_mps2: { min: 0.8, max: 1.5 },
+                comfortable_brake_mps2: { min: 1.5, max: 3.0 },
+                time_gap_s: { min: 0.8, max: 1.4 },
+                compliance: { min: 0.8, max: 1.0 },
+            },
+        } ],
+        facilities: [ {
+            id: 'bikeway_eastbound', region: 'bikeway_band',
+            reference_path: 'bikeway_centerline', width_m: 2.0,
+            nominal_direction: 'forward', access: { modes: [ 'bicycle' ] },
+            lateral_use: 'shared', speed_policy: { limit_mps: null },
+        } ],
+        facility_connectors: [],
+        permissions: [ {
+            id: 'bicycle_nominal_northbound', kind: 'nominal_direction',
+            holder: 'bicycle', target: 'bikeway_eastbound', effect: 'obligate',
+        } ],
+    }"#;
+
+    #[test]
+    fn parses_facilities_connectors_access_and_permissions() {
+        let source = parse_scenario_source_v2(FACILITY_V2).expect("facility document parses");
+        assert_eq!(source.facilities.len(), 1);
+        let facility = &source.facilities[0];
+        assert_eq!(facility.region, "bikeway_band");
+        assert_eq!(
+            facility.reference_path.as_deref(),
+            Some("bikeway_centerline")
+        );
+        assert_eq!(facility.nominal_direction, FacilityDirection::Forward);
+        assert_eq!(facility.lateral_use, LateralUse::Shared);
+        assert_eq!(facility.access.modes, ["bicycle"]);
+        assert_eq!(facility.speed_policy.limit_mps, None);
+
+        assert!(
+            source.mode_templates[0]
+                .access
+                .facility_kinds
+                .contains(&FacilityKind::Facility)
+        );
+        assert_eq!(
+            source.mode_templates[0].access.nominal_direction,
+            Some(FacilityDirection::Either)
+        );
+        assert_eq!(
+            source.mode_templates[0].access.speed_policy,
+            Some(SpeedPolicySource { limit_mps: None })
+        );
+
+        assert_eq!(source.permissions.len(), 1);
+        assert_eq!(source.permissions[0].kind, PermissionKind::NominalDirection);
+        assert_eq!(source.permissions[0].effect, PermissionEffect::Obligate);
+        assert_eq!(source.permissions[0].target, "bikeway_eastbound");
+    }
+
+    #[test]
+    fn an_increment_0_access_omits_the_additive_direction_and_policy_fields() {
+        // Absent means the Increment 0 meaning: either direction, no enforced
+        // limit. The field set stays additive so an Increment 0 template is
+        // still valid version 2.
+        let input = r#"{
+            schema_version: 2, id: 'x', coordinate_system: { x: 'a', y: 'b' },
+            paths: [ { id: 'guide', points: [ { x: 0, y: 0 }, { x: 20, y: 0 } ] } ],
+            portals: [],
+            mode_templates: [ {
+                id: 'passenger_car',
+                body: { kind: 'box', length_m: { min: 4.0, max: 5.2 },
+                    width_m: { min: 1.7, max: 2.0 } },
+                motion: 'single_body_wheeled',
+                tactics: [ 'follow' ],
+                access: { facility_kinds: [ 'path' ] },
+                occupancy: 'operator_only',
+                profiles: {
+                    speed_mps: { min: 9.0, max: 15.0 },
+                    max_accel_mps2: { min: 1.2, max: 2.5 },
+                    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+                    time_gap_s: { min: 1.0, max: 2.0 },
+                    compliance: { min: 1.0, max: 1.0 },
+                },
+            } ],
+        }"#;
+        let source = parse_scenario_source_v2(input).expect("Increment 0 access parses");
+        assert!(source.mode_templates[0].access.nominal_direction.is_none());
+        assert!(source.mode_templates[0].access.speed_policy.is_none());
+        assert!(source.facilities.is_empty());
+        assert!(source.facility_connectors.is_empty());
+        assert!(source.permissions.is_empty());
     }
 }

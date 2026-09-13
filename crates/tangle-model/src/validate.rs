@@ -478,6 +478,24 @@ fn v2_ids(source: &ScenarioSourceV2) -> impl Iterator<Item = &str> {
                 .iter()
                 .map(|template| template.id.as_str()),
         )
+        .chain(
+            source
+                .facilities
+                .iter()
+                .map(|facility| facility.id.as_str()),
+        )
+        .chain(
+            source
+                .facility_connectors
+                .iter()
+                .map(|connector| connector.id.as_str()),
+        )
+        .chain(
+            source
+                .permissions
+                .iter()
+                .map(|permission| permission.id.as_str()),
+        )
         .chain(source.demand.iter().map(|demand| demand.id.as_str()))
 }
 
