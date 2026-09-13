@@ -1,8 +1,7 @@
 ---
 context_rev: 2
-updated: 2026-09-13T19:58:00Z
-summary: Narrow modes spawn from their compiled template through the shared stages with a model and cards; the tactic suite and facility route completion are split to TAS-080.
-next: '[[TAS-080-complete-narrow-longitudinal-tactics-and-compile]]'
+updated: 2026-09-13T20:19:58Z
+summary: Narrow modes spawn from their compiled template through the shared stages with a model and cards; TAS-080 completed the tactic and route-completion evidence.
 ---
 
 Parent [[TAS-019-phase-2-increment-1-facilities-narrow-modes]].
@@ -45,11 +44,12 @@ Owns `crates/tangle-sim/src/sim.rs`, `stage.rs`, `controller.rs`, `control.rs`,
 
 # Result
 
-Delivered the spawning, model, profile, and card slice of TAS-077; the
-longitudinal-tactic suite and compiled-facility route completion are split to
-[[TAS-080-complete-narrow-longitudinal-tactics-and-compile]]. This node stays
-active with that child as its `next`. Done-when bullets 1, 3, and 4 hold;
-bullet 2 does not yet.
+TAS-077 is complete; all four Done-when bullets hold through the resolved
+child [[TAS-080-complete-narrow-longitudinal-tactics-and-compile]], which
+delivered the five-behavior longitudinal fixture and the compiled-facility
+route-completion evidence (bullet 2). This session landed the spawning, model,
+profile, card, and no-branch-guard slice; TAS-080 completed the remaining
+behavior evidence. No child was disposed.
 
 ## Spawn path
 
@@ -158,3 +158,13 @@ file changed; no Phase 1 golden trace, event, metric, or baseline changed.
   and `cargo fmt --all --check` — clean.
 - `braintree check` — `graph check: passed (118 nodes)` while this node was still
   in `proposed/` (before the split child and the move to `active/`).
+
+## Resolved child (roll-up)
+
+[[TAS-080-complete-narrow-longitudinal-tactics-and-compile]] resolved with the
+remaining Done-when evidence: the checked-in fixture
+`crates/tangle-sim/tests/fixtures/narrow_longitudinal_v2.json5` and the test
+`crates/tangle-sim/tests/narrow_longitudinal.rs::a_narrow_agent_accelerates_follows_holds_yields_and_completes_a_compiled_facility_route`
+prove command envelopes and capsule body bounds across accelerating, following,
+holding a stop line, yielding at a signal, and completing a compiled-facility
+route with no emergency-cap binding. With that, bullets 1–4 all hold.
