@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T12:14:45Z
+updated: 2026-09-13T12:16:08Z
 summary: The settled versioned metric definition v2 (metric_definition_version 2) carries every v1 metric forward unchanged and names the operational families v1 deferred - throughput, travel time, stopped delay, control delay, queue length, and queue duration - each with formula, unit, applicability status, tie-break, mode and movement disaggregation, and its exact source location, leaving level of service deferred.
 ---
 
@@ -278,5 +278,6 @@ batch-level operational movement slices with the F6 event-family slices
 
 `DEF-004-metric-definition-v1` records `disposition: superseded` and
 `Superseded by [[DEF-005-metric-definition-v2]]`; the exact pinned-consumer
-search TAS-045 records in its context returns no pinned consumer — the only line
-it matches is that search text itself — so no consumer is stale.
+search TAS-045 records in its context matches only lines that quote the search
+text itself (TAS-045's own context and `FBK-019`), and no node holds a pinned
+edge on DEF-004 at all, so no consumer is stale.
