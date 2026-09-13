@@ -1,0 +1,257 @@
+// Experiment variant: fixed-time signal timing plan for one four-leg
+// car/pedestrian intersection.
+//
+// One four-leg intersection: an east-west road and a north-south road crossing
+// in a single conflict region, one fixed-time two-phase signal controlling both
+// through movements, and two pedestrian crosswalks on the approach legs -- one
+// over the east-west road on the west leg and one over the north-south road on
+// the south leg -- each with its own fixed-time pedestrian signal. Each stop
+// line sits upstream of the crosswalk its movement crosses, so a queue waits
+// clear of the crosswalk.
+//
+// This file and its sibling variant are byte-identical except for the scenario
+// `id` and the signal timing plan: the green split (which approach receives the
+// longer green) and, coordinated to it, each crosswalk's walk interval.
+// Geometry, demand, profiles, rules, and pedestrian infrastructure are the
+// controlled data and are identical in both variants. See
+// experiments/increment6_signal_timing_v1/experiment.json.
+{
+  schema_version: 1,
+  id: 'four_leg_pedestrian_ns_priority_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -60.0, y: -60.0 },
+        { x: 60.0, y: -60.0 },
+        { x: 60.0, y: 60.0 },
+        { x: -60.0, y: 60.0 },
+      ],
+    },
+  ],
+  regions: [
+    {
+      id: 'west_crossing_zone',
+      points: [
+        { x: -9.5, y: -4.0 },
+        { x: -6.5, y: -4.0 },
+        { x: -6.5, y: 4.0 },
+        { x: -9.5, y: 4.0 },
+      ],
+    },
+    {
+      id: 'south_crossing_zone',
+      points: [
+        { x: -4.0, y: -9.5 },
+        { x: 4.0, y: -9.5 },
+        { x: 4.0, y: -6.5 },
+        { x: -4.0, y: -6.5 },
+      ],
+    },
+    {
+      id: 'south_west_kerb',
+      points: [
+        { x: -11.0, y: -11.0 },
+        { x: -5.0, y: -11.0 },
+        { x: -5.0, y: -5.0 },
+        { x: -11.0, y: -5.0 },
+      ],
+    },
+    {
+      id: 'north_west_kerb',
+      points: [
+        { x: -11.0, y: 5.0 },
+        { x: -5.0, y: 5.0 },
+        { x: -5.0, y: 11.0 },
+        { x: -11.0, y: 11.0 },
+      ],
+    },
+    {
+      id: 'south_east_kerb',
+      points: [
+        { x: 5.0, y: -11.0 },
+        { x: 11.0, y: -11.0 },
+        { x: 11.0, y: -5.0 },
+        { x: 5.0, y: -5.0 },
+      ],
+    },
+  ],
+  paths: [
+    { id: 'ew_road', points: [ { x: -50.0, y: 0.0 }, { x: 50.0, y: 0.0 } ] },
+    { id: 'ns_road', points: [ { x: 0.0, y: -50.0 }, { x: 0.0, y: 50.0 } ] },
+    { id: 'west_walk', points: [ { x: -8.0, y: -6.0 }, { x: -8.0, y: 26.0 } ] },
+    { id: 'south_walk', points: [ { x: -6.0, y: -8.0 }, { x: 26.0, y: -8.0 } ] },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'ew_road', end: 'start', width_m: 7.0 },
+    { id: 'east_exit', path: 'ew_road', end: 'end', width_m: 7.0 },
+    { id: 'south_entry', path: 'ns_road', end: 'start', width_m: 7.0 },
+    { id: 'north_exit', path: 'ns_road', end: 'end', width_m: 7.0 },
+    { id: 'west_walk_south', path: 'west_walk', end: 'start', width_m: 2.0 },
+    { id: 'west_walk_north', path: 'west_walk', end: 'end', width_m: 2.0 },
+    { id: 'south_walk_west', path: 'south_walk', end: 'start', width_m: 2.0 },
+    { id: 'south_walk_east', path: 'south_walk', end: 'end', width_m: 2.0 },
+  ],
+  movements: [
+    { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0, stop_line_m: 38.0 },
+    { id: 'ns_through', from: 'south_entry', to: 'north_exit', path: 'ns_road', priority: 0, stop_line_m: 38.0 },
+  ],
+  crossings: [
+    {
+      id: 'west_crossing',
+      region: 'west_crossing_zone',
+      movements: [ 'ew_through' ],
+      pedestrian_signal: {
+        // Each crosswalk walks while the movement it crosses holds red, so the
+        // two phases sum to the common 58 s signal cycle.
+        phases: [
+          { duration_s: 24.0, walk: false },
+          { duration_s: 34.0, walk: true },
+        ],
+      },
+    },
+    {
+      id: 'south_crossing',
+      region: 'south_crossing_zone',
+      movements: [ 'ns_through' ],
+      pedestrian_signal: {
+        // Each crosswalk walks while the movement it crosses holds red, so the
+        // two phases sum to the common 58 s signal cycle.
+        phases: [
+          { duration_s: 24.0, walk: true },
+          { duration_s: 34.0, walk: false },
+        ],
+      },
+    },
+  ],
+  waiting_areas: [
+    { id: 'south_west_wait', region: 'south_west_kerb' },
+    { id: 'north_west_wait', region: 'north_west_kerb' },
+    { id: 'south_east_wait', region: 'south_east_kerb' },
+  ],
+  pedestrian_routes: [
+    {
+      id: 'west_to_north',
+      from: 'west_walk_south',
+      to: 'west_walk_north',
+      path: 'west_walk',
+      crossings: [ 'west_crossing' ],
+      waiting_areas: [ 'south_west_wait', 'north_west_wait' ],
+    },
+    {
+      id: 'west_to_south',
+      from: 'west_walk_north',
+      to: 'west_walk_south',
+      path: 'west_walk',
+      crossings: [ 'west_crossing' ],
+      waiting_areas: [ 'north_west_wait', 'south_west_wait' ],
+    },
+    {
+      id: 'south_to_east',
+      from: 'south_walk_west',
+      to: 'south_walk_east',
+      path: 'south_walk',
+      crossings: [ 'south_crossing' ],
+      waiting_areas: [ 'south_west_wait', 'south_east_wait' ],
+    },
+    {
+      id: 'south_to_west',
+      from: 'south_walk_east',
+      to: 'south_walk_west',
+      path: 'south_walk',
+      crossings: [ 'south_crossing' ],
+      waiting_areas: [ 'south_east_wait', 'south_west_wait' ],
+    },
+  ],
+  conflict_regions: [
+    {
+      id: 'center_conflict',
+      points: [
+        { x: -5.0, y: -5.0 },
+        { x: 5.0, y: -5.0 },
+        { x: 5.0, y: 5.0 },
+        { x: -5.0, y: 5.0 },
+      ],
+      movements: [ 'ew_through', 'ns_through' ],
+    },
+  ],
+  rules: [
+    { id: 'signal_ew', movement: 'ew_through', kind: 'signal', signal: 'main' },
+    { id: 'signal_ns', movement: 'ns_through', kind: 'signal', signal: 'main' },
+    // A movement whose crosswalk is occupied still yields, so control is the
+    // signal timing and crosswalk occupancy is a separate obligation.
+    { id: 'yield_crossings_ew', movement: 'ew_through', kind: 'yield' },
+    { id: 'yield_crossings_ns', movement: 'ns_through', kind: 'yield' },
+  ],
+  signals: [
+    {
+      id: 'main',
+      heads: [
+        { id: 'ew_head', movement: 'ew_through' },
+        { id: 'ns_head', movement: 'ns_through' },
+      ],
+      // The green split is the comparison's independent variable; the cycle
+      // length is 58 s in both variants.
+      phases: [
+        { duration_s: 20.0, states: [ { head: 'ew_head', color: 'green' }, { head: 'ns_head', color: 'red' } ] },
+        { duration_s: 4.0, states: [ { head: 'ew_head', color: 'yellow' }, { head: 'ns_head', color: 'red' } ] },
+        { duration_s: 30.0, states: [ { head: 'ew_head', color: 'red' }, { head: 'ns_head', color: 'green' } ] },
+        { duration_s: 4.0, states: [ { head: 'ew_head', color: 'red' }, { head: 'ns_head', color: 'yellow' } ] },
+      ],
+    },
+  ],
+  demand: [
+    {
+      id: 'west_inflow',
+      portal: 'west_entry',
+      rate_vph: 650.0,
+      routes: [ { movement: 'ew_through', weight: 1.0 } ],
+    },
+    {
+      id: 'south_inflow',
+      portal: 'south_entry',
+      rate_vph: 550.0,
+      routes: [ { movement: 'ns_through', weight: 1.0 } ],
+    },
+  ],
+  pedestrian_demand: [
+    {
+      id: 'west_footfall_north',
+      portal: 'west_walk_south',
+      rate_pph: 150.0,
+      routes: [ { route: 'west_to_north', weight: 1.0 } ],
+    },
+    {
+      id: 'west_footfall_south',
+      portal: 'west_walk_north',
+      rate_pph: 150.0,
+      routes: [ { route: 'west_to_south', weight: 1.0 } ],
+    },
+    {
+      id: 'south_footfall_east',
+      portal: 'south_walk_west',
+      rate_pph: 150.0,
+      routes: [ { route: 'south_to_east', weight: 1.0 } ],
+    },
+    {
+      id: 'south_footfall_west',
+      portal: 'south_walk_east',
+      rate_pph: 150.0,
+      routes: [ { route: 'south_to_west', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 9.0, max: 15.0 },
+    length_m: { min: 4.0, max: 5.2 },
+    width_m: { min: 1.7, max: 2.0 },
+    time_gap_s: { min: 1.0, max: 2.0 },
+    max_accel_mps2: { min: 1.2, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+  },
+  pedestrian_profiles: {
+    radius_m: { min: 0.20, max: 0.30 },
+    speed_mps: { min: 1.0, max: 1.6 },
+    compliance: { min: 0.2, max: 1.0 },
+  },
+}
