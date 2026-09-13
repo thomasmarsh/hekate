@@ -1,0 +1,103 @@
+// Benchmark: an offset (staggered) junction.
+//
+// A main east-west road crossed twice: a north-south arm at x = -18 and a
+// second north-south arm at x = +18. Every arm is a straight through movement,
+// each staggered crossing carries its own authored conflict region, and right
+// of way is data: the main road is `free` and both arms `yield` at priority 1.
+//
+// This is the Increment 6 geometry proof. It is structurally different from the
+// four-leg car/pedestrian variants in
+// `scenarios/experiments/four_leg_pedestrian_*_v1.json5` -- six arms instead of
+// four, two staggered conflict regions instead of one shared crossing, wider
+// east-west road, and no pedestrian infrastructure or control signal -- yet it
+// is expressed entirely from the same version 1 primitives, so adding it
+// required no change to `tangle-model` or `tangle-sim`.
+{
+  schema_version: 1,
+  id: 'offset_junction_v1',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  boundaries: [
+    {
+      id: 'world',
+      points: [
+        { x: -60.0, y: -60.0 },
+        { x: 60.0, y: -60.0 },
+        { x: 60.0, y: 60.0 },
+        { x: -60.0, y: 60.0 },
+      ],
+    },
+  ],
+  paths: [
+    { id: 'ew_road', points: [ { x: -50.0, y: 0.0 }, { x: 50.0, y: 0.0 } ] },
+    { id: 'west_arm', points: [ { x: -18.0, y: 50.0 }, { x: -18.0, y: -50.0 } ] },
+    { id: 'east_arm', points: [ { x: 18.0, y: -50.0 }, { x: 18.0, y: 50.0 } ] },
+  ],
+  portals: [
+    { id: 'west_entry', path: 'ew_road', end: 'start', width_m: 9.0 },
+    { id: 'east_exit', path: 'ew_road', end: 'end', width_m: 9.0 },
+    { id: 'west_arm_north_entry', path: 'west_arm', end: 'start', width_m: 6.0 },
+    { id: 'west_arm_south_exit', path: 'west_arm', end: 'end', width_m: 6.0 },
+    { id: 'east_arm_south_entry', path: 'east_arm', end: 'start', width_m: 6.0 },
+    { id: 'east_arm_north_exit', path: 'east_arm', end: 'end', width_m: 6.0 },
+  ],
+  movements: [
+    { id: 'ew_through', from: 'west_entry', to: 'east_exit', path: 'ew_road', priority: 0, stop_line_m: 27.0 },
+    { id: 'west_arm_through', from: 'west_arm_north_entry', to: 'west_arm_south_exit', path: 'west_arm', priority: 1, stop_line_m: 45.0 },
+    { id: 'east_arm_through', from: 'east_arm_south_entry', to: 'east_arm_north_exit', path: 'east_arm', priority: 1, stop_line_m: 45.0 },
+  ],
+  conflict_regions: [
+    {
+      id: 'west_offset_conflict',
+      points: [
+        { x: -22.0, y: -5.0 },
+        { x: -14.0, y: -5.0 },
+        { x: -14.0, y: 5.0 },
+        { x: -22.0, y: 5.0 },
+      ],
+      movements: [ 'ew_through', 'west_arm_through' ],
+    },
+    {
+      id: 'east_offset_conflict',
+      points: [
+        { x: 14.0, y: -5.0 },
+        { x: 22.0, y: -5.0 },
+        { x: 22.0, y: 5.0 },
+        { x: 14.0, y: 5.0 },
+      ],
+      movements: [ 'ew_through', 'east_arm_through' ],
+    },
+  ],
+  rules: [
+    { id: 'free_ew', movement: 'ew_through', kind: 'free' },
+    { id: 'yield_west_arm', movement: 'west_arm_through', kind: 'yield' },
+    { id: 'yield_east_arm', movement: 'east_arm_through', kind: 'yield' },
+  ],
+  demand: [
+    {
+      id: 'west_inflow',
+      portal: 'west_entry',
+      rate_vph: 600.0,
+      routes: [ { movement: 'ew_through', weight: 1.0 } ],
+    },
+    {
+      id: 'west_arm_inflow',
+      portal: 'west_arm_north_entry',
+      rate_vph: 400.0,
+      routes: [ { movement: 'west_arm_through', weight: 1.0 } ],
+    },
+    {
+      id: 'east_arm_inflow',
+      portal: 'east_arm_south_entry',
+      rate_vph: 400.0,
+      routes: [ { movement: 'east_arm_through', weight: 1.0 } ],
+    },
+  ],
+  profiles: {
+    speed_mps: { min: 9.0, max: 15.0 },
+    length_m: { min: 4.0, max: 5.2 },
+    width_m: { min: 1.7, max: 2.0 },
+    time_gap_s: { min: 1.0, max: 2.0 },
+    max_accel_mps2: { min: 1.2, max: 2.5 },
+    comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+  },
+}
