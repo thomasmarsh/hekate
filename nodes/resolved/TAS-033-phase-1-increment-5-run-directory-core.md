@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T00:15:07Z
+updated: 2026-09-13T00:18:20Z
 summary: Slice B1 of Phase 1 Increment 5 generalizes `run` output into an immutable per-run directory holding a reproducible JSON manifest, a JSON summary, a compressed JSON Lines sparse typed event stream, and a declared sampling policy that bounds output size.
-next: Hand this slice to the TAS-031 coordinator for integration, slice F verification, and closeout.
 ---
 
 # Outcome
@@ -168,3 +167,80 @@ transitively). Neither `tangle-model` nor `tangle-sim` depends on it, and
 - `run` gains no `--step` option, so the fidelity profile is currently always
   `standard`; the manifest still records the numeric step so a non-preset step
   would stay reproducible.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (implementation in
+`7de42a7`), verified by rerunning the gates on that tree:
+
+1. **`run` writes an immutable run directory holding `manifest.json` (JSON),
+   `summary.json` (JSON), and a compressed JSON Lines sparse typed event
+   stream.** `apps/tangle-cli/src/run_dir.rs:261` (`write_run_directory`)
+   writes `events.jsonl.gz`, `summary.json`, then `manifest.json` as the
+   completion marker, naming them through `:54` `MANIFEST_FILE`, `:57`
+   `SUMMARY_FILE`, and `:60` `EVENT_STREAM_FILE`; `:355` (`gzip`) compresses
+   with a fixed header, and `:175` `EventStream` records the stream's path,
+   compression, record count, and uncompressed size and hash.
+   `apps/tangle-cli/src/main.rs:113` adds `--run-dir` and `:146` writes the
+   directory before the trace output. The JSON forms are asserted by
+   `tests/run_directory.rs:204` (`manifest_records_the_provenance_a_rerun_needs`)
+   and `:302` (`summary_reports_the_run_and_traces_back_to_the_manifest`), both of
+   which deserialize the on-disk file, and the artifact set by `:182`
+   (`run_writes_the_three_artifacts_and_no_trajectory_stream`).
+2. **The manifest is self-sufficient to reproduce the run and records the
+   declared sampling policy.** `run_dir.rs:190` `RunManifest` carries the
+   scenario id, source path, schema version and content hash (reusing
+   `ScenarioProvenance`), seed, ticks, fidelity profile and `step_s`,
+   `event_version`, `model_version`, `build_revision`, `sampling`, and the
+   stream descriptor; `apps/tangle-cli/src/main.rs:125` loads the source through
+   `load_scenario_hashed` so the recorded hash is the authored bytes' own hash.
+   The policy is `:149` `SamplingPolicy`, defaulted at `:159` to
+   `events: all` with `trajectories: { retention: off, stride_ticks: 10,
+   max_samples: 100000 }` (`:70`, `:76`). `tests/run_directory.rs:204` asserts
+   every field and the policy values against the loader's own content hash and
+   `tangle_model::MODEL_VERSION`; `run_dir.rs:419`
+   (`the_declared_policy_retains_every_event_and_no_trajectory_state`)
+   asserts the declared bounds.
+3. **A completed run directory is never rewritten; a repeat run against it does
+   not mutate completed artifacts, covered by a test.** `run_dir.rs:325`
+   (`ensure_writable`) rejects a `manifest.json`-bearing directory with
+   `RunDirectoryError::Completed` and foreign content with `NotEmpty` (`:83`),
+   and never truncates or rewrites. `tests/run_directory.rs:331`
+   (`a_completed_run_directory_is_never_rewritten`) compares every file's
+   content hash before and after the rejected second write; `:453`
+   (`a_repeat_run_against_a_completed_directory_fails_without_mutating_it`) does
+   the same through the CLI and additionally shows the failed rerun wrote no
+   trace to its own destination; `:359`
+   (`a_run_directory_holding_foreign_content_is_not_clobbered`) covers the
+   non-completed case. `:382` (`run_directories_are_reproducible_byte_for_byte`)
+   shows no clock or environment input leaks into the artifacts.
+4. **The existing canonical trace format, trace golden, trace hash golden, and
+   Phase 1 baseline are unchanged.** No file under `tests/golden/`,
+   `baselines/`, `scenarios/`, or the kernel crates changed, and `EVENT_VERSION`
+   stays 2 (`crates/tangle-sim/src/event.rs:66`); the only `trace.rs` change is
+   the new `canonical_run` (`apps/tangle-cli/src/trace.rs:131`), which
+   `canonical_trace` (`:116`) now delegates to, so the run loop has one
+   implementation. The golden guards still pass (`tests/golden_trace.rs`,
+   `tests/baseline.rs`), and `tests/run_directory.rs:256`
+   (`event_stream_round_trips_to_the_canonical_records`) compares the
+   decompressed stream byte for byte with the checked-in JSONL golden and its
+   SHA-256 with the checked-in hash golden.
+5. **Tests cover the manifest fields, the compressed event stream round-trip,
+   the summary, and the immutability property.** `tests/run_directory.rs:204`
+   (manifest fields), `:256` (decompressed round-trip against the canonical
+   record order and the goldens), `:302` (summary counts, `elapsed_s`, and
+   `manifest_sha256` against the manifest file bytes), `:331`/`:453`/`:359`
+   (immutability), plus the CLI wiring at `:401` and `:520` and the unit tests in
+   `run_dir.rs:403`, `:412`, `:419`, `:437`, and `:445`.
+6. **The five gates pass on the final tree** (rerun on the committed tree,
+   2026-09-13: `cargo test --workspace --all-features` passed with 0 failures;
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean;
+   `cargo fmt --all --check` clean; `./scripts/check-dependency-direction.sh`
+   printed `dependency direction OK`; `braintree check nodes` printed
+   `graph check: passed`).
+
+Outcome complete: the run directory, its declared sampling policy, its
+immutability guarantee, and the gate evidence are on the committed tree. The
+Parquet sampled-trajectory half, a source-revision stamp, and enforcement of the
+declared trajectory stride and cap stay with the direct children and later
+slices of the parent increment, not with this node.
