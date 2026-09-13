@@ -156,15 +156,15 @@ struct AgentAssets {
     circle_material: Handle<ColorMaterial>,
 }
 
-/// Identifies one rendered shape of one agent, so a body carrying ordered
+/// Identifies one rendered visual of one agent, so a body carrying ordered
 /// segments reuses one entity per segment across frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct BodyVisualKey {
     agent: usize,
-    shape: usize,
+    visual: usize,
 }
 
-/// Maps an agent's stable id and shape index to its rendered entity so
+/// Maps an agent's stable id and visual index to its rendered entity so
 /// entities are reused across frames and despawns rather than recreated every
 /// frame.
 #[derive(Resource, Default)]
@@ -457,9 +457,10 @@ fn click_select(
 /// Create, move, and retire body entities from the current frame.
 ///
 /// Each body contributes the visuals the shared scene projection chose for it
-/// ([`body_visuals`]): one box or circle, or one box per ordered segment. An
-/// entity keeps the mesh and material of the shape kind it spawned with, so a
-/// body only reuses or re-spawns entities as its shape list changes.
+/// ([`body_visuals`]): one box or circle, one box per ordered segment, or the
+/// rectangle and two cap circles of a capsule. An entity keeps the mesh and
+/// material of the shape kind it spawned with, so a body only reuses or
+/// re-spawns entities as its visual list changes.
 fn sync_agents(
     mut commands: Commands,
     frame: Res<CurrentFrame>,
@@ -473,17 +474,17 @@ fn sync_agents(
 
     let mut live = Vec::new();
     for body in &frame.bodies {
-        for (shape, visual) in body_visuals(body).into_iter().enumerate() {
+        for (visual, resolved) in body_visuals(body).into_iter().enumerate() {
             let key = BodyVisualKey {
                 agent: body.id,
-                shape,
+                visual,
             };
             if let Some(&entity) = visuals.0.get(&key) {
                 if let Ok(mut current) = transforms.get_mut(entity) {
-                    *current = visual.transform;
+                    *current = resolved.transform;
                 }
             } else {
-                let (mesh, material) = match visual.mesh {
+                let (mesh, material) = match resolved.mesh {
                     BodyMesh::Box => (assets.box_mesh.clone(), assets.box_material.clone()),
                     BodyMesh::Circle => {
                         (assets.circle_mesh.clone(), assets.circle_material.clone())
@@ -494,7 +495,7 @@ fn sync_agents(
                         AgentVisual,
                         Mesh2d(mesh),
                         MeshMaterial2d(material),
-                        visual.transform,
+                        resolved.transform,
                     ))
                     .id();
                 visuals.0.insert(key, entity);
@@ -555,6 +556,20 @@ fn draw_geometry(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
         }
         for endpoint in [movement.entry(), movement.exit()] {
             gizmos.circle_2d(to_vec(endpoint), 0.6, movement_color);
+        }
+    }
+
+    // A facility is drawn over the region it occupies and over the guide path
+    // it references, so a band and its reference path read as a facility
+    // rather than as authored geometry.
+    let facility_color = Color::srgb(0.47, 0.84, 0.84);
+    let facility_reference_color = Color::srgb(0.77, 0.66, 0.94);
+    for facility in frame.geometry.facilities() {
+        draw_ring(&mut gizmos, facility.points(), facility_color);
+        if let Some(reference) = facility.reference() {
+            for pair in reference.points().windows(2) {
+                gizmos.line_2d(to_vec(pair[0]), to_vec(pair[1]), facility_reference_color);
+            }
         }
     }
 
@@ -924,7 +939,7 @@ mod tests {
     use std::sync::Arc;
 
     use tangle_model::{CrossingId, parse_scenario_source};
-    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, Viewport};
+    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, Viewport, load_scenario};
     use tangle_sim::{AgentId, RegionKey};
 
     /// Two vehicles on one path through one crossing region, so a pair record
@@ -1096,5 +1111,33 @@ mod tests {
             link_ring(&selected),
             vec![circle(first, 3.45, LINK_COLOR); 2]
         );
+    }
+
+    /// The geometry pass draws each facility's occupied band and its reference
+    /// path from the frame, so a version-2 fixture must carry both.
+    #[test]
+    fn a_version_2_frame_carries_each_facility_band_and_reference_path() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenarios/phase2/inc1/narrow_signal_v2.json5");
+        let compiled = load_scenario(&path).expect("fixture loads");
+        let geometry = SceneGeometry::from_scenario(&compiled);
+        assert_eq!(geometry.facilities().len(), compiled.facilities().len());
+        assert!(!geometry.facilities().is_empty());
+        for (projected, facility) in geometry.facilities().iter().zip(compiled.facilities()) {
+            assert_eq!(projected.id(), facility.id());
+            assert!(
+                !projected.points().is_empty(),
+                "a facility with no band ring"
+            );
+            let reference = projected
+                .reference()
+                .unwrap_or_else(|| panic!("facility '{}' has no reference path", facility.name()));
+            assert_eq!(Some(reference.path()), facility.reference_path());
+            assert!(
+                reference.points().len() >= 2,
+                "facility '{}' has a reference path with no polyline",
+                facility.name()
+            );
+        }
     }
 }

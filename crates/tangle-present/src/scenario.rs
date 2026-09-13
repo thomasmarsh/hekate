@@ -3,11 +3,17 @@
 //! The kernel crates are filesystem-free by contract, so file access belongs to
 //! the presentation layer and its applications. Every renderer mirrors the
 //! headless CLI's load path exactly so all of them drive the same validated
-//! [`CompiledScenario`].
+//! [`CompiledScenario`]: the schema version is negotiated from the document
+//! itself, a version-1 source keeps the migration path through
+//! [`CompiledScenario::compile`], and a version-2 source compiles directly
+//! through [`CompiledScenario::compile_v2`].
 
 use std::path::{Path, PathBuf};
 
-use tangle_model::{CompiledScenario, Diagnostic, ParseError, parse_scenario_source};
+use tangle_model::{
+    CompiledScenario, Diagnostic, DocumentReadError, ParseError, ScenarioDocument,
+    parse_scenario_document,
+};
 
 /// Failure to load and compile a scenario file.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +36,14 @@ pub enum LoadError {
         #[source]
         source: ParseError,
     },
+    /// The document declares a schema version this build cannot read.
+    #[error("scenario '{path}' declares schema_version {version}, which this build cannot read")]
+    UnsupportedSchemaVersion {
+        /// The path that was read.
+        path: PathBuf,
+        /// The schema version the document declared.
+        version: u32,
+    },
     /// The scenario parsed but failed semantic validation.
     #[error(
         "scenario '{path}' failed validation: {}",
@@ -43,20 +57,37 @@ pub enum LoadError {
     },
 }
 
-/// Read, parse, validate, and compile a JSON5 scenario file.
+/// Read, parse, negotiate the schema version, validate, and compile a JSON5
+/// scenario file.
 pub fn load_scenario(path: &Path) -> Result<CompiledScenario, LoadError> {
     let text = std::fs::read_to_string(path).map_err(|source| LoadError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let source = parse_scenario_source(&text).map_err(|source| LoadError::Parse {
-        path: path.to_path_buf(),
-        source,
+    let document = parse_scenario_document(&text).map_err(|source| match source {
+        DocumentReadError::Parse(source) => LoadError::Parse {
+            path: path.to_path_buf(),
+            source,
+        },
+        DocumentReadError::UnsupportedVersion { version } => LoadError::UnsupportedSchemaVersion {
+            path: path.to_path_buf(),
+            version,
+        },
     })?;
-    CompiledScenario::compile(source).map_err(|diagnostics| LoadError::Invalid {
-        path: path.to_path_buf(),
-        diagnostics,
-    })
+    match document {
+        ScenarioDocument::V1(source) => {
+            CompiledScenario::compile(source).map_err(|diagnostics| LoadError::Invalid {
+                path: path.to_path_buf(),
+                diagnostics,
+            })
+        }
+        ScenarioDocument::V2(source) => {
+            CompiledScenario::compile_v2(source).map_err(|diagnostics| LoadError::Invalid {
+                path: path.to_path_buf(),
+                diagnostics,
+            })
+        }
+    }
 }
 
 fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {

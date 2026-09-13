@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use glam::DVec2;
 use tangle_model::{
-    BodyKind, BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, MovementId, PathId,
-    PortalId, RegionId, RuleId, RuleKind, SignalId,
+    BodyKind, BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, FacilityId, MovementId,
+    PathId, PortalId, RegionId, RuleId, RuleKind, SignalId,
 };
 use tangle_sim::{
     AgentMode, AgentSample, BodySegmentSample, ComplianceDecision, RegionKey, VehicleProfile,
@@ -18,6 +18,21 @@ use tangle_sim::{
 
 use crate::clock::Speed;
 use crate::safety::SafetyOverlay;
+
+/// Declared shape version of the shared scene projection.
+///
+/// Version 1 is the Phase 1 projection: paths, portals, boundaries, regions,
+/// movements, crossings, conflict regions, rules, signals, and the body kinds
+/// and ordered segments of `[[TAS-072-body-kind-and-segment-presenters]]`.
+/// Version 2 adds the compiled facility list, each facility carrying the
+/// traversable region it occupies and its reference path, and the capsule body
+/// shape of the narrow wheeled modes.
+///
+/// Nothing serializes a scene, so no artifact records this version; it is the
+/// declared name of the projection's shape, and a change to that shape bumps it
+/// and regenerates the scene golden under a declared explanation
+/// (`docs/body-kind-segment-output.md`).
+pub const SCENE_FORMAT_VERSION: u32 = 2;
 
 /// Default rendered body length when a snapshot carries no motion detail.
 pub const DEFAULT_BODY_LENGTH_M: f64 = 4.5;
@@ -200,6 +215,60 @@ impl SceneRegion {
     }
 }
 
+/// The reference path of a facility as drawn by a backend: the authored path
+/// the facility's `(s, d)` frame was compiled from, and its polyline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneFacilityReference {
+    path: PathId,
+    points: Vec<DVec2>,
+}
+
+impl SceneFacilityReference {
+    /// Dense identifier of the authored reference path.
+    pub const fn path(&self) -> PathId {
+        self.path
+    }
+
+    /// Polyline vertices of the reference path in order.
+    pub fn points(&self) -> &[DVec2] {
+        &self.points
+    }
+}
+
+/// A continuous-width facility as drawn by a backend: the traversable region it
+/// occupies and, when it declares one, the reference path that gives it its
+/// arc-length frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneFacility {
+    id: FacilityId,
+    region: RegionId,
+    points: Vec<DVec2>,
+    reference: Option<SceneFacilityReference>,
+}
+
+impl SceneFacility {
+    /// Dense identifier of the source facility.
+    pub const fn id(&self) -> FacilityId {
+        self.id
+    }
+
+    /// Dense identifier of the region the facility occupies.
+    pub const fn region(&self) -> RegionId {
+        self.region
+    }
+
+    /// Ring vertices of the occupied region in order; the last connects back
+    /// to the first.
+    pub fn points(&self) -> &[DVec2] {
+        &self.points
+    }
+
+    /// The compiled reference path, absent when the facility declares none.
+    pub const fn reference(&self) -> Option<&SceneFacilityReference> {
+        self.reference.as_ref()
+    }
+}
+
 /// A movement connector as drawn by a backend.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneMovement {
@@ -365,6 +434,7 @@ pub struct SceneGeometry {
     portals: Vec<ScenePortal>,
     boundaries: Vec<SceneBoundary>,
     regions: Vec<SceneRegion>,
+    facilities: Vec<SceneFacility>,
     movements: Vec<SceneMovement>,
     crossings: Vec<SceneCrossing>,
     conflict_regions: Vec<SceneConflictRegion>,
@@ -408,6 +478,25 @@ impl SceneGeometry {
             .map(|region| SceneRegion {
                 id: region.id(),
                 points: region.polygon().ring().to_vec(),
+            })
+            .collect();
+        let facilities: Vec<SceneFacility> = scenario
+            .facilities()
+            .iter()
+            .map(|facility| SceneFacility {
+                id: facility.id(),
+                region: facility.region(),
+                points: scenario
+                    .region(facility.region())
+                    .map_or_else(Vec::new, |region| region.polygon().ring().to_vec()),
+                reference: facility
+                    .reference_path()
+                    .map(|path| SceneFacilityReference {
+                        path,
+                        points: scenario
+                            .path(path)
+                            .map_or_else(Vec::new, |path| path.points().to_vec()),
+                    }),
             })
             .collect();
         let movements: Vec<SceneMovement> = scenario
@@ -495,11 +584,21 @@ impl SceneGeometry {
             .iter()
             .map(|shape| &shape.points)
             .chain(regions.iter().map(|shape| &shape.points))
+            .chain(facilities.iter().map(|shape| &shape.points))
             .chain(crossings.iter().map(|shape| &shape.points))
             .chain(conflict_regions.iter().map(|shape| &shape.points))
         {
             for &point in ring {
                 include(point, 0.0);
+            }
+        }
+        for facility in &facilities {
+            for point in facility
+                .reference
+                .iter()
+                .flat_map(|reference| &reference.points)
+            {
+                include(*point, 0.0);
             }
         }
         for movement in &movements {
@@ -523,6 +622,7 @@ impl SceneGeometry {
             portals,
             boundaries,
             regions,
+            facilities,
             movements,
             crossings,
             conflict_regions,
@@ -550,6 +650,11 @@ impl SceneGeometry {
     /// Traversable regions in dense-index order.
     pub fn regions(&self) -> &[SceneRegion] {
         &self.regions
+    }
+
+    /// Continuous-width facilities in dense-index order.
+    pub fn facilities(&self) -> &[SceneFacility] {
+        &self.facilities
     }
 
     /// Movement connectors in dense-index order.
@@ -632,9 +737,9 @@ impl SceneGeometry {
 /// A backend draws these without knowing a body's mode or scenario: the shared
 /// projection from a [`SceneBody`]'s reported `body_kind` and ordered segments
 /// to this list is the only place that decides a body's drawn shape, so a
-/// vehicle box and a pedestrian circle are distinguished by scene data rather
-/// than by a presenter branch. A `Box` is an oriented rectangle and a `Circle`
-/// its radius, both in metres.
+/// vehicle box, a pedestrian circle, and a narrow wheeled capsule are
+/// distinguished by scene data rather than by a presenter branch. A `Box` is an
+/// oriented rectangle and a `Circle` its radius, both in metres.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BodyShape {
     /// A circle of `radius_m` metres centred on `center`.
@@ -654,6 +759,24 @@ pub enum BodyShape {
         length_m: f64,
         /// Rectangle width across its heading in metres.
         width_m: f64,
+    },
+    /// A two-dimensional capsule: a straight `length_m` segment along its
+    /// heading, capped at both ends by a semicircle of `radius_m`.
+    ///
+    /// The whole body is `length_m + 2 * radius_m` long and `2 * radius_m`
+    /// wide, which is the narrow wheeled modes' reported extent. Its straight
+    /// part and its cap radius are independent, so no single rectangle can
+    /// draw it and no scaled unit mesh can either; a backend draws the capsule
+    /// itself.
+    Capsule {
+        /// Centre of the straight segment in world metres.
+        center: DVec2,
+        /// Heading of the straight segment in world radians.
+        heading_rad: f64,
+        /// Length of the straight segment in metres.
+        length_m: f64,
+        /// Radius of the semicircular caps in metres.
+        radius_m: f64,
     },
 }
 
@@ -676,8 +799,9 @@ pub struct SceneBody {
     /// its body dimensions use.
     pub mode: AgentMode,
     /// Envelope kind of the body: a vehicle is an oriented box, a pedestrian a
-    /// circle. A snapshot without motion detail reads as a box, matching the
-    /// vehicle fallback [`Self::mode`] and the body dimensions use.
+    /// circle, and a narrow wheeled agent a capsule. A snapshot without motion
+    /// detail reads as a box, matching the vehicle fallback [`Self::mode`] and
+    /// the body dimensions use.
     pub body_kind: BodyKind,
     /// Ordered body segments front to back, each with its own interpolated
     /// world pose. Empty for a Phase 1 single-envelope body.
@@ -734,7 +858,9 @@ impl SceneBody {
     /// its reported body kind; a body carrying ordered segments draws one box
     /// per segment at the segment's own pose, so an articulated chain renders
     /// without a mode branch. A scene segment sample carries only a pose, so a
-    /// segmented body's authored length is divided evenly across its chain.
+    /// segmented body's authored length is divided evenly across its chain and
+    /// its segments draw boxes; a capsule body is a single unsegmented envelope
+    /// and keeps its capsule shape.
     pub fn shapes(&self) -> Vec<BodyShape> {
         let segment_count = self.segments.len();
         if segment_count == 0 {
@@ -759,11 +885,19 @@ impl SceneBody {
                 center: self.position,
                 radius_m: self.length_m * 0.5,
             },
-            // A box, a capsule, and a segment-less articulated chain all draw
-            // their reported extent as an oriented rectangle; a body that
-            // reports a capsule or chain carries its finer shape in its
-            // ordered segments, and a scene segment carries only a pose.
-            BodyKind::Box | BodyKind::Capsule | BodyKind::ArticulatedChain => BodyShape::Box {
+            // A capsule's reported width is its diameter, so half of it is the
+            // cap radius and the reported length is its straight segment.
+            BodyKind::Capsule => BodyShape::Capsule {
+                center: self.position,
+                heading_rad: self.heading_rad,
+                length_m: self.length_m,
+                radius_m: self.width_m * 0.5,
+            },
+            // A box and a segment-less articulated chain draw their reported
+            // extent as an oriented rectangle; a body that reports a chain
+            // carries its finer shape in its ordered segments, and a scene
+            // segment carries only a pose.
+            BodyKind::Box | BodyKind::ArticulatedChain => BodyShape::Box {
                 center: self.position,
                 heading_rad: self.heading_rad,
                 length_m: self.length_m,
@@ -984,7 +1118,7 @@ impl SceneFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tangle_model::parse_scenario_source;
+    use tangle_model::{parse_scenario_source, parse_scenario_source_v2};
 
     fn walking() -> CompiledScenario {
         let source = parse_scenario_source(
@@ -1183,6 +1317,30 @@ mod tests {
         );
     }
 
+    /// The shared envelope decision draws a capsule for a capsule body: its
+    /// reported length is the straight segment and half its reported width the
+    /// cap radius, so a narrow wheeled agent renders as a capsule rather than
+    /// the rectangle that bounds it.
+    #[test]
+    fn a_capsule_body_draws_its_capsule() {
+        let mut capsule = sample(0, AgentMode::Vehicle);
+        {
+            let motion = capsule.motion.as_mut().expect("motion");
+            motion.body_kind = BodyKind::Capsule;
+            motion.body_length_m = 1.8;
+            motion.body_width_m = 0.7;
+        }
+        assert_eq!(
+            SceneBody::project(&[], &capsule, 0.0).shapes(),
+            vec![BodyShape::Capsule {
+                center: DVec2::ZERO,
+                heading_rad: 0.0,
+                length_m: 1.8,
+                radius_m: 0.35,
+            }]
+        );
+    }
+
     /// One observed sample with motion detail, so a body projects a mode.
     fn sample(id: usize, mode: AgentMode) -> AgentSample {
         use tangle_sim::MotionSample;
@@ -1358,6 +1516,14 @@ mod tests {
         CompiledScenario::compile(source).expect("scenario compiles")
     }
 
+    /// A phase-1 scenario contributes no facilities, so the scene still
+    /// projects the Phase 1 geometry it always did.
+    #[test]
+    fn a_phase_1_scenario_projects_no_facilities() {
+        assert_eq!(SceneGeometry::from_scenario(&walking()).facilities(), []);
+        assert_eq!(walking().schema_version(), 1);
+    }
+
     #[test]
     fn geometry_projects_every_general_primitive() {
         let geometry = SceneGeometry::from_scenario(&signalized());
@@ -1378,5 +1544,84 @@ mod tests {
         let (min, max) = geometry.bounds().expect("bounds");
         assert_eq!(min, DVec2::new(-30.0, -30.0));
         assert_eq!(max, DVec2::new(30.0, 30.0));
+    }
+
+    /// The declared scene format version names the shape this projection
+    /// produces; a change to the shape bumps it under a declared explanation
+    /// (`docs/body-kind-segment-output.md`).
+    #[test]
+    fn the_declared_scene_format_version_is_the_facility_extension() {
+        assert_eq!(SCENE_FORMAT_VERSION, 2);
+    }
+
+    /// A version-2 facility projects as the traversable region it occupies plus
+    /// its authored reference path, so a backend draws the band and its
+    /// centreline from scene data alone.
+    #[test]
+    fn a_facility_projects_its_region_and_reference_path() {
+        let geometry = SceneGeometry::from_scenario(&facility());
+        assert_eq!(geometry.facilities().len(), 1);
+        let projected = &geometry.facilities()[0];
+        assert_eq!(projected.id(), FacilityId::from_index(0));
+        assert_eq!(projected.region(), RegionId::from_index(0));
+        assert_eq!(projected.points(), geometry.regions()[0].points());
+        let reference = projected
+            .reference()
+            .expect("the facility declares a reference path");
+        assert_eq!(reference.path(), PathId::from_index(0));
+        assert_eq!(reference.points(), geometry.paths()[0].points());
+        // The reference path runs the length of the band, so its vertices fall
+        // inside the projected bounds.
+        let (min, max) = geometry.bounds().expect("bounds");
+        assert!(min.x <= 0.0 && max.x >= 100.0);
+    }
+
+    /// A version-2 document with one continuous-width facility: a 3 m band over
+    /// its own reference path.
+    fn facility() -> CompiledScenario {
+        const DOCUMENT: &str = "
+        {
+          schema_version: 2,
+          id: 'facility_geometry',
+          coordinate_system: { x: 'east_m', y: 'north_m' },
+          paths: [
+            { id: 'centerline', points: [ { x: 0.0, y: 0.0 }, { x: 100.0, y: 0.0 } ] },
+          ],
+          portals: [],
+          regions: [
+            { id: 'band', points: [ { x: 0.0, y: -1.5 }, { x: 100.0, y: -1.5 },
+              { x: 100.0, y: 1.5 }, { x: 0.0, y: 1.5 } ] },
+          ],
+          mode_templates: [
+            {
+              id: 'cycle',
+              body: { kind: 'capsule', length_m: { min: 1.1, max: 1.1 },
+                radius_m: { min: 0.3, max: 0.3 } },
+              motion: 'single_body_wheeled',
+              tactics: [ 'follow', 'stop', 'yield' ],
+              access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+                speed_policy: { limit_mps: null } },
+              occupancy: 'operator_only',
+              profiles: {
+                speed_mps: { min: 5.0, max: 5.0 },
+                max_accel_mps2: { min: 1.2, max: 1.2 },
+                comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+                time_gap_s: { min: 1.0, max: 1.0 },
+                steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+                lateral_clearance_m: { min: 0.3, max: 0.3 },
+                compliance: { min: 1.0, max: 1.0 },
+              },
+            },
+          ],
+          facilities: [
+            { id: 'lane', region: 'band', reference_path: 'centerline',
+              width_m: 3.0, nominal_direction: 'forward',
+              access: { modes: [ 'cycle' ] }, lateral_use: 'shared',
+              speed_policy: { limit_mps: null } },
+          ],
+        }
+        ";
+        let source = parse_scenario_source_v2(DOCUMENT).expect("facility document parses");
+        CompiledScenario::compile_v2(source).expect("facility document compiles")
     }
 }

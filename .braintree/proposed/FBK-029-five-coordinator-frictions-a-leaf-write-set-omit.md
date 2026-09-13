@@ -1,6 +1,6 @@
 ---
 context_rev: 1
-updated: 2026-09-13T21:12:45Z
+updated: 2026-09-13T22:10:23Z
 summary: Five coordinator frictions from the Phase 2 Increment 1 session: a leaf write set omitted its generated-schema closure, two workers timed out, one session produced three FBK nodes, a matrix tolerance named a form the authored schema cannot express, and repeated next-resolved-node transients.
 braintree_revision: 0.6.0+g3bacaf5
 ---
@@ -91,3 +91,21 @@ treats the transient as a hard error. Recurrence of `FBK-026` Finding 1.
 Improvement: as in `FBK-026`: make a `next` naming an already-resolved direct
 child a non-fatal warning until the coordinator integrates, or state the
 expected transient explicitly in the resolving-worker procedure.
+
+## Finding 6 — the write set omitted the golden closure (recurrence of FBK-009)
+
+Attempted: dispatched TAS-081 with a write set of `crates/tangle-present/**`,
+`apps/tangle-tui/**`, `apps/tangle-viewer/**`, and one doc.
+
+Friction: the required `SCENE_FORMAT_VERSION` bump invalidates the checked-in
+scene golden `tests/golden/present/walking_guide_v1.seed0.tick20.scene.txt`,
+which lives outside every directory in the assigned write set, so the worker had
+to include and report a path outside its set. This is exactly the compile-and-
+golden closure gap `FBK-009` already recorded: the assigned write set is the
+closure of the change, but `tests/golden/**` is easy to forget because it is not
+under the crate or app that owns the format.
+
+Improvement: name `tests/golden/**` and `baselines/**` explicitly in every brief
+whose change can invalidate a golden, and have the coordinator state the golden
+closure alongside the source closure rather than expecting the worker to infer
+it from "any format change is versioned and covered by a golden test".

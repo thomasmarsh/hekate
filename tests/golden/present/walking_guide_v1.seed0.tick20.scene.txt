@@ -63,6 +63,7 @@ SceneFrame {
         ],
         boundaries: [],
         regions: [],
+        facilities: [],
         movements: [],
         crossings: [],
         conflict_regions: [],

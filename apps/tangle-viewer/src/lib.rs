@@ -7,6 +7,7 @@
 //! captured frame to the window.
 
 use bevy::prelude::{Quat, Resource, Transform, Vec3};
+use glam::DVec2;
 use tangle_present::{
     BackendCapabilities, BackendResult, BodyShape, RendererBackend, SceneBody, SceneFrame,
 };
@@ -81,47 +82,74 @@ pub struct BodyVisual {
     pub transform: Transform,
 }
 
-/// Resolve a scene body to the visuals the viewer renders, one per shared
-/// shape.
+/// Resolve a scene body to the visuals the viewer renders.
 ///
-/// The shape decision is the backend-independent
-/// [`SceneBody::shapes`], so the viewer draws a vehicle box and a pedestrian
-/// circle by the body's reported kind and one entity per ordered segment,
-/// without a branch on mode or scenario.
+/// The shape decision is the backend-independent [`SceneBody::shapes`], so the
+/// viewer draws a vehicle box, a pedestrian circle, and a narrow wheeled capsule
+/// by the body's reported kind, and one entity per ordered segment, without a
+/// branch on mode or scenario. One shared shape contributes one visual, except a
+/// capsule: its straight part and its cap radius scale independently, so a
+/// scaled unit mesh would draw elliptical caps. A capsule therefore draws the
+/// rectangle its segment spans and a circle on each cap, the exact shapes the
+/// viewer already has meshes for.
 pub fn body_visuals(body: &SceneBody) -> Vec<BodyVisual> {
-    body.shapes()
-        .into_iter()
-        .map(|shape| match shape {
+    let mut visuals = Vec::new();
+    for shape in body.shapes() {
+        match shape {
             BodyShape::Box {
                 center,
                 heading_rad,
                 length_m,
                 width_m,
-            } => BodyVisual {
-                mesh: BodyMesh::Box,
-                transform: Transform {
-                    translation: Vec3::new(center.x as f32, center.y as f32, 1.0),
-                    rotation: Quat::from_rotation_z(heading_rad as f32),
-                    scale: Vec3::new(length_m as f32, width_m as f32, 1.0),
-                },
-            },
-            BodyShape::Circle { center, radius_m } => BodyVisual {
-                mesh: BodyMesh::Circle,
-                transform: Transform {
-                    translation: Vec3::new(center.x as f32, center.y as f32, 1.0),
-                    rotation: Quat::IDENTITY,
-                    scale: Vec3::new((radius_m * 2.0) as f32, (radius_m * 2.0) as f32, 1.0),
-                },
-            },
-        })
-        .collect()
+            } => visuals.push(box_visual(center, heading_rad, length_m, width_m)),
+            BodyShape::Circle { center, radius_m } => {
+                visuals.push(circle_visual(center, radius_m));
+            }
+            BodyShape::Capsule {
+                center,
+                heading_rad,
+                length_m,
+                radius_m,
+            } => {
+                visuals.push(box_visual(center, heading_rad, length_m, radius_m * 2.0));
+                let (sin, cos) = heading_rad.sin_cos();
+                let forward = DVec2::new(cos, sin) * (length_m * 0.5);
+                visuals.push(circle_visual(center + forward, radius_m));
+                visuals.push(circle_visual(center - forward, radius_m));
+            }
+        }
+    }
+    visuals
+}
+
+/// A box visual: the unit rectangle scaled to the shape's length and width.
+fn box_visual(center: DVec2, heading_rad: f64, length_m: f64, width_m: f64) -> BodyVisual {
+    BodyVisual {
+        mesh: BodyMesh::Box,
+        transform: Transform {
+            translation: Vec3::new(center.x as f32, center.y as f32, 1.0),
+            rotation: Quat::from_rotation_z(heading_rad as f32),
+            scale: Vec3::new(length_m as f32, width_m as f32, 1.0),
+        },
+    }
+}
+
+/// A circle visual: the unit-diameter circle scaled to the shape's diameter.
+fn circle_visual(center: DVec2, radius_m: f64) -> BodyVisual {
+    BodyVisual {
+        mesh: BodyMesh::Circle,
+        transform: Transform {
+            translation: Vec3::new(center.x as f32, center.y as f32, 1.0),
+            rotation: Quat::IDENTITY,
+            scale: Vec3::new((radius_m * 2.0) as f32, (radius_m * 2.0) as f32, 1.0),
+        },
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use glam::DVec2;
     use tangle_model::BodyKind;
     use tangle_sim::{AgentMode, BodySegmentSample};
 
@@ -188,5 +216,34 @@ mod tests {
         assert_eq!(visuals[0].transform.translation, Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(visuals[0].transform.scale, Vec3::new(3.0, 2.0, 1.0));
         assert_eq!(visuals[1].transform.translation, Vec3::new(3.0, 0.0, 1.0));
+    }
+
+    /// A narrow wheeled capsule draws its straight part and both caps: the box
+    /// between the cap centres and one circle per cap, so the drawn envelope is
+    /// the capsule rather than the rectangle that bounds it.
+    #[test]
+    fn a_capsule_body_draws_its_straight_part_and_both_caps() {
+        let capsule = body(3, BodyKind::Capsule, DVec2::new(1.0, 2.0), 1.8, 0.7);
+        let visuals = body_visuals(&capsule);
+        assert_eq!(visuals.len(), 3);
+
+        assert_eq!(visuals[0].mesh, BodyMesh::Box);
+        assert_eq!(visuals[0].transform.translation, Vec3::new(1.0, 2.0, 1.0));
+        // The straight part is the reported length by the diameter.
+        assert_eq!(visuals[0].transform.scale, Vec3::new(1.8, 0.7, 1.0));
+
+        // Each cap sits half the straight length from the centre, with the
+        // half-width as its radius. The centres are compared with a tolerance
+        // because the viewer carries world metres as `f32`.
+        for (visual, offset) in visuals[1..].iter().zip([0.9_f32, -0.9_f32]) {
+            assert_eq!(visual.mesh, BodyMesh::Circle);
+            assert!(
+                (visual.transform.translation.x - (1.0 + offset)).abs() < 1e-6,
+                "cap x is {} for offset {offset}",
+                visual.transform.translation.x
+            );
+            assert_eq!(visual.transform.translation.y, 2.0);
+            assert_eq!(visual.transform.scale, Vec3::new(0.7, 0.7, 1.0));
+        }
     }
 }

@@ -1,9 +1,8 @@
 ---
 context_rev: 2
 priority: P1
-updated: 2026-09-13T21:35:23Z
-summary: Increment 1 is active, not complete: the facility, narrow-mode, fixture, and reproducibility slice landed, but facility regions and narrow bodies are not yet observable in the terminal and Bevy viewers.
-next: [[TAS-081-presenter-parity-v2-facilities-and-narrow-modes]]
+updated: 2026-09-13T22:10:07Z
+summary: Increment 1 is complete: facilities, narrow modes, validation, isolated fixtures, reproducibility, and viewer parity all landed.
 ---
 
 # Outcome
@@ -42,17 +41,17 @@ Per `PHASE_2_PLAN.md` Increment 1:
 
 Parent [[TAS-017-phase-2-mixed-traffic]].
 
-# Progress
+# Result
 
-Increment 1 is **not complete**. The facility, narrow-mode, isolated-fixture,
-and reproducibility slice landed through resolved children (TAS-073 through
-TAS-080), but the increment's deliverables are not all delivered: facility
-regions and narrow capsule bodies are not observable in the terminal or Bevy
-viewers, and neither viewer can load a version-2 fixture. The earlier completion
-claim was measured only against the four gate criteria and omitted the viewer
-deliverable. The remaining scope is
-[[TAS-081-presenter-parity-v2-facilities-and-narrow-modes]], which this node
-routes to as its `next`.
+Increment 1 is complete; all five deliverables and all four gate criteria hold
+through resolved children, with no child disposed.
+[[TAS-081-presenter-parity-v2-facilities-and-narrow-modes]] closed the
+observability gap: `tangle_present::load_scenario` negotiates the schema version
+(version 2 through `compile_v2`, version 1 through migration), the scene carries
+facility regions with their reference paths and renders narrow capsule bodies,
+and `tangle-tui` and `tangle-viewer` open all six Increment 1 fixtures. Phase 1
+scene output is unchanged apart from the declared `SCENE_FORMAT_VERSION` 1->2
+bump, which adds one `facilities: []` line to the walking golden.
 
 - **Facility contract and geometry.** [[TAS-073-extend-the-version-2-schema-contract-with-increm]]
 extended `docs/schema-v2-contract.md` in place with the Increment 1 facility,

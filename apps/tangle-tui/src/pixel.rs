@@ -16,9 +16,10 @@ use tangle_present::{BodyEmphasis, BodyShape, SceneFrame, Viewport};
 use crate::palette::Rgb;
 use crate::raster::{
     BACKGROUND, BODY_COLOR, BOUNDARY_COLOR, CELL_ASPECT, CONFLICT_COLOR, CROSSING_COLOR,
-    MOVEMENT_COLOR, OCCUPIED_COLOR, PATH_COLOR, PORTAL_COLOR, REGION_COLOR, RULE_COLOR,
-    RULE_MARKER_OFFSET_M, Rasterizer, SELECTED_BACKGROUND, SELECTED_COLOR, SIGNAL_COLOR,
-    SIGNAL_GATE_HALF_WIDTH_M, VECTOR_COLOR, emphasis_color, marker_color, marker_glyph,
+    FACILITY_COLOR, FACILITY_REFERENCE_COLOR, MOVEMENT_COLOR, OCCUPIED_COLOR, PATH_COLOR,
+    PORTAL_COLOR, REGION_COLOR, RULE_COLOR, RULE_MARKER_OFFSET_M, Rasterizer, SELECTED_BACKGROUND,
+    SELECTED_COLOR, SIGNAL_COLOR, SIGNAL_GATE_HALF_WIDTH_M, VECTOR_COLOR, emphasis_color,
+    marker_color, marker_glyph,
 };
 
 /// Default pixels per terminal column.
@@ -30,6 +31,8 @@ pub const MIN_PIXELS_PER_COLUMN: u32 = 2;
 pub const MAX_FRAME_PIXELS: u64 = 1920 * 1080;
 /// Half-width of a drawn guide line, in pixels.
 const LINE_HALF_WIDTH: i64 = 1;
+/// Chords approximating one capsule cap's semicircle in the pixel backend.
+const CAPSULE_CAP_SEGMENTS: usize = 16;
 
 /// A tightly packed RGBA8 image, row-major, four bytes per pixel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +239,23 @@ impl PixelRasterizer {
             }
         }
 
+        // A facility is drawn over the region it occupies and over the guide
+        // path and movement it references, so a band and its reference path
+        // read as a facility rather than as authored geometry.
+        for facility in frame.geometry.facilities() {
+            self.draw_ring(image, frame.viewport, facility.points(), FACILITY_COLOR);
+            if let Some(reference) = facility.reference() {
+                let points: Vec<(f64, f64)> = reference
+                    .points()
+                    .iter()
+                    .map(|point| self.project(frame.viewport, *point))
+                    .collect();
+                for pair in points.windows(2) {
+                    image.segment(pair[0], pair[1], FACILITY_REFERENCE_COLOR, LINE_HALF_WIDTH);
+                }
+            }
+        }
+
         for conflict in frame.geometry.conflict_regions() {
             self.draw_ring(image, frame.viewport, conflict.points(), CONFLICT_COLOR);
         }
@@ -317,9 +337,9 @@ impl PixelRasterizer {
                 (BODY_COLOR, BODY_COLOR)
             };
             // A body draws the shapes the shared scene projection chooses for
-            // it: one box or circle, or one box per ordered segment. The choice
-            // reads scene data, so no presenter branch names a mode or
-            // scenario.
+            // it: one box, circle, or capsule, or one box per ordered segment.
+            // The choice reads scene data, so no presenter branch names a mode
+            // or scenario.
             for shape in body.shapes() {
                 match shape {
                     BodyShape::Circle { center, radius_m } => {
@@ -343,7 +363,102 @@ impl PixelRasterizer {
                         fill,
                         outline,
                     ),
+                    BodyShape::Capsule {
+                        center,
+                        heading_rad,
+                        length_m,
+                        radius_m,
+                    } => self.draw_capsule(
+                        image,
+                        frame.viewport,
+                        center,
+                        heading_rad,
+                        length_m,
+                        radius_m,
+                        fill,
+                        outline,
+                    ),
                 }
+            }
+        }
+    }
+
+    /// Fill a capsule and outline its two sides and its two caps.
+    ///
+    /// A pixel is inside when it lies within `radius_m` of the straight
+    /// segment, which is exactly the capsule; no rectangle covers a capsule,
+    /// and neither would one drawn at the body's bounding extent. The outline
+    /// traces the two sides the segment spans and each cap's semicircle, the
+    /// last approximated by [`CAPSULE_CAP_SEGMENTS`] chords.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_capsule(
+        &self,
+        image: &mut RgbaImage,
+        viewport: Viewport,
+        center: DVec2,
+        heading_rad: f64,
+        length_m: f64,
+        radius_m: f64,
+        fill: Rgb,
+        outline: Rgb,
+    ) {
+        let (sin, cos) = heading_rad.sin_cos();
+        let forward = DVec2::new(cos, sin);
+        let left = DVec2::new(-sin, cos);
+        let half_length = length_m * 0.5;
+
+        let corner = DVec2::splat(half_length + radius_m);
+        let low = self.project(viewport, center - corner);
+        let high = self.project(viewport, center + corner);
+        let min_col = low.0.min(high.0).floor().max(0.0) as i64;
+        let max_col = low.0.max(high.0).ceil().min(f64::from(image.width())) as i64;
+        let min_row = low.1.min(high.1).floor().max(0.0) as i64;
+        let max_row = low.1.max(high.1).ceil().min(f64::from(image.height())) as i64;
+
+        for row in min_row..max_row {
+            for col in min_col..max_col {
+                let world = self.cells.world_at(
+                    viewport,
+                    col as f64 / f64::from(self.pixels_per_column),
+                    row as f64 / f64::from(self.pixels_per_row()),
+                );
+                let along = (world - center)
+                    .dot(forward)
+                    .clamp(-half_length, half_length);
+                if (world - (center + forward * along)).length() <= radius_m {
+                    image.put(col, row, fill);
+                }
+            }
+        }
+
+        // The two straight sides, each `radius_m` out along the normal.
+        let near = center - forward * half_length;
+        let far = center + forward * half_length;
+        for side in [1.0, -1.0] {
+            image.segment(
+                self.project(viewport, near + left * (radius_m * side)),
+                self.project(viewport, far + left * (radius_m * side)),
+                outline,
+                0,
+            );
+        }
+        // Each cap sweeps the half-turn around its end of the segment.
+        let start = heading_rad + std::f64::consts::FRAC_PI_2;
+        let step = std::f64::consts::PI / CAPSULE_CAP_SEGMENTS as f64;
+        for pivot in [far, near] {
+            for chord in 0..CAPSULE_CAP_SEGMENTS {
+                let at = |angle: f64| {
+                    self.project(
+                        viewport,
+                        pivot + DVec2::new(angle.cos(), angle.sin()) * radius_m,
+                    )
+                };
+                image.segment(
+                    at(start + step * chord as f64),
+                    at(start + step * (chord + 1) as f64),
+                    outline,
+                    0,
+                );
             }
         }
     }
@@ -509,7 +624,9 @@ mod tests {
     use std::sync::Arc;
 
     use tangle_model::{BodyKind, CompiledScenario, CrossingId, parse_scenario_source};
-    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed};
+    use tangle_present::{
+        FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, load_scenario,
+    };
     use tangle_sim::{
         AgentId, AgentMode, BodySegmentSample, Event, RegionKey, RunConfig, Simulation,
         SnapshotDetail,
@@ -709,6 +826,48 @@ mod tests {
         assert_eq!(raster.rasterize(&frame), raster.rasterize(&frame));
     }
 
+    /// A geometry-only frame over a checked-in version-2 fixture, so a
+    /// facility's band and reference path come from the same source a viewer
+    /// opens.
+    fn facility_frame(viewport: Viewport) -> SceneFrame {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenarios/phase2/inc1/narrow_isolated_straight_v2.json5");
+        let compiled = load_scenario(&path).expect("fixture loads");
+        SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: 0,
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport,
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies: Vec::new(),
+            overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
+        }
+    }
+
+    /// A facility's occupied band and its reference path draw from scene data
+    /// in the pixel backend's own colors, so the Kitty graphics backend shows
+    /// the same facility the character-cell backend does.
+    #[test]
+    fn a_facility_band_and_reference_path_are_drawn_from_scene_data() {
+        let raster = PixelRasterizer::new(120, 40);
+        let image = raster.rasterize(&facility_frame(Viewport::new(DVec2::new(110.0, 0.0), 0.5)));
+        assert!(
+            contains_color(&image, FACILITY_COLOR),
+            "the facility band was not drawn"
+        );
+        assert!(
+            contains_color(&image, FACILITY_REFERENCE_COLOR),
+            "the facility reference path was not drawn"
+        );
+    }
+
     #[test]
     fn geometry_and_bodies_are_drawn_in_shared_colors() {
         let raster = PixelRasterizer::new(120, 40);
@@ -900,6 +1059,59 @@ mod tests {
             pixel_of(&raster, viewport, &image, DVec2::new(2.0, 8.0)),
             body_color,
             "segment 1 must draw at its pose"
+        );
+    }
+
+    /// A capsule body draws its straight part and both caps: a pixel inside a
+    /// cap beyond the straight part carries the body, and the rectangle that
+    /// bounds the capsule fills the corner the cap curves away from.
+    #[test]
+    fn a_capsule_body_is_drawn_as_a_capsule() {
+        let raster = PixelRasterizer::new(80, 40);
+        // One pixel is 1/24 m across, so a 1 m cap is resolvable.
+        let viewport = Viewport::new(DVec2::ZERO, 0.25);
+        let mut capsule_frame =
+            synthetic_frame(vec![body(0, BodyKind::Capsule, DVec2::ZERO, 6.0, 2.0)]);
+        capsule_frame.viewport = viewport;
+        let capsule = raster.rasterize(&capsule_frame);
+        let body_color = opaque(BODY_COLOR);
+
+        // The straight part: world (2, 0.5) is inside the 6 x 2 rectangle.
+        assert_eq!(
+            pixel_of(&raster, viewport, &capsule, DVec2::new(2.0, 0.5)),
+            body_color,
+            "the straight part must draw"
+        );
+        // Each cap: world (+-3.75, 0) is 0.75 m beyond the straight part's end
+        // and within the 1 m cap radius, which no rectangle of the reported
+        // length covers.
+        assert_eq!(
+            pixel_of(&raster, viewport, &capsule, DVec2::new(3.75, 0.0)),
+            body_color,
+            "the front cap must draw"
+        );
+        assert_eq!(
+            pixel_of(&raster, viewport, &capsule, DVec2::new(-3.75, 0.0)),
+            body_color,
+            "the rear cap must draw"
+        );
+
+        // The rectangle bounding the capsule, drawn as a box body of the same
+        // extent, fills the corner world (3.75, 1); the capsule leaves it
+        // empty because the cap curves away from it.
+        let mut bounding_frame =
+            synthetic_frame(vec![body(0, BodyKind::Box, DVec2::ZERO, 8.0, 2.0)]);
+        bounding_frame.viewport = viewport;
+        let bounding = raster.rasterize(&bounding_frame);
+        assert_eq!(
+            pixel_of(&raster, viewport, &bounding, DVec2::new(3.75, 1.0)),
+            body_color,
+            "the bounding box fills its corner"
+        );
+        assert_ne!(
+            pixel_of(&raster, viewport, &capsule, DVec2::new(3.75, 1.0)),
+            body_color,
+            "the capsule must not fill the bounding rectangle's corner"
         );
     }
 }

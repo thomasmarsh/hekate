@@ -62,3 +62,73 @@ modes add no mode-specific presenter branch.
   `segment_poses_interpolate_from_the_previous_frame`, and `tangle-cli`'s
   `the_artifact_reports_each_phase1_body_kind_with_no_segments` and
   `the_artifact_round_trips_body_kind_and_segments`.
+
+# Facility and capsule scene extension (scene format version 2)
+
+This section is the versioned explanation for the second scene-shape change:
+`[[TAS-081-presenter-parity-v2-facilities-and-narrow-modes]]` adds the compiled
+facility list and the capsule body shape to the shared `tangle-present` scene
+projection, so both presenters draw the Phase 2 Increment 1 features from scene
+data. It supersedes nothing above; the Increment 0 change stands as recorded.
+
+## What changed
+
+- **Load path.** `tangle_present::load_scenario` now negotiates the schema
+  version through `tangle_model::parse_scenario_document`: a version-1 document
+  keeps the migration path through `CompiledScenario::compile`, and a
+  version-2 document compiles through `CompiledScenario::compile_v2`. A
+  document declaring a version this build cannot read is reported as
+  `LoadError::UnsupportedSchemaVersion`. The load path mirrors
+  `tangle-cli`'s; the scene projection itself is unchanged by it.
+- **Scene.** `SceneGeometry` carries `facilities`, one `SceneFacility` per
+  compiled facility: its `FacilityId`, the traversable `RegionId` it occupies,
+  the region's ring, and, when the facility declares one, a
+  `SceneFacilityReference` naming the authored `PathId` and carrying that path's
+  polyline. Both presenters draw each facility's ring and reference polyline
+  over the region, path, and movement passes; no presenter branches on a mode or
+  scenario.
+- **Bodies.** `BodyShape` gains `Capsule`, and `SceneBody::shapes` maps a
+  `BodyKind::Capsule` envelope to it: the reported length is the straight
+  segment and half the reported width the cap radius. The terminal character and
+  pixel backends fill the rectangle the segment spans plus a circle at each end;
+  the Bevy viewer resolves the capsule to that same rectangle and two cap
+  circles, because its shared unit meshes cannot scale a cap radius independently
+  of the straight length. A capsule body is a single unsegmented envelope, so the
+  ordered-segment path (a box per segment) is unchanged.
+
+## Versioned bump
+
+- `SCENE_FORMAT_VERSION` 1 → 2 (`crates/tangle-present/src/scene.rs`, new
+  declared constant). Version 1 was the Phase 1 projection with the Increment 0
+  body kinds and ordered segments; version 2 adds `SceneGeometry::facilities`
+  and `BodyShape::Capsule`. Nothing serializes a scene, so no artifact records
+  the version: it names the projection's shape, and a change to that shape bumps
+  it here.
+- `EVENT_VERSION` stays **2**, and no metric, trace, snapshot, or trajectory
+  format version changes. The scene projection is not part of any artifact
+  schema.
+
+## Goldens and evidence
+
+- Regenerated: `tests/golden/present/walking_guide_v1.seed0.tick20.scene.txt`
+  — the Phase 1 walking projection gains exactly one line, `facilities: []`,
+  because a version-1 scenario has no facilities. Every other line, including
+  every body, path, portal, movement, rule, and signal value, is byte-identical.
+- Unchanged: `tests/golden/present/view_commands.txt` (it records command
+  effects and viewport state, not the geometry dump), the renderer cell and
+  Kitty goldens (`tests/golden/renderer/**`), the canonical trace goldens, and
+  `baselines/phase1/**`. Regenerate the scene and renderer goldens with
+  `scripts/regen-goldens.sh` and inspect the diff before committing it.
+- Tests that pin the new output: `tangle-present`'s
+  `a_facility_projects_its_region_and_reference_path`,
+  `a_capsule_body_draws_its_capsule`,
+  `the_declared_scene_format_version_is_the_facility_extension`,
+  `a_phase_1_scenario_projects_no_facilities`, and the fixture-load test
+  `every_increment_1_fixture_loads_with_its_facilities_and_narrow_bodies`;
+  `tangle-tui`'s
+  `a_facility_band_and_reference_path_are_rasterized_from_scene_data`,
+  `a_facility_band_and_reference_path_are_drawn_from_scene_data`,
+  `a_capsule_body_is_rasterized_as_a_capsule`, and
+  `a_capsule_body_is_drawn_as_a_capsule`; and `tangle-viewer`'s
+  `a_capsule_body_draws_its_straight_part_and_both_caps` and
+  `a_version_2_frame_carries_each_facility_band_and_reference_path`.

@@ -31,6 +31,10 @@ pub const PORTAL_COLOR: Rgb = Rgb::new(245, 189, 56);
 pub const BOUNDARY_COLOR: Rgb = Rgb::new(110, 118, 138);
 /// Traversable region color.
 pub const REGION_COLOR: Rgb = Rgb::new(64, 156, 176);
+/// Facility band color.
+pub const FACILITY_COLOR: Rgb = Rgb::new(120, 214, 214);
+/// Facility reference-path color.
+pub const FACILITY_REFERENCE_COLOR: Rgb = Rgb::new(196, 168, 240);
 /// Movement connector color.
 pub const MOVEMENT_COLOR: Rgb = Rgb::new(236, 118, 196);
 /// Pedestrian crossing color.
@@ -104,6 +108,8 @@ const PORTAL_GLYPH: char = '=';
 const PORTAL_TIP_GLYPH: char = '>';
 const BOUNDARY_GLYPH: char = '.';
 const REGION_GLYPH: char = ',';
+const FACILITY_GLYPH: char = ':';
+const FACILITY_REFERENCE_GLYPH: char = '+';
 const MOVEMENT_GLYPH: char = '%';
 const CROSSING_GLYPH: char = 'x';
 const CONFLICT_GLYPH: char = '!';
@@ -232,6 +238,29 @@ impl Rasterizer {
             }
         }
 
+        // A facility is drawn over the region it occupies and over the guide
+        // path and movement it references, so a band and its reference path
+        // read as a facility rather than as authored geometry.
+        let facility_cell = Cell::new(FACILITY_GLYPH, FACILITY_COLOR, BACKGROUND);
+        let reference_cell = Cell::new(
+            FACILITY_REFERENCE_GLYPH,
+            FACILITY_REFERENCE_COLOR,
+            BACKGROUND,
+        );
+        for facility in frame.geometry.facilities() {
+            self.draw_ring(grid, frame.viewport, facility.points(), facility_cell);
+            if let Some(reference) = facility.reference() {
+                let points: Vec<(f64, f64)> = reference
+                    .points()
+                    .iter()
+                    .map(|point| self.project(frame.viewport, *point))
+                    .collect();
+                for pair in points.windows(2) {
+                    draw_line(grid, pair[0], pair[1], reference_cell);
+                }
+            }
+        }
+
         let conflict_cell = Cell::new(CONFLICT_GLYPH, CONFLICT_COLOR, BACKGROUND);
         for conflict in frame.geometry.conflict_regions() {
             self.draw_ring(grid, frame.viewport, conflict.points(), conflict_cell);
@@ -319,9 +348,9 @@ impl Rasterizer {
             };
             let cell = Cell::new(BODY_GLYPH, fg, bg);
             // A body draws the shapes the shared scene projection chooses for
-            // it: one box or circle, or one box per ordered segment. The choice
-            // reads scene data, so no presenter branch names a mode or
-            // scenario.
+            // it: one box, circle, or capsule, or one box per ordered segment.
+            // The choice reads scene data, so no presenter branch names a mode
+            // or scenario.
             for shape in body.shapes() {
                 let center = match shape {
                     BodyShape::Circle { center, radius_m } => {
@@ -345,11 +374,69 @@ impl Rasterizer {
                         );
                         center
                     }
+                    BodyShape::Capsule {
+                        center,
+                        heading_rad,
+                        length_m,
+                        radius_m,
+                    } => {
+                        self.draw_capsule(
+                            grid,
+                            frame.viewport,
+                            center,
+                            heading_rad,
+                            length_m,
+                            radius_m,
+                            cell,
+                        );
+                        center
+                    }
                 };
                 // Always mark the centre so a sub-cell shape stays visible.
                 let point = self.project(frame.viewport, center);
                 grid.put(point.0.round() as i64, point.1.round() as i64, cell);
             }
+        }
+    }
+
+    /// Fill the cells inside a capsule: a straight segment of `length_m` and
+    /// two semicircular caps of `radius_m` on its ends.
+    ///
+    /// The straight part is the rectangle the segment spans, and each cap is a
+    /// circle at the segment's end, so the union is exactly the capsule. No
+    /// rectangle covers a capsule, and neither would one drawn at the body's
+    /// bounding extent.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_capsule(
+        &self,
+        grid: &mut CellGrid,
+        viewport: Viewport,
+        center: DVec2,
+        heading_rad: f64,
+        length_m: f64,
+        radius_m: f64,
+        cell: Cell,
+    ) {
+        let (sin, cos) = heading_rad.sin_cos();
+        let forward = DVec2::new(cos, sin);
+        let half_length = length_m * 0.5;
+        self.draw_box(
+            grid,
+            viewport,
+            center,
+            heading_rad,
+            length_m,
+            radius_m * 2.0,
+            cell,
+        );
+        for cap in [1.0, -1.0] {
+            self.draw_circle(
+                grid,
+                viewport,
+                center + forward * (half_length * cap),
+                radius_m,
+                cell,
+            );
         }
     }
 
@@ -526,6 +613,7 @@ mod tests {
     use tangle_model::{BodyKind, CompiledScenario, CrossingId, parse_scenario_source};
     use tangle_present::{
         FrameStatus, Overlays, SafetyOverlay, SceneBody, SceneGeometry, Speed, Viewport,
+        load_scenario,
     };
     use tangle_sim::{
         AgentId, AgentMode, BodySegmentSample, Event, RegionKey, RunConfig, Simulation,
@@ -760,6 +848,53 @@ mod tests {
         assert!(cells.contains(&BODY_GLYPH));
     }
 
+    /// A geometry-only frame over a checked-in version-2 fixture, so a
+    /// facility's band and reference path come from the same source a viewer
+    /// opens.
+    fn facility_frame(viewport: Viewport) -> SceneFrame {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenarios/phase2/inc1/narrow_isolated_straight_v2.json5");
+        let compiled = load_scenario(&path).expect("fixture loads");
+        SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: 0,
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport,
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies: Vec::new(),
+            overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
+        }
+    }
+
+    /// A facility's occupied band and its reference path draw from scene data:
+    /// the band's ring carries the facility glyph and color, and the reference
+    /// polyline the reference glyph and color over the guide-path pass.
+    #[test]
+    fn a_facility_band_and_reference_path_are_rasterized_from_scene_data() {
+        let raster = Rasterizer::new(120, 40);
+        let grid = raster.rasterize(&facility_frame(Viewport::new(DVec2::new(110.0, 0.0), 0.5)));
+        let cells: Vec<(char, Rgb)> = (0..grid.height())
+            .flat_map(|row| (0..grid.width()).map(move |col| (col, row)))
+            .filter_map(|(col, row)| grid.get(i64::from(col), i64::from(row)))
+            .map(|cell| (cell.ch, cell.fg))
+            .collect();
+        assert!(
+            cells.contains(&(FACILITY_GLYPH, FACILITY_COLOR)),
+            "the facility band was not rasterized"
+        );
+        assert!(
+            cells.contains(&(FACILITY_REFERENCE_GLYPH, FACILITY_REFERENCE_COLOR)),
+            "the facility reference path was not rasterized"
+        );
+    }
+
     #[test]
     fn geometry_overlay_can_be_disabled() {
         let raster = Rasterizer::new(120, 40);
@@ -913,5 +1048,44 @@ mod tests {
         // Each segment centre draws its own box at the segment's pose.
         assert!(is_body(&grid, 38, 16), "segment 0 must draw at its pose");
         assert!(is_body(&grid, 42, 16), "segment 1 must draw at its pose");
+    }
+
+    /// A capsule body draws its straight part and both caps: a cell inside a
+    /// cap beyond the straight part carries the body, and the rectangle that
+    /// bounds the capsule fills the box body's corner the cap curves away
+    /// from.
+    #[test]
+    fn a_capsule_body_is_rasterized_as_a_capsule() {
+        let raster = Rasterizer::new(80, 40);
+        // One column is 0.25 m and one row 0.5 m, so a 1 m cap is resolvable.
+        let viewport = Viewport::new(DVec2::ZERO, 0.25);
+        let mut capsule_frame =
+            synthetic_frame(vec![body(0, BodyKind::Capsule, DVec2::ZERO, 6.0, 2.0)]);
+        capsule_frame.viewport = viewport;
+        let capsule = raster.rasterize(&capsule_frame);
+
+        // The straight part: world (2, 0.5) is inside the 6 x 2 rectangle.
+        assert!(is_body(&capsule, 48, 19), "the straight part must draw");
+        // Each cap: world (+-3.75, 0) is 0.75 m beyond the straight part's end
+        // and within the 1 m cap radius, which no rectangle of the reported
+        // length covers.
+        assert!(is_body(&capsule, 55, 20), "the front cap must draw");
+        assert!(is_body(&capsule, 25, 20), "the rear cap must draw");
+
+        // The rectangle bounding the capsule, drawn as a box body of the same
+        // extent, fills the corner world (3.75, 1); the capsule leaves it
+        // empty because the cap curves away from it.
+        let mut bounding_frame =
+            synthetic_frame(vec![body(0, BodyKind::Box, DVec2::ZERO, 8.0, 2.0)]);
+        bounding_frame.viewport = viewport;
+        let bounding = raster.rasterize(&bounding_frame);
+        assert!(
+            is_body(&bounding, 55, 18),
+            "the bounding box fills its corner"
+        );
+        assert!(
+            !is_body(&capsule, 55, 18),
+            "the capsule must not fill the bounding rectangle's corner"
+        );
     }
 }
