@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T02:06:00Z
+updated: 2026-09-13T02:12:00Z
 summary: Slice C2b of Phase 1 Increment 5 adds a `compare` command that pairs two batches run from one common-random-number seed bank and reports per-metric mean differences with a paired confidence interval, disaggregated by mode and movement and linked to both manifests and metric_definition_version 1.
-next: Read TAS-038's aggregation and TAS-039's seed-bank/manifest reference, then implement the paired A/B comparison with a documented paired CI and tests.
 ---
 
 # Outcome
@@ -242,9 +241,95 @@ a pair to enter the statistic) and the paired interval arithmetic.
 
 ## Gates
 
-All five passed on the implementation tree: `cargo test --workspace
---all-features` (537 tests, 0 failures), `cargo clippy --workspace --all-targets
---all-features -- -D warnings` (clean), `cargo fmt --all --check` (clean),
-`./scripts/check-dependency-direction.sh` (`dependency direction OK`), and
-`braintree check nodes` (`graph check: passed`). No file under `tests/golden/`,
-`baselines/`, `scenarios/`, or `schemas/` changed, and `EVENT_VERSION` stays 2.
+All five passed on the implementation tree (`b43745b`), rerun after the commit:
+`cargo test --workspace --all-features` (537 tests, 0 failures),
+`cargo clippy --workspace --all-targets --all-features -- -D warnings` (clean),
+`cargo fmt --all --check` (clean), `./scripts/check-dependency-direction.sh`
+(`dependency direction OK`), and `braintree check nodes` (`graph check: passed
+(70 nodes)`). No file under `tests/golden/`, `baselines/`, `scenarios/`, or
+`schemas/` changed, and `EVENT_VERSION` stays 2.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (implementation in
+`b43745b`), verified by rerunning the five gates on that tree:
+
+1. **`compare` pairs two batches from one seed bank and writes a
+   machine-readable per-metric paired comparison with mean difference and a
+   documented paired confidence interval.** `compare_batches`
+   (`compare.rs:529`) reads the bank and both batches;
+   `PairedDistribution` (`compare.rs:459`) carries `count`,
+   `mean_difference`, `spread`, and `confidence_interval`, computed by
+   `PairedAccumulator::finish` (`compare.rs:1200`) from the per-seed
+   differences; the interval is
+   `ConfidenceInterval::labelled(PAIRED_INTERVAL_METHOD, ..)`
+   (`compare.rs:409`, `aggregate.rs:409`), the two-sided Student-t interval of
+   the differences, and `PairedMethod::v1` records the method, level, `n - 1`
+   denominator, `a - b` difference, table range, and least-seeds rule in the
+   artifact. `main.rs:114` declares the subcommand, `main.rs:648` its arguments,
+   and `main.rs:672` writes the file (default `comparison.json`, `-` for
+   stdout). Asserted by `tests/compare.rs:499` (hand-computed mean difference and
+   interval) and `tests/compare.rs:1394` through the binary.
+2. **The comparison is disaggregated by mode and by movement.**
+   `Comparison.mode_pair_slices` (`compare.rs:714`) is keyed by the `ModePair`
+   label and holds that pair's `minimum_separation_m`; the movement loop
+   (`compare.rs:659`) keys each bucket by the DEF-004 movement key and
+   `ComparedMovementSlice` (`compare.rs:486`) holds the bucket's three
+   interaction metrics with its sorted `movement_keys`. Asserted by
+   `tests/compare.rs:676` (all three mode pairs and the movement bucket key,
+   metrics, and one-seed-only bucket) and by `tests/compare.rs:1394` on two real
+   scenarios with different movements.
+3. **Every comparison links to both run manifests and to
+   `metric_definition_version: 1`.** `ComparedBatch` (`compare.rs:367`) records
+   each side's manifest path, SHA-256, format version, and the bank it recorded;
+   `PairedDistribution` carries `metric_definition_version` and both
+   `a_manifests` and `b_manifests` in `paired_seeds` order, and `ComparedPair`
+   (`compare.rs:394`) records each side's run directory, `manifest_sha256`, and
+   `metrics_sha256`. `check_run` (`compare.rs:869`) refuses a run whose bytes
+   changed, whose metrics link elsewhere, or whose revision differs. Asserted by
+   `tests/compare.rs:897`, which walks every distribution in the artifact and
+   checks the definition version, the unit, both manifest lists against the pair
+   table, and the batch and bank links against the files on disk.
+4. **Unpaired or mismatched inputs (missing seed, bank-hash mismatch, duplicate
+   seed, differing metric availability) are refused, covered by tests.** The
+   bank proof is at `compare.rs:545` (no bank, two banks, a bank file the
+   batches did not record), the order proof at `check_seed_order`
+   (`compare.rs:792`), the run index at `index_runs` (`compare.rs:820`: duplicate
+   seed, missing run, stray run), the artifact guards at `check_run`
+   (`compare.rs:869`), and the metric-set proof at `check_metric_set`
+   (`compare.rs:1045`). Covered by `tests/compare.rs:1064`, `:1130`, `:1186`,
+   `:1270`, and `:1310`.
+5. **The ordering is deterministic, covered by a test.** The pairs follow the
+   seed bank's order, every map is a `BTreeMap`, and `fill_missing`
+   (`compare.rs:1178`) walks the seeds in bank order, so the seed lists are
+   ascending. Asserted by `tests/compare.rs:984`, which compares two batches
+   whose manifests list the same runs in opposite order, checks every key and
+   seed list ascends, and shows the command writes exactly the library's bytes.
+6. **The canonical trace, trace golden, trace hash golden, Phase 1 baseline, and
+   all goldens are unchanged; `EVENT_VERSION` stays 2.** `b43745b` touches only
+   `apps/tangle-cli/src/{aggregate.rs,compare.rs,lib.rs,main.rs}`,
+   `apps/tangle-cli/tests/compare.rs`, and this node; no file under
+   `tests/golden/`, `baselines/`, `scenarios/`, or `schemas/` changed,
+   `EVENT_VERSION` stays 2 (`crates/tangle-sim/src/event.rs:66`),
+   `Cargo.toml`/`Cargo.lock` are unchanged, so no dependency was added, and the
+   `metrics.json`, `aggregation.json`, and `batch.json` shapes are read, not
+   modified. The golden and baseline guards in gate 7 passed.
+7. **The five gates pass on the final tree** (rerun on `b43745b`, 2026-09-13):
+   `cargo test --workspace --all-features` passed with 537 tests and 0 failures;
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings` was
+   clean; `cargo fmt --all --check` was clean;
+   `./scripts/check-dependency-direction.sh` printed `dependency direction OK`;
+   and `braintree check nodes` printed `graph check: passed (70 nodes)`.
+
+Outcome complete: the paired engine, its documented paired interval, the mode
+and movement disaggregation, the manifest and definition-version links, the
+counted unpaired seeds, the deterministic ordering, and the refusal of every
+mis-pairing input are on the committed tree.
+
+## Handoff note
+
+`TAS-031`'s `next` already names this node and its exclusive write set excludes
+the parent, so this worker did not edit it; it was advanced past this node by the
+coordinator before the handoff, so no pointer change is owed. One friction note
+about reusing a resolved sibling's seam by widening visibility (rather than
+duplicating it) is recorded as an `FBK` node.
