@@ -435,13 +435,25 @@ impl ExperimentReport {
     /// Every slice in the report, in [`SLICE_ORDER`] and ascending key order
     /// within a kind, deduplicated across the sections.
     pub fn slices(&self) -> Vec<(SliceKind, String)> {
-        let mut all: BTreeSet<(SliceKind, String)> = BTreeSet::new();
+        let mut by_kind: BTreeMap<SliceKind, BTreeSet<String>> = BTreeMap::new();
         for section in &self.sections {
             for slice in &section.slices {
-                all.insert((slice.slice_kind, slice.slice.clone()));
+                by_kind
+                    .entry(slice.slice_kind)
+                    .or_default()
+                    .insert(slice.slice.clone());
             }
         }
-        all.into_iter().collect()
+        SLICE_ORDER
+            .into_iter()
+            .flat_map(|kind| {
+                by_kind
+                    .remove(&kind)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |key| (kind, key))
+            })
+            .collect()
     }
 }
 
