@@ -229,7 +229,7 @@ fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
             let snapshot = sim.snapshot(SnapshotDetail::Full);
             let agents = snapshot.agents();
             for (index, sample) in agents.iter().enumerate() {
-                let motion = sample.motion.expect("full detail");
+                let motion = sample.motion.as_ref().expect("full detail");
                 let profile = sim
                     .agent_profile(sample.id)
                     .expect("demand vehicle has a profile");
@@ -286,7 +286,7 @@ fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
                 }
                 previous.insert(sample.id.get(), motion.speed_mps);
                 for other in &agents[index + 1..] {
-                    let other_motion = other.motion.expect("full detail");
+                    let other_motion = other.motion.as_ref().expect("full detail");
                     if other_motion.path != motion.path {
                         continue;
                     }
@@ -331,6 +331,7 @@ fn red_light_benchmark_records_reproducible_compliance_decisions() {
             for sample in sim.snapshot(SnapshotDetail::Full).agents() {
                 let decision = sample
                     .motion
+                    .as_ref()
                     .expect("full detail")
                     .decision
                     .expect("signal-controlled vehicle records a decision");
@@ -382,7 +383,7 @@ fn red_light_benchmark_records_reproducible_compliance_decisions() {
         let snapshot = sim.snapshot(SnapshotDetail::Full);
         let agents = snapshot.agents();
         for (index, sample) in agents.iter().enumerate() {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             let profile = sim.agent_profile(sample.id).expect("profile vehicle");
             assert!(
                 motion.speed_mps >= -1e-9 && motion.speed_mps <= profile.desired_speed_mps + 1e-9,
@@ -426,7 +427,7 @@ fn red_light_benchmark_records_reproducible_compliance_decisions() {
             }
             previous.insert(sample.id.get(), motion.path_distance_m);
             for other in &agents[index + 1..] {
-                let other_motion = other.motion.expect("full detail");
+                let other_motion = other.motion.as_ref().expect("full detail");
                 if other_motion.path != motion.path {
                     continue;
                 }

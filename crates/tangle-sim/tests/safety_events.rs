@@ -69,7 +69,7 @@ fn assert_alternates<T: Ord + std::fmt::Debug>(records: &[(T, bool, u64)], what:
 
 /// The body shape an observed sample describes.
 fn body_of(sample: &AgentSample) -> BodyShape {
-    let motion = sample.motion.expect("full detail");
+    let motion = sample.motion.as_ref().expect("full detail");
     match motion.mode {
         AgentMode::Pedestrian => BodyShape::Circle {
             centre: sample.position,
@@ -109,14 +109,14 @@ fn observe(text: &str, seed: u64, ticks: u64) -> Vec<Step> {
             .snapshot(SnapshotDetail::Full)
             .agents()
             .iter()
-            .map(|sample| (sample.id, *sample))
+            .map(|sample| (sample.id, sample.clone()))
             .collect();
         let events: Vec<Event> = sim.step().events().to_vec();
         let after: BTreeMap<AgentId, AgentSample> = sim
             .snapshot(SnapshotDetail::Full)
             .agents()
             .iter()
-            .map(|sample| (sample.id, *sample))
+            .map(|sample| (sample.id, sample.clone()))
             .collect();
         steps.push(Step {
             tick,

@@ -173,7 +173,7 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
         );
         let after = agents(&sim);
         for sample in &after {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             if !(sample.position.is_finite()
                 && sample.heading_rad.is_finite()
                 && motion.speed_mps.is_finite())
@@ -224,7 +224,7 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
             }
             let radius_m = motion.body_length_m * 0.5;
             for other in &after {
-                let other_motion = other.motion.expect("full detail");
+                let other_motion = other.motion.as_ref().expect("full detail");
                 if other_motion.mode != AgentMode::Vehicle {
                     continue;
                 }
@@ -421,7 +421,7 @@ fn the_mixed_yielding_run_reproduces_for_the_same_seed() {
             let events: Vec<Event> = sim.step().events().to_vec();
             let mut frame = format!("{events:?}");
             for sample in agents(&sim) {
-                let motion = sample.motion.expect("full detail");
+                let motion = sample.motion.as_ref().expect("full detail");
                 frame.push_str(&format!(
                     " {}:{:?}:{:.12}:{:?}",
                     sample.id.get(),
@@ -457,7 +457,7 @@ fn a_backward_vehicle_brakes_before_an_occupied_crossing() {
                 .iter()
                 .any(|event| matches!(event, Event::Yielded { yielding: true, .. }));
             for sample in agents(&sim) {
-                let motion = sample.motion.expect("full detail");
+                let motion = sample.motion.as_ref().expect("full detail");
                 if motion.mode != AgentMode::Vehicle
                     || sim.agent_yield_crossing(sample.id).is_none()
                 {

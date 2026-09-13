@@ -5,7 +5,7 @@
 //! kernel.
 
 use glam::DVec2;
-use tangle_model::{CrossingId, MovementId, PathId, PedestrianRouteId};
+use tangle_model::{BodyKind, CrossingId, MovementId, PathId, PedestrianRouteId};
 
 use crate::agent::{AgentId, AgentMode};
 use crate::compliance::ComplianceDecision;
@@ -25,9 +25,29 @@ pub enum SnapshotDetail {
     Full,
 }
 
-/// Motion and route detail for one agent, present at [`SnapshotDetail::Full`].
+/// One body segment's world pose, ordered front to back within its body.
+///
+/// A Phase 1 body is a single envelope, so its segment list is empty; an
+/// articulated chain later fills one pose per segment in chain order. The pose
+/// is the segment's own centre and heading, which a sweep or a renderer reads
+/// without re-deriving it from the body and the path.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodySegmentSample {
+    /// Segment centre in world metres.
+    pub position: DVec2,
+    /// Segment heading in world radians.
+    pub heading_rad: f64,
+}
+
+/// Motion and route detail for one agent, present at [`SnapshotDetail::Full`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct MotionSample {
+    /// Envelope kind of this body, so a consumer draws a box, a circle, or a
+    /// segmented chain without re-deriving it from the mode.
+    pub body_kind: BodyKind,
+    /// Ordered body segments front to back, each with its own world pose. Empty
+    /// for a Phase 1 single-envelope body.
+    pub segments: Vec<BodySegmentSample>,
     /// Whether this body is a vehicle or a pedestrian. A pedestrian body is a
     /// circle inscribed in the reported body bounds.
     pub mode: AgentMode,
@@ -68,7 +88,7 @@ pub struct MotionSample {
 }
 
 /// One agent as observed at a single instant.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentSample {
     /// Stable agent identifier.
     pub id: AgentId,

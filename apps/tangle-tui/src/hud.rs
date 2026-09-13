@@ -285,6 +285,8 @@ mod tests {
             length_m: 4.0,
             width_m: 2.0,
             mode: tangle_sim::AgentMode::Vehicle,
+            body_kind: tangle_sim::AgentMode::Vehicle.body_kind(),
+            segments: Vec::new(),
             speed_mps: Some(0.0),
             path: Some(PathId::from_index(0)),
             path_distance_m: Some(30.0),

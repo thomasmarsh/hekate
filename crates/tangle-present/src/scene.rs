@@ -9,10 +9,12 @@ use std::sync::Arc;
 
 use glam::DVec2;
 use tangle_model::{
-    BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, MovementId, PathId, PortalId,
-    RegionId, RuleId, RuleKind, SignalId,
+    BodyKind, BoundaryId, CompiledScenario, ConflictRegionId, CrossingId, MovementId, PathId,
+    PortalId, RegionId, RuleId, RuleKind, SignalId,
 };
-use tangle_sim::{AgentMode, AgentSample, ComplianceDecision, RegionKey, VehicleProfile};
+use tangle_sim::{
+    AgentMode, AgentSample, BodySegmentSample, ComplianceDecision, RegionKey, VehicleProfile,
+};
 
 use crate::clock::Speed;
 use crate::safety::SafetyOverlay;
@@ -626,7 +628,7 @@ impl SceneGeometry {
 }
 
 /// One agent projected into the scene, with interpolation already applied.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SceneBody {
     /// Stable kernel identifier.
     pub id: usize,
@@ -643,6 +645,13 @@ pub struct SceneBody {
     /// carries no mode, and such a body reads as a vehicle, the same fallback
     /// its body dimensions use.
     pub mode: AgentMode,
+    /// Envelope kind of the body: a vehicle is an oriented box, a pedestrian a
+    /// circle. A snapshot without motion detail reads as a box, matching the
+    /// vehicle fallback [`Self::mode`] and the body dimensions use.
+    pub body_kind: BodyKind,
+    /// Ordered body segments front to back, each with its own interpolated
+    /// world pose. Empty for a Phase 1 single-envelope body.
+    pub segments: Vec<BodySegmentSample>,
     /// Longitudinal speed in metres per second, when known.
     pub speed_mps: Option<f64>,
     /// The guide path the body follows, when known.
@@ -665,8 +674,8 @@ impl SceneBody {
     /// Project a kernel sample, interpolating from its previous position.
     pub fn project(previous: &[AgentSample], sample: &AgentSample, alpha: f64) -> Self {
         let (position, heading_rad) = interpolate(previous, sample, alpha);
-        let (length_m, width_m) = sample
-            .motion
+        let motion = sample.motion.as_ref();
+        let (length_m, width_m) = motion
             .map_or((DEFAULT_BODY_LENGTH_M, DEFAULT_BODY_WIDTH_M), |motion| {
                 (motion.body_length_m, motion.body_width_m)
             });
@@ -676,16 +685,48 @@ impl SceneBody {
             heading_rad,
             length_m,
             width_m,
-            mode: sample
-                .motion
-                .map_or(AgentMode::Vehicle, |motion| motion.mode),
-            speed_mps: sample.motion.map(|motion| motion.speed_mps),
-            path: sample.motion.map(|motion| motion.path),
-            path_distance_m: sample.motion.map(|motion| motion.path_distance_m),
-            route: sample.motion.and_then(|motion| motion.route),
-            profile: sample.motion.and_then(|motion| motion.profile),
-            decision: sample.motion.and_then(|motion| motion.decision),
+            mode: motion.map_or(AgentMode::Vehicle, |motion| motion.mode),
+            body_kind: motion.map_or(BodyKind::Box, |motion| motion.body_kind),
+            segments: project_segments(previous, sample, alpha),
+            speed_mps: motion.map(|motion| motion.speed_mps),
+            path: motion.map(|motion| motion.path),
+            path_distance_m: motion.map(|motion| motion.path_distance_m),
+            route: motion.and_then(|motion| motion.route),
+            profile: motion.and_then(|motion| motion.profile),
+            decision: motion.and_then(|motion| motion.decision),
         }
+    }
+}
+
+/// Interpolate each body segment's world pose from its previous state.
+///
+/// A segment is matched to the prior state by its position in the ordered
+/// chain. When the chain changed length — a body just spawned or reconfigured —
+/// there is no counterpart to blend, so the current poses are used unchanged.
+fn project_segments(
+    previous: &[AgentSample],
+    sample: &AgentSample,
+    alpha: f64,
+) -> Vec<BodySegmentSample> {
+    let Some(motion) = sample.motion.as_ref() else {
+        return Vec::new();
+    };
+    let prior = previous
+        .iter()
+        .find(|prior| prior.id == sample.id)
+        .and_then(|prior| prior.motion.as_ref())
+        .filter(|prior| prior.segments.len() == motion.segments.len());
+    match prior {
+        Some(prior) if alpha > 0.0 => motion
+            .segments
+            .iter()
+            .zip(&prior.segments)
+            .map(|(current, prior)| BodySegmentSample {
+                position: prior.position.lerp(current.position, alpha),
+                heading_rad: lerp_angle(prior.heading_rad, current.heading_rad, alpha),
+            })
+            .collect(),
+        _ => motion.segments.clone(),
     }
 }
 
@@ -954,6 +995,56 @@ mod tests {
         assert_eq!(body.length_m, DEFAULT_BODY_LENGTH_M);
     }
 
+    /// Every projected body carries its envelope kind: a Phase 1 vehicle is a
+    /// box and a pedestrian a circle, and a Phase 1 single envelope carries no
+    /// ordered segments.
+    #[test]
+    fn a_body_projects_the_body_kind_and_no_phase1_segments() {
+        let vehicle = SceneBody::project(&[], &sample(0, AgentMode::Vehicle), 0.0);
+        assert_eq!(vehicle.body_kind, BodyKind::Box);
+        assert!(vehicle.segments.is_empty());
+
+        let pedestrian = SceneBody::project(&[], &sample(1, AgentMode::Pedestrian), 0.0);
+        assert_eq!(pedestrian.body_kind, BodyKind::Circle);
+        assert!(pedestrian.segments.is_empty());
+
+        // A snapshot without motion detail falls back to the vehicle box, the
+        // same fallback its mode and dimensions use.
+        let coarse = AgentSample {
+            motion: None,
+            ..sample(2, AgentMode::Pedestrian)
+        };
+        assert_eq!(
+            SceneBody::project(&[], &coarse, 0.0).body_kind,
+            BodyKind::Box
+        );
+    }
+
+    /// A segment's world pose is blended from the prior frame at the same
+    /// position in the ordered chain.
+    #[test]
+    fn segment_poses_interpolate_from_the_previous_frame() {
+        let mut before = sample(0, AgentMode::Vehicle);
+        let mut after = sample(0, AgentMode::Vehicle);
+        before.motion.as_mut().expect("motion").segments = vec![BodySegmentSample {
+            position: DVec2::ZERO,
+            heading_rad: 0.0,
+        }];
+        after.motion.as_mut().expect("motion").segments = vec![BodySegmentSample {
+            position: DVec2::new(10.0, 0.0),
+            heading_rad: 1.0,
+        }];
+
+        let body = SceneBody::project(std::slice::from_ref(&before), &after, 0.5);
+        assert_eq!(
+            body.segments,
+            vec![BodySegmentSample {
+                position: DVec2::new(5.0, 0.0),
+                heading_rad: 0.5,
+            }]
+        );
+    }
+
     /// One observed sample with motion detail, so a body projects a mode.
     fn sample(id: usize, mode: AgentMode) -> AgentSample {
         use tangle_sim::MotionSample;
@@ -962,6 +1053,8 @@ mod tests {
             position: DVec2::ZERO,
             heading_rad: 0.0,
             motion: Some(MotionSample {
+                body_kind: mode.body_kind(),
+                segments: Vec::new(),
                 mode,
                 speed_mps: 1.0,
                 path: PathId::from_index(0),

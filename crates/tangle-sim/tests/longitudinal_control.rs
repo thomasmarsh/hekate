@@ -93,7 +93,7 @@ fn run_to(sim: &mut Simulation, tick: u64) -> Vec<(u32, f64, f64, f64)> {
         .agents()
         .iter()
         .map(|agent| {
-            let motion = agent.motion.expect("full detail");
+            let motion = agent.motion.as_ref().expect("full detail");
             (
                 agent.id.get(),
                 motion.path_distance_m,
@@ -181,7 +181,7 @@ fn a_green_signal_releases_the_queue_and_the_vehicles_exit() {
     let agents = sim.snapshot(SnapshotDetail::Full).agents().to_vec();
     let beyond = agents
         .iter()
-        .filter(|agent| agent.motion.expect("full detail").path_distance_m > stop_line_m)
+        .filter(|agent| agent.motion.as_ref().expect("full detail").path_distance_m > stop_line_m)
         .count();
     assert!(beyond > 0, "no vehicle crossed the stop line on green");
 
@@ -209,7 +209,8 @@ fn a_free_flowing_vehicle_reaches_and_exits_the_path_end() {
             }
         }
         for agent in sim.snapshot(SnapshotDetail::Full).agents() {
-            max_distance = max_distance.max(agent.motion.expect("full detail").path_distance_m);
+            max_distance =
+                max_distance.max(agent.motion.as_ref().expect("full detail").path_distance_m);
         }
     }
     assert!(max_distance > 70.0, "free flow stalled at {max_distance} m");
@@ -228,7 +229,7 @@ fn control_and_signal_state_are_reproducible_for_a_seed() {
                 .agents()
                 .iter()
                 .map(|agent| {
-                    let motion = agent.motion.expect("full detail");
+                    let motion = agent.motion.as_ref().expect("full detail");
                     format!(
                         "{}:{:.6}:{:.6}",
                         agent.id.get(),
@@ -264,7 +265,7 @@ fn every_vehicle_keeps_its_sampled_profile_speed_bound() {
     for _ in 0..700 {
         sim.step();
         for agent in sim.snapshot(SnapshotDetail::Full).agents() {
-            let motion = agent.motion.expect("full detail");
+            let motion = agent.motion.as_ref().expect("full detail");
             assert_eq!(sim.agent_profile(agent.id), Some(expected));
             assert!(
                 motion.speed_mps >= -1e-9 && motion.speed_mps <= expected.desired_speed_mps + 1e-9,

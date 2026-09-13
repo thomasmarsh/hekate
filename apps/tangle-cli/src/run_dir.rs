@@ -55,11 +55,13 @@ use crate::trajectories::{
 
 /// Version of the run manifest format.
 ///
-/// Version 2 adds the normalized version-2 hash and the migration version to the
-/// scenario provenance ([`ScenarioProvenance`]), so a manifest attributes a run
-/// to a source, a migration, or the kernel. Version 1 manifests omit both
-/// fields.
-pub const RUN_MANIFEST_VERSION: u32 = 2;
+/// Version 3 records the trajectory artifact's column-shape version in its
+/// descriptor, so a reader knows which trajectory columns to expect before it
+/// opens the Parquet file. Version 2 adds the normalized version-2 hash and the
+/// migration version to the scenario provenance ([`ScenarioProvenance`]), so a
+/// manifest attributes a run to a source, a migration, or the kernel. Version 1
+/// manifests omit all of those fields.
+pub const RUN_MANIFEST_VERSION: u32 = 3;
 
 /// Version of the run summary format.
 pub const RUN_SUMMARY_VERSION: u32 = 1;

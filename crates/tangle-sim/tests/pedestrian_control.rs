@@ -224,8 +224,8 @@ fn pedestrians(sim: &Simulation) -> Vec<AgentSample> {
     sim.snapshot(SnapshotDetail::Full)
         .agents()
         .iter()
-        .filter(|sample| sample.motion.expect("full detail").mode == AgentMode::Pedestrian)
-        .copied()
+        .filter(|sample| sample.motion.as_ref().expect("full detail").mode == AgentMode::Pedestrian)
+        .cloned()
         .collect()
 }
 
@@ -365,7 +365,7 @@ fn the_waypoint_cursor_only_moves_forward_and_reaches_the_exit() {
     for _ in 0..2000 {
         sim.step();
         for sample in pedestrians(&sim) {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             if motion.pedestrian_route != Some(PedestrianRouteId::from_index(0)) {
                 continue;
             }
@@ -410,7 +410,7 @@ fn steering_stays_within_the_documented_bounds() {
             cap_steps += 1;
         }
         for sample in pedestrians(&sim) {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             let desired_speed_mps = sim
                 .agent_pedestrian_profile(sample.id)
                 .expect("a demand pedestrian has a profile")
@@ -473,7 +473,7 @@ fn a_pedestrian_steers_around_a_vehicle_that_shares_its_path() {
         let snapshot = sim.snapshot(SnapshotDetail::Full);
         let agents: Vec<AgentSample> = snapshot.agents().to_vec();
         for sample in &agents {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             if motion.mode != AgentMode::Pedestrian {
                 continue;
             }
@@ -483,7 +483,7 @@ fn a_pedestrian_steers_around_a_vehicle_that_shares_its_path() {
             maximum_lateral_offset_m = maximum_lateral_offset_m.max(sample.position.x.abs());
             let radius_m = motion.body_length_m * 0.5;
             for other in &agents {
-                let other_motion = other.motion.expect("full detail");
+                let other_motion = other.motion.as_ref().expect("full detail");
                 match other_motion.mode {
                     AgentMode::Vehicle => {
                         minimum_clearance_m = minimum_clearance_m.min(circle_box_clearance(
@@ -560,10 +560,10 @@ fn pedestrians_pass_each_other_without_overlapping_or_teleporting() {
             }
         }
         for (index, sample) in after.iter().enumerate() {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             let radius_m = motion.body_length_m * 0.5;
             for other in &after[index + 1..] {
-                let other_motion = other.motion.expect("full detail");
+                let other_motion = other.motion.as_ref().expect("full detail");
                 if other_motion.path != motion.path {
                     continue;
                 }
@@ -609,7 +609,7 @@ fn a_same_speed_pedestrian_queue_keeps_its_admission_spacing() {
     let agents = pedestrians(&sim);
     assert!(agents.len() > 3, "the saturated queue must be populated");
     for (index, sample) in agents.iter().enumerate() {
-        let motion = sample.motion.expect("full detail");
+        let motion = sample.motion.as_ref().expect("full detail");
         assert!(
             (motion.speed_mps - 1.25).abs() < 1e-9,
             "a queued pedestrian left its sampled speed: {}",
@@ -617,7 +617,7 @@ fn a_same_speed_pedestrian_queue_keeps_its_admission_spacing() {
         );
         assert!(sample.position.x.abs() < 1e-9, "no lateral deviation");
         for other in &agents[index + 1..] {
-            let other_motion = other.motion.expect("full detail");
+            let other_motion = other.motion.as_ref().expect("full detail");
             if other_motion.path != motion.path {
                 continue;
             }
@@ -640,7 +640,7 @@ fn a_pedestrian_only_reacts_to_bodies_within_its_sense_radius() {
         let before = pedestrians(&sim);
         sim.step();
         for sample in pedestrians(&sim) {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             let Some(previous) = before.iter().find(|prior| prior.id == sample.id) else {
                 continue;
             };
@@ -679,7 +679,7 @@ fn the_pedestrian_crossing_benchmark_completes_without_tunnelling_or_nan() {
             sim.step();
             let after = sim.snapshot(SnapshotDetail::Full);
             for sample in after.agents() {
-                let motion = sample.motion.expect("full detail");
+                let motion = sample.motion.as_ref().expect("full detail");
                 if motion.mode != AgentMode::Pedestrian {
                     continue;
                 }
@@ -704,7 +704,7 @@ fn the_pedestrian_crossing_benchmark_completes_without_tunnelling_or_nan() {
                     );
                 }
                 for other in after.agents() {
-                    let other_motion = other.motion.expect("full detail");
+                    let other_motion = other.motion.as_ref().expect("full detail");
                     if other_motion.mode == AgentMode::Pedestrian {
                         if other.id <= sample.id {
                             continue;
@@ -806,7 +806,7 @@ fn the_pedestrian_controller_reproduces_a_run_for_the_same_seed() {
         for _ in 0..600 {
             let mut frame = String::new();
             for sample in pedestrians(&sim) {
-                let motion = sample.motion.expect("full detail");
+                let motion = sample.motion.as_ref().expect("full detail");
                 let target = sim
                     .pedestrian_waypoint(sample.id)
                     .expect("a live pedestrian has a target");

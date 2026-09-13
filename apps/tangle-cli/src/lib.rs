@@ -90,8 +90,8 @@ pub use trace::{
     canonical_trace,
 };
 pub use trajectories::{
-    TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryArtifact, TrajectoryError, TrajectoryRecorder,
-    TrajectorySample, read_trajectories, write_trajectories,
+    TRAJECTORY_FILE, TRAJECTORY_FORMAT, TRAJECTORY_FORMAT_VERSION, TrajectoryArtifact,
+    TrajectoryError, TrajectoryRecorder, TrajectorySample, read_trajectories, write_trajectories,
 };
 pub use validate::{ValidationSummary, render_validation_failure, validate_scenario};
 

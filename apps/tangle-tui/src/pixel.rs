@@ -542,6 +542,8 @@ mod tests {
             length_m: 4.5,
             width_m: 1.8,
             mode: AgentMode::Vehicle,
+            body_kind: AgentMode::Vehicle.body_kind(),
+            segments: Vec::new(),
             speed_mps: Some(0.0),
             path: None,
             path_distance_m: None,

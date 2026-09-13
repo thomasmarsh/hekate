@@ -79,7 +79,7 @@ fn agents(sim: &Simulation) -> Vec<AgentSample> {
 
 /// Four corners of an oriented box body in world metres.
 fn box_corners(sample: &AgentSample) -> Vec<DVec2> {
-    let motion = sample.motion.expect("full detail");
+    let motion = sample.motion.as_ref().expect("full detail");
     let (sin, cos) = sample.heading_rad.sin_cos();
     [
         (-motion.body_length_m * 0.5, -motion.body_width_m * 0.5),
@@ -194,8 +194,8 @@ fn box_projection(sample: &AgentSample, axis: DVec2) -> (f64, f64) {
 /// Exact distance in metres between two disjoint oriented box bodies, via
 /// clamping each box's vertices onto the other box.
 fn vertex_box_distance(first: &AgentSample, second: &AgentSample) -> f64 {
-    let first_motion = first.motion.expect("full detail");
-    let second_motion = second.motion.expect("full detail");
+    let first_motion = first.motion.as_ref().expect("full detail");
+    let second_motion = second.motion.as_ref().expect("full detail");
     let mut clearance_m = f64::INFINITY;
     for corner in box_corners(first) {
         clearance_m = clearance_m.min(point_to_box(
@@ -223,8 +223,8 @@ fn vertex_box_distance(first: &AgentSample, second: &AgentSample) -> f64 {
 /// A pedestrian body is a circle of its reported radius, a vehicle body an
 /// oriented box of its reported length and width.
 fn pair_clearance_m(first: &AgentSample, second: &AgentSample) -> f64 {
-    let first_motion = first.motion.expect("full detail");
-    let second_motion = second.motion.expect("full detail");
+    let first_motion = first.motion.as_ref().expect("full detail");
+    let second_motion = second.motion.as_ref().expect("full detail");
     match (first_motion.mode, second_motion.mode) {
         (AgentMode::Pedestrian, AgentMode::Pedestrian) => {
             (second.position - first.position).length()
@@ -462,10 +462,10 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
 
         let has_vehicle = after
             .iter()
-            .any(|sample| sample.motion.expect("full detail").mode == AgentMode::Vehicle);
-        let has_pedestrian = after
-            .iter()
-            .any(|sample| sample.motion.expect("full detail").mode == AgentMode::Pedestrian);
+            .any(|sample| sample.motion.as_ref().expect("full detail").mode == AgentMode::Vehicle);
+        let has_pedestrian = after.iter().any(|sample| {
+            sample.motion.as_ref().expect("full detail").mode == AgentMode::Pedestrian
+        });
         report.saw_both_modes_in_one_frame |= has_vehicle && has_pedestrian;
 
         // Yielding is recomputed before the step integrates; both the pre-step
@@ -483,7 +483,7 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
         }
 
         for (index, sample) in after.iter().enumerate() {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             if !(sample.position.is_finite()
                 && sample.heading_rad.is_finite()
                 && motion.speed_mps.is_finite())
@@ -508,7 +508,7 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
                 }
             }
             for other in &after[index + 1..] {
-                let other_motion = other.motion.expect("full detail");
+                let other_motion = other.motion.as_ref().expect("full detail");
                 let clearance_m = pair_clearance_m(sample, other);
                 match (motion.mode, other_motion.mode) {
                     (AgentMode::Pedestrian, AgentMode::Pedestrian) => report
@@ -540,8 +540,8 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
                 } else {
                     (other, sample)
                 };
-                let pedestrian_motion = pedestrian.motion.expect("full detail");
-                let vehicle_motion = vehicle.motion.expect("full detail");
+                let pedestrian_motion = pedestrian.motion.as_ref().expect("full detail");
+                let vehicle_motion = vehicle.motion.as_ref().expect("full detail");
                 let (Some(prior_pedestrian), Some(prior_vehicle)) = (
                     before.iter().find(|prior| prior.id == pedestrian.id),
                     before.iter().find(|prior| prior.id == vehicle.id),
@@ -579,7 +579,7 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
 
     report.live_pedestrians = agents(&sim)
         .iter()
-        .filter(|sample| sample.motion.expect("full detail").mode == AgentMode::Pedestrian)
+        .filter(|sample| sample.motion.as_ref().expect("full detail").mode == AgentMode::Pedestrian)
         .map(|sample| sample.id.get())
         .collect();
     let summary = sim.finish();
@@ -603,7 +603,7 @@ fn pedestrian_occupies_crossing(
         return false;
     };
     frame.iter().any(|sample| {
-        let motion = sample.motion.expect("full detail");
+        let motion = sample.motion.as_ref().expect("full detail");
         motion.mode == AgentMode::Pedestrian
             && circle_overlaps_ring(ring, sample.position, motion.body_length_m * 0.5)
     })
@@ -635,6 +635,8 @@ fn vehicle_sample(
         position,
         heading_rad,
         motion: Some(MotionSample {
+            body_kind: AgentMode::Vehicle.body_kind(),
+            segments: Vec::new(),
             mode: AgentMode::Vehicle,
             speed_mps: 0.0,
             path: PathId::from_index(0),
@@ -888,7 +890,7 @@ fn the_mixed_benchmark_reproduces_for_the_same_seed() {
             let events: Vec<Event> = sim.step().events().to_vec();
             let mut frame = format!("{events:?}");
             for sample in agents(&sim) {
-                let motion = sample.motion.expect("full detail");
+                let motion = sample.motion.as_ref().expect("full detail");
                 frame.push_str(&format!(
                     " {}:{:?}:{:?}:{:.12}:{:.12}:{:?}",
                     sample.id.get(),

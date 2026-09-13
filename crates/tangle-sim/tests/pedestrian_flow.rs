@@ -234,7 +234,7 @@ fn pedestrian_demand_generates_pedestrians_instead_of_the_static_population() {
         .iter()
         .find(|sample| sample.id == agent)
         .expect("the pedestrian is alive");
-    let motion = sample.motion.expect("full detail");
+    let motion = sample.motion.as_ref().expect("full detail");
     assert_eq!(motion.mode, AgentMode::Pedestrian);
     assert!((motion.body_length_m - 0.5).abs() < 1e-9);
     assert!((motion.body_width_m - 0.5).abs() < 1e-9);
@@ -406,10 +406,10 @@ fn pedestrian_admission_never_overlaps_two_pedestrians() {
         let snapshot = sim.snapshot(SnapshotDetail::Full);
         let agents = snapshot.agents();
         for (index, first) in agents.iter().enumerate() {
-            let first_motion = first.motion.expect("full detail");
+            let first_motion = first.motion.as_ref().expect("full detail");
             assert_eq!(first_motion.mode, AgentMode::Pedestrian);
             for second in &agents[index + 1..] {
-                let second_motion = second.motion.expect("full detail");
+                let second_motion = second.motion.as_ref().expect("full detail");
                 if first_motion.path != second_motion.path {
                     continue;
                 }
@@ -507,7 +507,7 @@ fn both_modes_share_one_store_snapshot_and_event_stream() {
     let modes: Vec<AgentMode> = snapshot
         .agents()
         .iter()
-        .map(|sample| sample.motion.expect("full detail").mode)
+        .map(|sample| sample.motion.as_ref().expect("full detail").mode)
         .collect();
     assert!(modes.contains(&AgentMode::Vehicle));
     assert!(modes.contains(&AgentMode::Pedestrian));
@@ -571,7 +571,7 @@ fn sampled_distance_opt(sim: &Simulation, agent: AgentId) -> Option<f64> {
         .agents()
         .iter()
         .find(|sample| sample.id == agent)
-        .map(|sample| sample.motion.expect("full detail").path_distance_m)
+        .map(|sample| sample.motion.as_ref().expect("full detail").path_distance_m)
 }
 
 fn sampled_distance(sim: &Simulation, agent: AgentId) -> f64 {

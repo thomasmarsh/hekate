@@ -22,8 +22,9 @@ use tangle_cli::{
     EVENT_STREAM_FILE, EventRetention, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE,
     RUN_MANIFEST_VERSION, RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest,
     RunMetrics, RunSummary, SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy,
-    ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryRetention, TrajectorySample,
-    canonical_run, canonical_run_captured, load_scenario_provenance, write_run_directory,
+    ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT, TRAJECTORY_FORMAT_VERSION,
+    TrajectoryRetention, TrajectorySample, canonical_run, canonical_run_captured,
+    load_scenario_provenance, write_run_directory,
 };
 use tangle_sim::{EVENT_VERSION, RunConfig};
 
@@ -287,6 +288,7 @@ fn manifest_records_the_provenance_a_rerun_needs() {
         .expect("the default policy writes trajectories");
     assert_eq!(trajectories.path, TRAJECTORY_FILE);
     assert_eq!(trajectories.format, TRAJECTORY_FORMAT);
+    assert_eq!(trajectories.format_version, TRAJECTORY_FORMAT_VERSION);
     assert_eq!(trajectories.rows, 68);
     assert_eq!(trajectories.sha256.len(), 64);
 

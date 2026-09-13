@@ -129,6 +129,8 @@ fn measure_dense<W: Write>(
                 length_m: 2.6,
                 width_m: 1.2,
                 mode: AgentMode::Vehicle,
+                body_kind: AgentMode::Vehicle.body_kind(),
+                segments: Vec::new(),
                 speed_mps: Some(6.0),
                 path: None,
                 path_distance_m: None,

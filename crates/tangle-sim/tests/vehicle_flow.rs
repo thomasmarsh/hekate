@@ -209,9 +209,9 @@ fn safe_admission_never_overlaps_two_vehicles() {
         let snapshot = sim.snapshot(SnapshotDetail::Full);
         let agents = snapshot.agents();
         for (index, first) in agents.iter().enumerate() {
-            let first_motion = first.motion.expect("full detail");
+            let first_motion = first.motion.as_ref().expect("full detail");
             for second in &agents[index + 1..] {
-                let second_motion = second.motion.expect("full detail");
+                let second_motion = second.motion.as_ref().expect("full detail");
                 if first_motion.path != second_motion.path {
                     continue;
                 }
@@ -409,5 +409,5 @@ fn a_movement_that_enters_at_the_path_end_travels_backward() {
         .iter()
         .find(|sample| sample.id == agent)
         .expect("vehicle alive one tick after entry");
-    assert!(sample.motion.expect("full detail").path_distance_m < 80.0);
+    assert!(sample.motion.as_ref().expect("full detail").path_distance_m < 80.0);
 }

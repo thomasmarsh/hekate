@@ -2,8 +2,8 @@
 //!
 //! The run directory's trajectory artifact is the per-agent motion record a
 //! consumer plots or aggregates: one row per sampled agent frame, holding the
-//! agent's mode, world position, heading, and longitudinal speed at one
-//! completed tick.
+//! agent's mode, body kind, world position, heading, longitudinal speed, and
+//! ordered body-segment poses at one completed tick.
 //!
 //! Sampling is what bounds the artifact. The declared
 //! [`TrajectorySampling`] policy fixes the stride between sampled ticks and the
@@ -20,17 +20,21 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use arrow_array::builder::{Float64Builder, ListBuilder, StructBuilder};
 use arrow_array::{
-    Array, ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array,
+    Array, ArrayRef, Float64Array, ListArray, RecordBatch, StringArray, StructArray, UInt32Array,
+    UInt64Array,
 };
-use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
+use arrow_schema::{ArrowError, DataType, Field, Fields, Schema, SchemaRef};
+use glam::DVec2;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Compression;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use tangle_sim::{Simulation, SnapshotDetail};
+use tangle_model::BodyKind;
+use tangle_sim::{BodySegmentSample, Simulation, SnapshotDetail};
 
 use crate::run_dir::TrajectorySampling;
 use crate::trace::sha256_hex;
@@ -41,20 +45,53 @@ pub const TRAJECTORY_FILE: &str = "trajectories.parquet";
 /// File format [`TRAJECTORY_FILE`] uses.
 pub const TRAJECTORY_FORMAT: &str = "parquet";
 
+/// Version of the sampled-trajectory artifact's column shape.
+///
+/// Version 2 adds `body_kind` and the ordered `segments` pose list, so a run
+/// directory's trajectories describe every body's envelope rather than only its
+/// mode. Version 1 was the seven columns `tick`, `agent`, `mode`, `x_m`, `y_m`,
+/// `heading_rad`, and `speed_mps`.
+pub const TRAJECTORY_FORMAT_VERSION: u32 = 2;
+
 /// The trajectory columns, in schema and declaration order.
 ///
 /// One row is one sampled agent frame. The order is part of the artifact
 /// contract: a consumer that reads by position and one that reads by name see
 /// the same record. Units are spelled into the names, as the event records do.
-const TRAJECTORY_COLUMNS: [(&str, DataType); 7] = [
-    ("tick", DataType::UInt64),
-    ("agent", DataType::UInt32),
-    ("mode", DataType::Utf8),
-    ("x_m", DataType::Float64),
-    ("y_m", DataType::Float64),
-    ("heading_rad", DataType::Float64),
-    ("speed_mps", DataType::Float64),
-];
+/// `segments` is an ordered list of `{x_m, y_m, heading_rad}` poses, empty for a
+/// Phase 1 single-envelope body and never null.
+fn trajectory_columns() -> Vec<(&'static str, DataType)> {
+    vec![
+        ("tick", DataType::UInt64),
+        ("agent", DataType::UInt32),
+        ("mode", DataType::Utf8),
+        ("body_kind", DataType::Utf8),
+        ("x_m", DataType::Float64),
+        ("y_m", DataType::Float64),
+        ("heading_rad", DataType::Float64),
+        ("speed_mps", DataType::Float64),
+        ("segments", segments_data_type()),
+    ]
+}
+
+/// The Arrow type of one row's ordered body-segment poses.
+fn segments_data_type() -> DataType {
+    DataType::List(Arc::new(segment_item_field()))
+}
+
+/// The item field of the `segments` list: one body-segment pose.
+fn segment_item_field() -> Field {
+    Field::new("item", DataType::Struct(segment_fields()), false)
+}
+
+/// The fields of one body-segment pose, in declaration order.
+fn segment_fields() -> Fields {
+    Fields::from(vec![
+        Field::new("x_m", DataType::Float64, false),
+        Field::new("y_m", DataType::Float64, false),
+        Field::new("heading_rad", DataType::Float64, false),
+    ])
+}
 
 /// One sampled trajectory row: one agent observed at one completed step.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +102,8 @@ pub struct TrajectorySample {
     pub agent: u32,
     /// Agent mode label, matching the `spawned` event's `mode` field.
     pub mode: String,
+    /// Envelope kind of the body, the same kind the snapshot and scene carry.
+    pub body_kind: BodyKind,
     /// World position east of the origin in metres.
     pub x_m: f64,
     /// World position north of the origin in metres.
@@ -73,6 +112,9 @@ pub struct TrajectorySample {
     pub heading_rad: f64,
     /// Longitudinal speed in metres per second.
     pub speed_mps: f64,
+    /// Ordered body segments front to back, each with its own world pose. Empty
+    /// for a Phase 1 single-envelope body.
+    pub segments: Vec<BodySegmentSample>,
 }
 
 /// The Parquet sampled-trajectory artifact a manifest describes.
@@ -87,6 +129,8 @@ pub struct TrajectoryArtifact {
     pub path: String,
     /// File format.
     pub format: String,
+    /// Column-shape version of the artifact, [`TRAJECTORY_FORMAT_VERSION`].
+    pub format_version: u32,
     /// Rows the artifact holds, one per sampled agent frame.
     pub rows: u64,
     /// SHA-256 of the file's exact bytes.
@@ -173,15 +217,18 @@ impl TrajectoryRecorder {
             }
             let motion = sample
                 .motion
+                .as_ref()
                 .expect("a full snapshot detail carries motion");
             self.samples.push(TrajectorySample {
                 tick,
                 agent: sample.id.get(),
                 mode: motion.mode.label().to_owned(),
+                body_kind: motion.body_kind,
                 x_m: sample.position.x,
                 y_m: sample.position.y,
                 heading_rad: sample.heading_rad,
                 speed_mps: motion.speed_mps,
+                segments: motion.segments.clone(),
             });
         }
     }
@@ -233,6 +280,7 @@ pub fn write_trajectories(
     Ok(TrajectoryArtifact {
         path: TRAJECTORY_FILE.to_owned(),
         format: TRAJECTORY_FORMAT.to_owned(),
+        format_version: TRAJECTORY_FORMAT_VERSION,
         rows: samples.len() as u64,
         sha256: sha256_hex(&bytes),
     })
@@ -269,12 +317,12 @@ pub fn read_trajectories(directory: &Path) -> Result<Vec<TrajectorySample>, Traj
     Ok(samples)
 }
 
-/// The artifact's Arrow schema, built from [`TRAJECTORY_COLUMNS`].
+/// The artifact's Arrow schema, built from [`trajectory_columns`].
 fn trajectory_schema() -> SchemaRef {
     Arc::new(Schema::new(
-        TRAJECTORY_COLUMNS
-            .iter()
-            .map(|(name, data_type)| Field::new(*name, data_type.clone(), false))
+        trajectory_columns()
+            .into_iter()
+            .map(|(name, data_type)| Field::new(name, data_type, false))
             .collect::<Vec<_>>(),
     ))
 }
@@ -294,6 +342,9 @@ fn record_batch(schema: &SchemaRef, samples: &[TrajectorySample]) -> RecordBatch
         Arc::new(StringArray::from_iter_values(
             samples.iter().map(|sample| sample.mode.as_str()),
         )),
+        Arc::new(StringArray::from_iter_values(
+            samples.iter().map(|sample| sample.body_kind.label()),
+        )),
         Arc::new(Float64Array::from(
             samples.iter().map(|sample| sample.x_m).collect::<Vec<_>>(),
         )),
@@ -312,9 +363,39 @@ fn record_batch(schema: &SchemaRef, samples: &[TrajectorySample]) -> RecordBatch
                 .map(|sample| sample.speed_mps)
                 .collect::<Vec<_>>(),
         )),
+        Arc::new(segments_array(samples)),
     ];
     RecordBatch::try_new(schema.clone(), columns)
         .expect("every column of the trajectory schema has the row count")
+}
+
+/// The ordered body-segment poses of every row, as one list column.
+fn segments_array(samples: &[TrajectorySample]) -> ListArray {
+    let mut builder = ListBuilder::new(StructBuilder::from_fields(
+        segment_fields(),
+        samples.iter().map(|sample| sample.segments.len()).sum(),
+    ))
+    .with_field(segment_item_field());
+    for sample in samples {
+        for segment in &sample.segments {
+            let values = builder.values();
+            values
+                .field_builder::<Float64Builder>(0)
+                .expect("the segment struct declares an x field")
+                .append_value(segment.position.x);
+            values
+                .field_builder::<Float64Builder>(1)
+                .expect("the segment struct declares a y field")
+                .append_value(segment.position.y);
+            values
+                .field_builder::<Float64Builder>(2)
+                .expect("the segment struct declares a heading field")
+                .append_value(segment.heading_rad);
+            values.append(true);
+        }
+        builder.append(true);
+    }
+    builder.finish()
 }
 
 /// Writing properties of the artifact.
@@ -339,17 +420,20 @@ struct TrajectoryColumns<'a> {
     ticks: &'a UInt64Array,
     agents: &'a UInt32Array,
     modes: &'a StringArray,
+    body_kinds: Vec<BodyKind>,
     xs: &'a Float64Array,
     ys: &'a Float64Array,
     headings: &'a Float64Array,
     speeds: &'a Float64Array,
+    segments: &'a ListArray,
 }
 
 impl<'a> TrajectoryColumns<'a> {
     /// Check the batch's schema and bind its columns.
     fn new(batch: &'a RecordBatch, path: &Path) -> Result<Self, TrajectoryError> {
         let schema = batch.schema();
-        for (index, (name, data_type)) in TRAJECTORY_COLUMNS.iter().enumerate() {
+        let columns = trajectory_columns();
+        for (index, (name, data_type)) in columns.iter().enumerate() {
             let Some(field) = schema.fields().get(index) else {
                 return Err(schema_error(
                     path,
@@ -367,26 +451,40 @@ impl<'a> TrajectoryColumns<'a> {
                 ));
             }
         }
-        if schema.fields().len() != TRAJECTORY_COLUMNS.len() {
+        if schema.fields().len() != columns.len() {
             return Err(schema_error(
                 path,
                 format!(
                     "the artifact holds {} columns, not {}",
                     schema.fields().len(),
-                    TRAJECTORY_COLUMNS.len()
+                    columns.len()
                 ),
             ));
         }
+        let body_kinds: Vec<BodyKind> = downcast::<StringArray>(batch, 3)
+            .iter()
+            .map(|label| {
+                let label = label.expect("the body-kind column is never null");
+                body_kind_from_label(label).ok_or_else(|| {
+                    schema_error(
+                        path,
+                        format!("the body-kind column holds unknown kind '{label}'"),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
         // The schema check above proves each column's type, so the downcasts
         // cannot fail.
         Ok(Self {
             ticks: downcast(batch, 0),
             agents: downcast(batch, 1),
             modes: downcast(batch, 2),
-            xs: downcast(batch, 3),
-            ys: downcast(batch, 4),
-            headings: downcast(batch, 5),
-            speeds: downcast(batch, 6),
+            body_kinds,
+            xs: downcast(batch, 4),
+            ys: downcast(batch, 5),
+            headings: downcast(batch, 6),
+            speeds: downcast(batch, 7),
+            segments: downcast(batch, 8),
         })
     }
 
@@ -396,12 +494,53 @@ impl<'a> TrajectoryColumns<'a> {
             tick: self.ticks.value(row),
             agent: self.agents.value(row),
             mode: self.modes.value(row).to_owned(),
+            body_kind: self.body_kinds[row],
             x_m: self.xs.value(row),
             y_m: self.ys.value(row),
             heading_rad: self.headings.value(row),
             speed_mps: self.speeds.value(row),
+            segments: segment_samples(self.segments.value(row)),
         }
     }
+}
+
+/// Reconstruct the ordered body-segment poses of one row from its list cell.
+fn segment_samples(cell: ArrayRef) -> Vec<BodySegmentSample> {
+    let structs = cell
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("a checked segments cell holds structs");
+    let xs = struct_column(structs, "x_m");
+    let ys = struct_column(structs, "y_m");
+    let headings = struct_column(structs, "heading_rad");
+    (0..structs.len())
+        .map(|index| BodySegmentSample {
+            position: DVec2::new(xs.value(index), ys.value(index)),
+            heading_rad: headings.value(index),
+        })
+        .collect()
+}
+
+/// One `Float64` field of a checked segment struct.
+fn struct_column<'a>(structs: &'a StructArray, name: &str) -> &'a Float64Array {
+    structs
+        .column_by_name(name)
+        .unwrap_or_else(|| panic!("the segment struct declares a {name} field"))
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap_or_else(|| panic!("the {name} field is a float column"))
+}
+
+/// Parse a body-kind label back, the inverse of [`BodyKind::label`].
+fn body_kind_from_label(label: &str) -> Option<BodyKind> {
+    [
+        BodyKind::Circle,
+        BodyKind::Box,
+        BodyKind::Capsule,
+        BodyKind::ArticulatedChain,
+    ]
+    .into_iter()
+    .find(|kind| kind.label() == label)
 }
 
 /// One checked column of an Arrow batch.
@@ -429,12 +568,15 @@ mod tests {
     #[test]
     fn the_declared_columns_are_the_written_schema() {
         let schema = trajectory_schema();
-        assert_eq!(schema.fields().len(), TRAJECTORY_COLUMNS.len());
-        for (field, (name, data_type)) in schema.fields().iter().zip(TRAJECTORY_COLUMNS) {
+        let columns = trajectory_columns();
+        assert_eq!(schema.fields().len(), columns.len());
+        for (field, (name, data_type)) in schema.fields().iter().zip(columns) {
             assert_eq!(field.name(), name);
             assert_eq!(field.data_type(), &data_type);
             assert!(!field.is_nullable());
         }
+        // The artifact declares its own column-shape version.
+        assert_eq!(TRAJECTORY_FORMAT_VERSION, 2);
     }
 
     /// A recorded sample carries the kernel's own values, so the artifact
@@ -456,19 +598,70 @@ mod tests {
 
         let frame = sim.snapshot(SnapshotDetail::Full);
         let agent = &frame.agents()[0];
-        let motion = agent.motion.expect("full detail carries motion");
+        let motion = agent.motion.as_ref().expect("full detail carries motion");
         assert_eq!(
             recorder.samples(),
             [TrajectorySample {
                 tick: 1,
                 agent: agent.id.get(),
                 mode: motion.mode.label().to_owned(),
+                body_kind: motion.body_kind,
                 x_m: agent.position.x,
                 y_m: agent.position.y,
                 heading_rad: agent.heading_rad,
                 speed_mps: motion.speed_mps,
+                segments: motion.segments.clone(),
             }]
         );
+    }
+
+    /// The artifact round-trips the body kind and the ordered segment poses, so
+    /// a consumer reads the same envelope the kernel reported.
+    #[test]
+    fn the_artifact_round_trips_body_kind_and_segments() {
+        use tangle_model::BodyKind;
+
+        let sample =
+            |agent: u32, body_kind: BodyKind, segments: Vec<BodySegmentSample>| TrajectorySample {
+                tick: 1,
+                agent,
+                mode: "vehicle".to_owned(),
+                body_kind,
+                x_m: 1.0,
+                y_m: 2.0,
+                heading_rad: 0.5,
+                speed_mps: 3.0,
+                segments,
+            };
+        let rows = vec![
+            sample(0, BodyKind::Box, Vec::new()),
+            sample(
+                1,
+                BodyKind::ArticulatedChain,
+                vec![
+                    BodySegmentSample {
+                        position: DVec2::new(4.0, 0.0),
+                        heading_rad: 0.25,
+                    },
+                    BodySegmentSample {
+                        position: DVec2::new(-6.0, 0.5),
+                        heading_rad: 0.5,
+                    },
+                ],
+            ),
+        ];
+
+        let directory = std::env::temp_dir().join(format!(
+            "tangle-trajectory-round-trip-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch directory is created");
+        let artifact = write_trajectories(&directory, &rows).expect("trajectories write");
+        assert_eq!(artifact.format_version, TRAJECTORY_FORMAT_VERSION);
+        let read = read_trajectories(&directory).expect("trajectories read back");
+        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(read, rows);
     }
 
     const WALKING: &str = r#"

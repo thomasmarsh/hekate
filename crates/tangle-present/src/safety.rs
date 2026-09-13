@@ -684,6 +684,8 @@ mod tests {
             length_m: 1.0,
             width_m: 1.0,
             mode,
+            body_kind: mode.body_kind(),
+            segments: Vec::new(),
             speed_mps: Some(0.0),
             path: None,
             path_distance_m: None,

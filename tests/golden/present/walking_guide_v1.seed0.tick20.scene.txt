@@ -92,6 +92,8 @@ SceneFrame {
             length_m: 4.5,
             width_m: 1.8,
             mode: Vehicle,
+            body_kind: Box,
+            segments: [],
             speed_mps: Some(
                 12.0,
             ),
@@ -117,6 +119,8 @@ SceneFrame {
             length_m: 4.5,
             width_m: 1.8,
             mode: Vehicle,
+            body_kind: Box,
+            segments: [],
             speed_mps: Some(
                 12.0,
             ),
@@ -142,6 +146,8 @@ SceneFrame {
             length_m: 4.5,
             width_m: 1.8,
             mode: Vehicle,
+            body_kind: Box,
+            segments: [],
             speed_mps: Some(
                 12.0,
             ),
@@ -167,6 +173,8 @@ SceneFrame {
             length_m: 4.5,
             width_m: 1.8,
             mode: Vehicle,
+            body_kind: Box,
+            segments: [],
             speed_mps: Some(
                 12.0,
             ),
@@ -192,6 +200,8 @@ SceneFrame {
             length_m: 4.5,
             width_m: 1.8,
             mode: Vehicle,
+            body_kind: Box,
+            segments: [],
             speed_mps: Some(
                 12.0,
             ),
@@ -217,6 +227,8 @@ SceneFrame {
             length_m: 4.5,
             width_m: 1.8,
             mode: Vehicle,
+            body_kind: Box,
+            segments: [],
             speed_mps: Some(
                 12.0,
             ),

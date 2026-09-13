@@ -6,7 +6,7 @@
 //! shift; state-affecting logic therefore never iterates a hash map.
 
 use glam::DVec2;
-use tangle_model::{CrossingId, MovementId, PathId, PedestrianRouteId};
+use tangle_model::{BodyKind, CrossingId, MovementId, PathId, PedestrianRouteId};
 
 use crate::compliance::ComplianceDecision;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
@@ -31,6 +31,15 @@ impl AgentMode {
         match self {
             Self::Vehicle => "vehicle",
             Self::Pedestrian => "pedestrian",
+        }
+    }
+
+    /// Envelope kind of the body this mode carries: a vehicle is an oriented
+    /// box, a pedestrian a circle.
+    pub const fn body_kind(self) -> BodyKind {
+        match self {
+            Self::Vehicle => BodyKind::Box,
+            Self::Pedestrian => BodyKind::Circle,
         }
     }
 }

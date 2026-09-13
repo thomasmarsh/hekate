@@ -143,7 +143,7 @@ fn tick(sim: &mut Simulation) -> (Vec<WalkSample>, Vec<Event>) {
         .agents()
         .iter()
         .filter_map(|sample| {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             (motion.mode == tangle_sim::AgentMode::Pedestrian).then_some(WalkSample {
                 id: sample.id,
                 path_distance_m: motion.path_distance_m,

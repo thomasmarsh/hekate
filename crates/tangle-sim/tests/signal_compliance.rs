@@ -80,7 +80,7 @@ fn a_green_head_proceeds_for_every_compliance() {
                     .expect("signal-controlled vehicle records a decision");
                 assert_eq!(decision.action, SignalAction::Proceed);
                 assert_eq!(decision.reason, ComplianceReason::Green);
-                if sample.motion.expect("full detail").path_distance_m > STOP_LINE_M {
+                if sample.motion.as_ref().expect("full detail").path_distance_m > STOP_LINE_M {
                     crossed += 1;
                 }
             }
@@ -99,7 +99,7 @@ fn a_red_head_stops_a_compliant_driver_at_the_line() {
     for _ in 0..2000 {
         sim.step();
         for sample in sim.snapshot(SnapshotDetail::Full).agents() {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             let decision = sim
                 .agent_decision(sample.id)
                 .expect("signal-controlled vehicle records a decision");
@@ -126,7 +126,7 @@ fn a_low_compliance_driver_runs_a_red_head() {
     for _ in 0..2000 {
         sim.step();
         for sample in sim.snapshot(SnapshotDetail::Full).agents() {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             let decision = sim
                 .agent_decision(sample.id)
                 .expect("signal-controlled vehicle records a decision");
@@ -251,7 +251,7 @@ fn every_admitted_signal_vehicle_carries_a_reasoned_decision() {
     for _ in 0..1500 {
         sim.step();
         for sample in sim.snapshot(SnapshotDetail::Full).agents() {
-            let motion = sample.motion.expect("full detail");
+            let motion = sample.motion.as_ref().expect("full detail");
             let decision = motion.decision.expect("decision recorded in the snapshot");
             assert_eq!(Some(decision), sim.agent_decision(sample.id));
             // The record always explains its action with a known reason.

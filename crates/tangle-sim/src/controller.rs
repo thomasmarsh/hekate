@@ -302,10 +302,11 @@ mod tests {
                 .agents()
                 .iter()
                 .map(|sample| {
+                    let motion = sample.motion.as_ref().expect("full detail");
                     (
                         sample.id.get(),
-                        sample.motion.expect("full detail").mode,
-                        sample.motion.expect("full detail").speed_mps,
+                        motion.mode,
+                        motion.speed_mps,
                         sample.position,
                     )
                 })

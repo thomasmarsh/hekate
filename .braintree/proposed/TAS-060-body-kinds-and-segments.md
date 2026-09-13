@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T14:34:51Z
+updated: 2026-09-13T18:01:00Z
 summary: Represent arbitrary body kinds and optional body segments in output and presenters.
-next: [[TAS-071-body-kind-and-segment-output]]
+next: [[TAS-072-body-kind-and-segment-presenters]]
 ---
 
 Parent [[TAS-018-phase-2-increment-0-baseline-extension-contract]].

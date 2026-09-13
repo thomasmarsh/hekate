@@ -422,6 +422,10 @@ impl Simulation {
                 motion: match detail {
                     SnapshotDetail::Position => None,
                     SnapshotDetail::Full => Some(MotionSample {
+                        body_kind: self.agents.mode[index].body_kind(),
+                        // A Phase 1 body is a single box or circle envelope, so
+                        // it carries no ordered segments yet.
+                        segments: Vec::new(),
                         mode: self.agents.mode[index],
                         speed_mps: self.agents.speed_mps[index],
                         path: self.agents.path[index],
@@ -2030,7 +2034,7 @@ mod tests {
         let distances: Vec<f64> = snapshot
             .agents()
             .iter()
-            .map(|agent| agent.motion.expect("full detail").path_distance_m)
+            .map(|agent| agent.motion.as_ref().expect("full detail").path_distance_m)
             .collect();
         assert_eq!(distances, vec![0.0, 20.0, 40.0, 60.0, 80.0, 100.0]);
     }
@@ -2055,7 +2059,7 @@ mod tests {
         sim.step();
         assert_eq!(sim.time().tick(), 1);
         let after_one = sim.snapshot(SnapshotDetail::Full);
-        let lead = after_one.agents()[0].motion.expect("full detail");
+        let lead = after_one.agents()[0].motion.as_ref().expect("full detail");
         // 12 m/s * 0.05 s = 0.6 m.
         assert!((lead.path_distance_m - 0.6).abs() < 1e-12);
         assert!((after_one.agents()[0].position - glam::DVec2::new(0.6, 0.0)).length() < 1e-12);
@@ -2066,7 +2070,16 @@ mod tests {
         assert_eq!(sim.time().tick(), 10);
         assert!((sim.time().seconds() - 0.5).abs() < 1e-12);
         let after_ten = sim.snapshot(SnapshotDetail::Full);
-        assert!((after_ten.agents()[0].motion.unwrap().path_distance_m - 6.0).abs() < 1e-12);
+        assert!(
+            (after_ten.agents()[0]
+                .motion
+                .as_ref()
+                .expect("full detail")
+                .path_distance_m
+                - 6.0)
+                .abs()
+                < 1e-12
+        );
     }
 
     #[test]
@@ -2460,6 +2473,44 @@ mod tests {
         let source = parse_scenario_source(MIXED_MODES).expect("scenario parses");
         let scenario = CompiledScenario::compile(source).expect("scenario compiles");
         Simulation::new(scenario, RunConfig::new(seed)).expect("simulation builds")
+    }
+
+    /// Phase 1 output reports every body's envelope kind and, being a single
+    /// box or circle envelope, no ordered segments.
+    #[test]
+    fn a_full_snapshot_reports_each_phase1_body_kind_with_no_segments() {
+        use tangle_model::BodyKind;
+
+        let mut sim = mixed_sim(3);
+        let mut saw_vehicle = false;
+        let mut saw_pedestrian = false;
+        for _ in 0..1500 {
+            sim.step();
+            for sample in sim.snapshot(SnapshotDetail::Full).agents() {
+                let motion = sample.motion.as_ref().expect("full detail");
+                assert!(
+                    motion.segments.is_empty(),
+                    "a Phase 1 body carries no ordered segments"
+                );
+                match motion.mode {
+                    AgentMode::Vehicle => {
+                        assert_eq!(motion.body_kind, BodyKind::Box);
+                        saw_vehicle = true;
+                    }
+                    AgentMode::Pedestrian => {
+                        assert_eq!(motion.body_kind, BodyKind::Circle);
+                        saw_pedestrian = true;
+                    }
+                }
+            }
+            if saw_vehicle && saw_pedestrian {
+                break;
+            }
+        }
+        assert!(
+            saw_vehicle && saw_pedestrian,
+            "both Phase 1 modes must be observed"
+        );
     }
 
     fn constant_vehicle_profile(desired_speed_mps: f64) -> VehicleProfile {

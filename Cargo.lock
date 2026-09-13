@@ -5476,6 +5476,7 @@ dependencies = [
  "arrow-schema",
  "clap",
  "flate2",
+ "glam 0.33.7",
  "parquet",
  "serde",
  "serde_json",

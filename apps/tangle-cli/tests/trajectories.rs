@@ -21,15 +21,17 @@ use tangle_cli::{
     MANIFEST_FILE, METRICS_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest, RunMetrics,
     SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT,
     TrajectoryRetention, TrajectorySample, TrajectorySampling, canonical_run_captured,
-    load_scenario_provenance, read_trajectories, write_run_directory,
+    load_scenario_provenance, read_trajectories, write_run_directory, write_trajectories,
 };
-use tangle_model::CompiledScenario;
+use tangle_model::{BodyKind, CompiledScenario};
 use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_tangle-cli");
 
 const WALKING: &str = "scenarios/walking/walking_guide_v1.json5";
+/// A Phase 1 mixed-mode fixture: one road movement and four pedestrian routes.
+const MIXED: &str = "scenarios/benchmarks/mixed_interaction_v1.json5";
 const GOLDEN_SEED: u64 = 0;
 const GOLDEN_TICKS: u64 = 250;
 
@@ -222,6 +224,38 @@ fn sampled_trajectories_round_trip_in_canonical_order() {
         first.x_m
     );
     assert!(last.x_m > first.x_m, "the sampled run must make progress");
+}
+
+/// A Phase 1 run's trajectory artifact reports every body's envelope kind: a
+/// vehicle is a box and a pedestrian a circle, each a single envelope with no
+/// ordered segments. The rows round-trip through Parquet carrying those fields.
+#[test]
+fn the_artifact_reports_each_phase1_body_kind_with_no_segments() {
+    let scratch = Scratch::new("body-kind");
+    let policy = SamplingPolicy::full_trajectories();
+    let (scenario, _) = load_scenario_provenance(&repo_path(MIXED)).expect("scenario loads");
+    let (_, _, trajectories, _) = canonical_run_captured(
+        scenario,
+        RunConfig::new(GOLDEN_SEED),
+        400,
+        &policy.trajectories,
+    )
+    .expect("run completes");
+    write_trajectories(&scratch.dir, &trajectories).expect("trajectories write");
+    let samples = read_trajectories(&scratch.dir).expect("trajectories read back");
+
+    let vehicle = samples
+        .iter()
+        .find(|sample| sample.mode == "vehicle")
+        .expect("the mixed fixture spawns a vehicle");
+    assert_eq!(vehicle.body_kind, BodyKind::Box);
+    assert!(vehicle.segments.is_empty());
+    let pedestrian = samples
+        .iter()
+        .find(|sample| sample.mode == "pedestrian")
+        .expect("the mixed fixture spawns a pedestrian");
+    assert_eq!(pedestrian.body_kind, BodyKind::Circle);
+    assert!(pedestrian.segments.is_empty());
 }
 
 /// The declared default policy bounds the artifact: a sampled artifact holds

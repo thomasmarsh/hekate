@@ -81,7 +81,7 @@ fn sim(text: &str, seed: u64, step: f64) -> Simulation {
 
 /// The body shape an observed sample describes.
 fn body_of(sample: &AgentSample) -> BodyShape {
-    let motion = sample.motion.expect("full detail");
+    let motion = sample.motion.as_ref().expect("full detail");
     match motion.mode {
         AgentMode::Pedestrian => BodyShape::Circle {
             centre: sample.position,
@@ -109,7 +109,7 @@ fn frames(sim: &Simulation) -> BTreeMap<AgentId, AgentSample> {
     sim.snapshot(SnapshotDetail::Full)
         .agents()
         .iter()
-        .map(|sample| (sample.id, *sample))
+        .map(|sample| (sample.id, sample.clone()))
         .collect()
 }
 
@@ -393,8 +393,8 @@ fn online_ttc_matches_the_analytic_circle_solution() {
                     let Some(second_before) = before.get(second) else {
                         continue;
                     };
-                    if first_after.motion.expect("full").mode != AgentMode::Pedestrian
-                        || second_after.motion.expect("full").mode != AgentMode::Pedestrian
+                    if first_after.motion.as_ref().expect("full").mode != AgentMode::Pedestrian
+                        || second_after.motion.as_ref().expect("full").mode != AgentMode::Pedestrian
                     {
                         continue;
                     }
@@ -465,8 +465,8 @@ fn recorded_separation_matches_the_all_pairs_reference() {
                     );
                     reference_minimum_m = reference_minimum_m.min(separation_m);
                     let mode_pair = ModePair::of(
-                        first_after.motion.expect("full").mode,
-                        second_after.motion.expect("full").mode,
+                        first_after.motion.as_ref().expect("full").mode,
+                        second_after.motion.as_ref().expect("full").mode,
                     );
                     reference_mode_pairs[mode_pair.index()] =
                         reference_mode_pairs[mode_pair.index()].min(separation_m);
