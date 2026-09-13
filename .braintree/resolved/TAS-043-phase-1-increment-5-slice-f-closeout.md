@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T03:19:00Z
-summary: Slice G of Phase 1 Increment 5 closes the independent slice-F review findings: the P1 comparison.json unpaired-ordering defect, the DEF-004 summary.json version requirement, the unbacked perf within-pass split, and the two P3 notes.
-next: Resolve TAS-043 once the five gates pass on the final tree.
+updated: 2026-09-13T03:22:00Z
+summary: Slice G of Phase 1 Increment 5 closed the independent slice-F review findings: the P1 comparison.json unpaired-ordering defect and its regression test, the DEF-004 summary.json version field, the reproducer for the perf within-pass split, the run command's help contract, the atomic completion marker, and the accepted F6 limitation.
 ---
 
 # Outcome
@@ -88,7 +87,8 @@ Write set as handed: `apps/tangle-cli/src/{batch,compare,lib,main,run_dir}.rs`,
 `scripts/profile-symbols.py`,
 `perf/profiles/mixed_interaction_v1-release.summary.txt`, `perf/README.md`, and
 this node. No created path and no path outside the write set; the node's only
-move is its own `proposed/` -> `active/` status transition. No kernel change and
+moves are its own `proposed/` -> `active/` -> `resolved/` status transitions. No
+kernel change and
 no dependency change: `crates/` is untouched and `Cargo.toml`/`Cargo.lock` are
 unchanged. `DEF-004` was not edited — F2 took the additive `summary.json` field,
 so the settled definition holds as written and its follow-up needed no
@@ -124,3 +124,88 @@ aggregation reads only `total`, `by_family`, and `by_family_kind`
 (`apps/tangle-cli/src/aggregate.rs:655`-`:679`), so mode- and
 movement-scoped event-family counts are not aggregated across seeds. Closing it
 is a metric-surface change beyond this review closeout.
+
+# Resolution
+
+Resolved on the tree of commit `1ff0dd2` (the slice landing, after the five
+gates passed), with the node's own status the only later change. Every finding
+with its evidence:
+
+- **F1 (P1) — `comparison.json`'s `unpaired` list is ascending again.**
+  `PairedAccumulator::finish` sorts the list by seed
+  (`apps/tangle-cli/src/compare.rs:1205`-`:1206`), and the doc comments on
+  `fill_missing` (`:1180`) and `finish` (`:1200`) now state why insertion order
+  is not seed order for a sparse bucket. Regression test
+  `a_bucket_first_reached_at_a_later_seed_still_orders_its_unpaired_seeds`
+  (`apps/tangle-cli/tests/compare.rs:817`): a two-seed pair whose bucket only
+  side B carries, and only at seed 1, so seed 0 exists only through the fill.
+  With the sort removed the test reports
+  `[(1, NotObserved, Reported), (0, NotObserved, NotObserved)]`; with it, the
+  seeds ascend.
+- **F2 (P2) — DEF-004's summary requirement holds as written.**
+  `RunSummary` carries `metric_definition_version`
+  (`apps/tangle-cli/src/run_dir.rs:333`), set from
+  `run_metrics::METRIC_DEFINITION_VERSION` (`:440`), so `summary.json` emits
+  `metric_definition_version: 1` next to the run's numbers. The additive field
+  closes the finding, so `.braintree/resolved/DEF-004-metric-definition-v1.md`
+  was not edited and its `context_rev` is unchanged. Tests:
+  `summary_reports_the_run_and_traces_back_to_the_manifest`
+  (`apps/tangle-cli/tests/run_directory.rs:340`) and
+  `metrics_json_carries_the_versioned_run_minima_and_slices`
+  (`apps/tangle-cli/tests/run_metrics.rs:368`), whose
+  `:389`-`:394` assertion ties `summary.json`'s revision to `metrics.json`'s.
+- **F3 (P2) — the within-pass split is reproducible from the checked-in
+tools.** `scripts/profile-symbols.py:119` folds the rows below the pass's frames
+  by terminal symbol name and `:209` prints them as the `within-pass frames`
+  section with each frame's share of the pass. Folded from the checked-in
+  capture the section reads `candidate_pairs 1898 64.5%` and
+  `time_to_collision 458 15.6%`, which are exactly the README's 1 898 of 2 944
+  (64 %) and 458 (16 %); `perf/profiles/mixed_interaction_v1-release.summary.txt:38`
+  is that fold and `perf/README.md:183` says so, including that terminal-name
+  folding is what puts the bisection's inlined `first_fraction` closure (174)
+  with the bisection (284). Re-running the script over the capture reproduces
+  the artifact byte for byte.
+- **F4 (P3) — `run` documents its contract.** `RUN_LONG_ABOUT`
+  (`apps/tangle-cli/src/main.rs:141`) hangs off the `Run` variant
+  (`:113`) with usage, inputs, output, and exit codes, and
+  `help_documents_usage_inputs_outputs_and_exit_codes`
+  (`apps/tangle-cli/tests/run_directory.rs:445`) pins the help text like
+  `validate --help`'s test does.
+- **F5 (P3) — a truncated marker no longer fails the batch closed.** The
+  completion marker is staged in `MANIFEST_TEMP_FILE` (`run_dir.rs:75`) and
+  renamed into place (`write_manifest`, `:520`-`:529`, called at `:405`), so
+  `manifest.json` is never truncated, and `batch` counts a leftover staging file
+  as a run artifact (`apps/tangle-cli/src/batch.rs:314`, `:334`) so an
+  interrupted marker write reads as a partial run to clear and re-run.
+  Regression test `an_interrupted_marker_write_is_completed_rather_than_refused`
+  (`apps/tangle-cli/tests/batch.rs:316`) stages the crash and asserts the re-run
+  reproduces the completed bytes with no staging file left; without the rule it
+  fails with `BatchError::ForeignContent`.
+- **F6 (P3) — accepted, recorded above.**
+
+Every `# Done when` bullet, with its evidence:
+
+1. **F1 fixed with a falsifiable regression test.** — `compare.rs:1205`, test
+   `a_bucket_first_reached_at_a_later_seed_still_orders_its_unpaired_seeds`.
+2. **F2 closed by the additive `summary.json` field.** — `run_dir.rs:333`,
+   `run_directory.rs:340`, `run_metrics.rs:368`.
+3. **F3's numbers reproducible from the checked-in script/artifact.** —
+   `scripts/profile-symbols.py`, `perf/profiles/mixed_interaction_v1-release.summary.txt:38`,
+   `perf/README.md:183`.
+4. **F4 and F5 fixed with tests.** — `main.rs:141` with
+   `run_directory.rs:445`; `run_dir.rs:520` and `batch.rs:314` with
+   `batch.rs:316`.
+5. **F6 recorded as an accepted limitation.** — the paragraph above, with the
+   unread aggregation inputs named.
+6. **Canonical trace, goldens, and Phase 1 baseline unchanged; `EVENT_VERSION`
+   stays 2.** — the slice's commits touch no path under `tests/golden/`,
+   `baselines/`, `scenarios/`, `schemas/`, or `crates/`; `crates/tangle-sim` and
+   `Cargo.toml`/`Cargo.lock` are unchanged and `EVENT_VERSION` is still 2. The
+   trace and its hash goldens are byte-identical (`run_directory.rs`'s golden
+   round-trip tests pass).
+7. **The five gates pass on the final tree.** — `cargo test --workspace
+   --all-features` (550 passed, 0 failed), `cargo clippy --workspace
+   --all-targets --all-features -- -D warnings` (clean),
+   `cargo fmt --all --check` (clean),
+   `./scripts/check-dependency-direction.sh` (`dependency direction OK`), and
+   `braintree check` (75 nodes) recorded in `# Result`.
