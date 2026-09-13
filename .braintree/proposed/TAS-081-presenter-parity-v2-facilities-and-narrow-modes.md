@@ -1,11 +1,11 @@
 ---
 context_rev: 1
-updated: 2026-09-13T21:29:57Z
+updated: 2026-09-13T21:35:23Z
 summary: Load version-2 sources and render facility regions and narrow capsule bodies in the terminal and Bevy presenters.
 next: Route the presenter load path through parse_scenario_document/compile_v2 and render facility regions and narrow capsule bodies.
 ---
 
-Parent [[TAS-017-phase-2-mixed-traffic]].
+Parent [[TAS-019-phase-2-increment-1-facilities-narrow-modes]].
 
 # Outcome
 

@@ -1,8 +1,9 @@
 ---
-context_rev: 1
+context_rev: 2
 priority: P1
-updated: 2026-09-13T21:08:36Z
-summary: Increment 1 delivers continuous-width facilities, reference-path coordinates, bicycle/scooter templates and longitudinal controllers, isolated fixtures, and reproducibility evidence.
+updated: 2026-09-13T21:35:23Z
+summary: Increment 1 is active, not complete: the facility, narrow-mode, fixture, and reproducibility slice landed, but facility regions and narrow bodies are not yet observable in the terminal and Bevy viewers.
+next: [[TAS-081-presenter-parity-v2-facilities-and-narrow-modes]]
 ---
 
 # Outcome
@@ -22,6 +23,9 @@ Per `PHASE_2_PLAN.md` Increment 1:
   route completion before free lateral maneuvers are enabled.
 - Isolated straight, curve, braking, following, signal, and crossing fixtures
   for both modes.
+- Facility regions and narrow capsule bodies are observable in the terminal and
+  Bevy viewers, and the Increment 1 fixtures open through the version-2 load
+  path.
 
 # Done when
 
@@ -33,13 +37,22 @@ Per `PHASE_2_PLAN.md` Increment 1:
   hashes.
 - Each mode passes independent fixtures without relying on car-specific
   dimensions or controller defaults.
+- The terminal and Bevy viewers open the Increment 1 fixtures and render their
+  facility regions and narrow bodies without a version-2 load error.
 
 Parent [[TAS-017-phase-2-mixed-traffic]].
 
-# Result
+# Progress
 
-Increment 1 is complete; all four Done-when criteria hold through resolved
-children, with no child disposed.
+Increment 1 is **not complete**. The facility, narrow-mode, isolated-fixture,
+and reproducibility slice landed through resolved children (TAS-073 through
+TAS-080), but the increment's deliverables are not all delivered: facility
+regions and narrow capsule bodies are not observable in the terminal or Bevy
+viewers, and neither viewer can load a version-2 fixture. The earlier completion
+claim was measured only against the four gate criteria and omitted the viewer
+deliverable. The remaining scope is
+[[TAS-081-presenter-parity-v2-facilities-and-narrow-modes]], which this node
+routes to as its `next`.
 
 - **Facility contract and geometry.** [[TAS-073-extend-the-version-2-schema-contract-with-increm]]
 extended `docs/schema-v2-contract.md` in place with the Increment 1 facility,
