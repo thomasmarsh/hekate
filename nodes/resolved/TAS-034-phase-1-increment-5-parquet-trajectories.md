@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T00:32:25Z
+updated: 2026-09-13T00:33:59Z
 summary: Slice B2 of Phase 1 Increment 5 writes selectively sampled agent trajectories into the immutable run directory as Parquet, driven by the SamplingPolicy fixed in B1, so output size is bounded by the policy and full trajectories are opt-in.
-next: Resolve the node with per-criterion evidence once the five gates pass on the committed tree.
 ---
 
 # Outcome
@@ -201,3 +200,90 @@ and the root `Cargo.toml` is untouched. `cargo tree` over `tangle-model` and
 - `run` still gains no stride or cap overrides; only the full opt-in is
   exposed on the command line. A caller that wants another bound uses the
   library request.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (implementation in
+`faf23f7`), verified by rerunning the five gates on that tree:
+
+1. **The run directory contains a Parquet sampled-trajectory artifact produced
+   under the declared sampling policy.** `run_dir.rs:360`
+   (`write_run_directory`) writes `trajectories.parquet` through
+   `trajectories.rs:207` (`write_trajectories`) whenever the applied policy
+   retains trajectories, records it in the manifest as
+   `RunManifest.trajectories` (`run_dir.rs:309`), and still writes
+   `manifest.json` last as the completion marker. The policy is applied while
+   the run is captured: `trace.rs:150` (`canonical_run_sampled`) drives the same
+   loop as `canonical_run` (`trace.rs:134`) and `TrajectoryRecorder::observe`
+   (`trajectories.rs:165`) keeps the sampled frames. Asserted by
+   `tests/run_directory.rs:205`
+   (`run_writes_the_manifest_summary_stream_and_sampled_trajectories`) and
+   `tests/trajectories.rs:190`
+   (`sampled_trajectories_round_trip_in_canonical_order`), which reads the file
+   back with `read_trajectories` (`trajectories.rs:246`) and compares its
+   `(tick, agent)` identity with a reference frame set replayed straight through
+   the kernel.
+2. **Tests cover the Parquet round-trip, the sample-count bound for a default
+   policy, the full-trajectory opt-in path, and the manifest/artifact link.**
+   `tests/trajectories.rs:190` (round-trip and canonical order),
+   `tests/trajectories.rs:239` (`the_default_policy_bounds_the_written_sample_count`),
+   `tests/trajectories.rs:289`
+   (`full_trajectories_are_opt_in_and_never_truncated`, driven through `run
+   --run-dir … --full-trajectories` from `main.rs:125`),
+   `tests/trajectories.rs:363`
+   (`the_manifest_links_the_trajectory_artifact_to_its_run`), plus
+   `tests/trajectories.rs:260`, `:337`, `:445`, and `:474` for the cap, the flag
+   contract, the off policy, and the empty artifact.
+3. **Output size is bounded by the declared policy: a bounded policy writes no
+   more than its declared maximum.** `TrajectorySampling::samples_tick`
+   (`run_dir.rs:201`) selects the stride and `below_cap` (`run_dir.rs:214`)
+   stops collection at `max_samples`, so the rows are bounded before any bytes
+   are produced. `tests/trajectories.rs:260`
+   (`a_bounded_cap_writes_exactly_the_declared_maximum`) runs the walking
+   scenario under `stride_ticks: 1, max_samples: 5` — 500 agent frames
+   available — and the artifact holds exactly the first 5 rows in canonical
+   order; `tests/trajectories.rs:239` shows the default bounded artifact holds
+   fewer rows than the run has frames and never more than
+   `DEFAULT_MAX_TRAJECTORY_SAMPLES` (68 rows for the golden walking run), while
+   `tests/trajectories.rs:289` shows the opt-in `full` policy keeping every
+   frame with no truncation.
+4. **A completed run directory is not mutated by a repeat run.**
+   `write_run_directory` still refuses a `manifest.json`-bearing directory
+   (`RunDirectoryError::Completed`) before writing anything.
+   `tests/run_directory.rs:365`
+   (`a_completed_run_directory_is_never_rewritten`) and
+   `tests/run_directory.rs:488`
+   (`a_repeat_run_against_a_completed_directory_fails_without_mutating_it`)
+   compare every artifact's content hash across the rejected rerun and now
+   cover the Parquet file; `tests/trajectories.rs:396`
+   (`a_completed_run_with_trajectories_is_never_rewritten`) repeats a completed
+   directory under the different full policy and shows the sampled artifact's
+   bytes and row count unchanged, and
+   `tests/run_directory.rs:416`
+   (`run_directories_are_reproducible_byte_for_byte`) shows the writer reads no
+   clock or environment input, Parquet bytes included.
+5. **The canonical trace format, trace golden, trace hash golden, and Phase 1
+   baseline are unchanged; `EVENT_VERSION` stays 2.** No file under
+   `tests/golden/`, `baselines/`, `scenarios/`, `schemas/`, or the kernel crates
+   changed in `faf23f7`; `EVENT_VERSION` stays 2
+   (`crates/tangle-sim/src/event.rs`); the golden guards
+   (`tests/golden_trace.rs`, `tests/baseline.rs`) pass, and
+   `tests/run_directory.rs:290` still matches the compressed stream byte for
+   byte against the checked-in JSONL golden and its SHA-256 against the hash
+   golden. `tangle-model` and `tangle-sim` depend on no Parquet, Arrow,
+   flatbuffers, or thrift crate, and no scenario schema or record shape changed.
+6. **The five gates pass on the final tree** (rerun on `faf23f7`,
+   2026-09-13: `cargo test --workspace --all-features` passed with 470 tests
+   and 0 failures; `cargo clippy --workspace --all-targets --all-features --
+   -D warnings` clean; `cargo fmt --all --check` clean;
+   `./scripts/check-dependency-direction.sh` printed `dependency direction OK`;
+   `braintree check nodes` printed `graph check: passed (60 nodes)`).
+
+Outcome complete: the sampled-trajectory artifact, the policy that bounds it,
+its manifest link, and the gate evidence are on the committed tree.
+
+## Handoff note
+
+TAS-031's `next` still names this node, and the handoff's exclusive write set
+excluded the parent, so this worker did not edit it; the coordinator owns
+advancing that pointer, as recorded in [[FBK-011-skill-md-s-mutation-rules-say-advancing-a-coordi]].
