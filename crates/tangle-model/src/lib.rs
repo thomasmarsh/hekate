@@ -19,6 +19,7 @@
 mod compiled;
 mod components;
 mod migrate;
+mod mode_template;
 mod schema;
 mod source;
 mod validate;
@@ -41,6 +42,7 @@ pub use components::{
     TransitOccupancy,
 };
 pub use migrate::{MIGRATION_VERSION, migrate_v1_to_v2, to_canonical_v2_json};
+pub use mode_template::{CompiledModeTemplate, compile_mode_template};
 pub use schema::{
     scenario_schema, scenario_schema_json, scenario_schema_v1, scenario_schema_v1_json,
 };

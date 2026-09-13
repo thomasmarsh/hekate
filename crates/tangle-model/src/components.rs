@@ -854,8 +854,12 @@ impl AgentComponents {
 /// Derive the dispatch family from a body envelope kind and a motion family.
 ///
 /// Every family serves exactly one pair, so this is a total function over
-/// composed agents and a rejection everywhere else.
-fn derive_family(body: BodyKind, motion: AgentMotion) -> Result<AgentFamily, ComponentMismatch> {
+/// composed agents and a rejection everywhere else. The mode-template compiler
+/// uses it too, so the valid body/motion pairs have a single definition.
+pub(crate) fn derive_family(
+    body: BodyKind,
+    motion: AgentMotion,
+) -> Result<AgentFamily, ComponentMismatch> {
     match (body, motion) {
         (BodyKind::Circle, AgentMotion::HolonomicWalking) => Ok(AgentFamily::HolonomicCircle),
         (BodyKind::Box, AgentMotion::SingleBodyWheeled) => Ok(AgentFamily::WheeledBox),

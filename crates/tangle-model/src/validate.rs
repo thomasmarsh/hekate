@@ -11,13 +11,14 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::mode_template::body_motion_pair_has_family;
 use crate::source::{
     ConflictRegionSource, CrossingSource, DemandChoiceSource, DemandSpawnSource,
-    MIN_SUPPORTED_SCHEMA_VERSION, ModeBodySource, ModeTemplateSource, MotionKind,
-    MovementDirection, PathEnd, PathSource, PedestrianRouteShareSource, PedestrianRouteSource,
-    PointSource, PolygonSource, PortalSource, ProfileRangeSource, RouteShareSource, RuleKind,
-    RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioSource, ScenarioSourceV2, SignalColor,
-    SignalSource, WaitingAreaSource,
+    MIN_SUPPORTED_SCHEMA_VERSION, ModeTemplateSource, MotionKind, MovementDirection, PathEnd,
+    PathSource, PedestrianRouteShareSource, PedestrianRouteSource, PointSource, PolygonSource,
+    PortalSource, ProfileRangeSource, RouteShareSource, RuleKind, RuleSource,
+    SUPPORTED_SCHEMA_VERSION, ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource,
+    WaitingAreaSource,
 };
 
 /// Stable, machine-readable diagnostic codes.
@@ -140,6 +141,8 @@ pub enum DiagnosticCode {
     MovementDirectionMismatch,
     /// A version-2 mode template's body kind cannot use its motion family.
     ModeTemplateBodyMotion,
+    /// A version-2 mode template's occupancy or tactics need a passenger capacity.
+    ModeTemplateOccupancy,
     /// A version-2 mode template's profiles are missing or unexpected for its family.
     ModeTemplateProfile,
     /// A version-2 demand source references an undeclared mode template.
@@ -217,6 +220,7 @@ impl DiagnosticCode {
             Self::PedestrianDemandDuplicateRoute => "E_PEDESTRIAN_DEMAND_DUPLICATE_ROUTE",
             Self::MovementDirectionMismatch => "E_MOVEMENT_DIRECTION",
             Self::ModeTemplateBodyMotion => "E_MODE_TEMPLATE_BODY_MOTION",
+            Self::ModeTemplateOccupancy => "E_MODE_TEMPLATE_OCCUPANCY",
             Self::ModeTemplateProfile => "E_MODE_TEMPLATE_PROFILE",
             Self::DemandUnknownMode => "E_DEMAND_UNKNOWN_MODE",
             Self::DemandUnknownPath => "E_DEMAND_UNKNOWN_PATH",
@@ -1487,7 +1491,10 @@ fn validate_signals(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
 }
 
 /// The profile parameters each Increment 0 body/motion family requires.
-fn required_profile_params(motion: MotionKind) -> &'static [&'static str] {
+///
+/// Shared with the template compiler ([`crate::mode_template`]) so the
+/// parameters a family needs have a single definition.
+pub(crate) fn required_profile_params(motion: MotionKind) -> &'static [&'static str] {
     match motion {
         MotionKind::SingleBodyWheeled => &[
             "speed_mps",
@@ -1504,12 +1511,7 @@ fn required_profile_params(motion: MotionKind) -> &'static [&'static str] {
 /// profile parameters must be exactly those the motion family uses.
 fn validate_mode_templates(templates: &[ModeTemplateSource], diagnostics: &mut Vec<Diagnostic>) {
     for template in templates {
-        let body_matches_motion = matches!(
-            (&template.body, template.motion),
-            (ModeBodySource::Box { .. }, MotionKind::SingleBodyWheeled)
-                | (ModeBodySource::Circle { .. }, MotionKind::HolonomicWalking)
-        );
-        if !body_matches_motion {
+        if !body_motion_pair_has_family(&template.body, template.motion) {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::ModeTemplateBodyMotion,
                 Some(template.id.clone()),
