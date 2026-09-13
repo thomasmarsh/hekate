@@ -27,10 +27,10 @@ This document is **metric definition v2**: `metric_definition_version: 2`. The
 single constant that fixes it is `apps/tangle-cli/src/run_metrics.rs:87`
 (`METRIC_DEFINITION_VERSION`), and it is what the run summary
 (`apps/tangle-cli/src/run_dir.rs:440`), the run metrics artifact
-(`run_metrics.rs:472`), the aggregation
-(`apps/tangle-cli/src/aggregate.rs:875`, `:1018`), the comparison
-(`apps/tangle-cli/src/compare.rs:704`, `:1215`), and the convergence report
-(`apps/tangle-cli/src/converge.rs:569`, `:677`) each write. An artifact already
+(`run_metrics.rs:494`, `:520`), the aggregation
+(`apps/tangle-cli/src/aggregate.rs:976`, `:1166`), the comparison
+(`apps/tangle-cli/src/compare.rs:761`, `:1404`), and the convergence report
+(`apps/tangle-cli/src/converge.rs:766`, `:929`) each write. An artifact already
 written at v1 is never relabelled; `DEF-004` remains its definition.
 
 ## Carried forward from v1, unchanged
@@ -184,10 +184,10 @@ trip.
 - **Movement** — `operational.by_movement`, keyed by the same spelling the v1
   movement buckets use: `movement:<name>` for a vehicle movement and
   `pedestrian_route:<name>` for a pedestrian route
-  (`run_metrics.rs:854`), where the kernel's key is the tagged union
+  (`run_metrics.rs:876`), where the kernel's key is the tagged union
   `MovementKey` of `MovementId` and `PedestrianRouteId` (`metrics.rs:913`) and
   the output layer resolves the name through the compiled scenario
-  (`run_metrics.rs:871`), exactly as v1 fixed it. An operational bucket is a
+  (`run_metrics.rs:893`), exactly as v1 fixed it. An operational bucket is a
   property of one agent, so it is keyed by that agent's own movement key rather
   than by a pair of keys. An agent with no assigned movement (the initial static
   population) contributes to the run-level and mode buckets and to no movement
@@ -197,12 +197,12 @@ trip.
 
 `metric_definition_version: 2` is written beside every reported metric value in
 the run summary (`run_dir.rs:440`), the run metrics artifact
-(`run_metrics.rs:472`), the batch aggregation (`aggregate.rs:875`), the paired
-comparison (`compare.rs:704`), and the convergence report
-(`converge.rs:569`). Every aggregated and compared distribution repeats it
-(`aggregate.rs:940`, `compare.rs:1215`, `converge.rs:677`). The aggregation and
+(`run_metrics.rs:494`, `:520`), the batch aggregation (`aggregate.rs:1166`), the
+paired comparison (`compare.rs:761`), and the convergence report
+(`converge.rs:766`). Every aggregated and compared distribution repeats it
+(`aggregate.rs:976`, `compare.rs:1404`, `converge.rs:929`). The aggregation and
 comparison refuse an artifact from another revision rather than mixing
-revisions (`aggregate.rs:556`, `compare.rs:894`).
+revisions (`aggregate.rs:588`, `compare.rs:969`).
 
 ## Version-bump rule
 

@@ -56,13 +56,15 @@ value `tests/golden/four_leg_pedestrian_ew_priority_v1.trace.sha256` pins. The
 (`tests/golden/four_leg_pedestrian_ns_priority_v1.trace.sha256`); it has no
 checked-in capture, so record it with the command below to replay it.
 
-Regenerate the checked-in capture in one command — it writes the same bytes:
+Regenerate the checked-in capture in one command into a fresh run directory; its
+stream hash must equal
+`a9666e0a5bfca56df071954b07a7e6fdd64d9009c27f6dd41d47c887b78f6def`:
 
 ```sh
 cargo run -p tangle-cli -- run \
   scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5 \
   --seed 1 --ticks 1200 \
-  --run-dir experiments/increment6_signal_timing_v1/replay/ew_priority_seed-1_1200ticks \
+  --run-dir /tmp/increment6_ew_priority_seed-1_1200ticks \
   --output -
 ```
 
@@ -108,7 +110,7 @@ The keys are the same in both viewers; the Bevy viewer also accepts a mouse.
 | `v` (`V`)      | toggle per-agent velocity vectors                  |
 | `b` (`B`)      | toggle the safety/event overlay                    |
 | `w a s d`      | pan the viewport (terminal also accepts the arrows)|
-| `+` / `-`      | zoom in / out (Bevy also uses the mouse wheel)     |
+| `+` / `-`      | zoom in / out (terminal)                           |
 | `tab`          | select the next agent (terminal)                   |
 | click / `esc`  | inspect a body / clear the selection               |
 | `q`            | quit (terminal)                                    |

@@ -79,7 +79,7 @@ The always-on observation pass in `crates/tangle-sim/src/metrics.rs`
 through `InteractionMetrics::operation`, `metrics.rs:692`) now reports six
 operational metrics per bucket, at the run level, per mode, and per movement —
 keyed `movement:<name>` / `pedestrian_route:<name>` exactly as the v1 buckets
-are (`apps/tangle-cli/src/run_metrics.rs:854`):
+are (`apps/tangle-cli/src/run_metrics.rs:876`):
 
 | Metric | Unit | Formula / derivation | Source |
 | --- | --- | --- | --- |
@@ -109,9 +109,9 @@ other event variant the kernel emits are already reported at v1.
 
 - `METRIC_DEFINITION_VERSION` is 2 (`apps/tangle-cli/src/run_metrics.rs:87`),
   and the run summary (`run_dir.rs:440`), the run metrics artifact
-  (`run_metrics.rs:472`), the aggregation (`aggregate.rs:875`, `:1018`), the
-  comparison (`compare.rs:704`, `:1215`), and the convergence report
-  (`converge.rs:569`, `:677`) all write it. No v1 artifact was relabelled.
+  (`run_metrics.rs:494`, `:520`), the aggregation (`aggregate.rs:976`, `:1166`),
+  the comparison (`compare.rs:761`, `:1404`), and the convergence report
+  (`converge.rs:766`, `:929`) all write it. No v1 artifact was relabelled.
 - The aggregation and comparison now read the operational block
   (`aggregate.rs:652`, `:713`; `compare.rs:1007`), so both aggregate and compare
   the run-level and per-mode operational keys, with the units

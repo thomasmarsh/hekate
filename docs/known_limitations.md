@@ -98,6 +98,11 @@ statement is a checked-in artifact or a named source location.
   is a separation at or below 1 m, and the reported resolutions are 1 µs and
   1 µm. A conflict outside those bounds is not reported, and a false negative
   inside them is bounded by the metric definition's rules, not measured.
+- **Time to collision and post-encroachment time carry no mode-pair slices.**
+  TTC and PET are reported by movement pair and over the run, but not by mode
+  pair: at metric definition v2 only minimum separation carries the
+  `vehicle_vehicle` / `vehicle_pedestrian` / `pedestrian_pedestrian` slices.
+  Adding per-mode-pair TTC and PET is a future metric-definition revision.
 - **Delay is defined by recorded state, not by a reference.** Stopped delay
   accumulates while the kernel's queue predicate holds (speed at or below
   1 mm/s, `QUEUE_STOP_SPEED_MPS`); control delay accumulates over the agent's
@@ -186,6 +191,11 @@ Still deferred, and explicitly not claimed:
   capped at 100000 samples). They are regenerable from the checked-in spec and
   seed bank and gitignored, and full trajectories remain an opt-in
   (`--full-trajectories`) that no artifact here takes.
+- **The comparison report's per-run manifest hashes cannot be re-derived.** The
+  per-seed `manifest_sha256` values the comparison report carries name runs under
+  `experiments/increment6_signal_timing_v1/runs/`, which is gitignored, so they
+  cannot be recomputed from checked-in files; their attribution rests on the
+  report's construction and `scripts/reproduce-increment6.sh`.
 - **The golden traces cover the canonical event stream only.** The checked-in
   goldens are the canonical traces of the two variants at seed 1 over 1200 steps
   (one 58 s signal cycle) plus the walking skeleton's trace. Sampled
