@@ -1,9 +1,9 @@
 ---
 context_rev: 3
 priority: P1
-updated: 2026-09-13T14:25:11Z
+updated: 2026-09-13T14:33:08Z
 summary: The Phase 1 entry gate is satisfied, unblocking Phase 2; Increment 0 still owes schema version 2 with migration and provenance, the compiled agent components with mode templates and a model-card template, the benchmark matrix, and arbitrary-body-kind representation.
-next: Design schema version 2, the deterministic version-1 migrate command, and run-manifest provenance.
+next: [[TAS-057-schema-v2-migration-and-provenance]]
 ---
 
 # Outcome
@@ -60,21 +60,34 @@ Increment 0 is **not** complete. Delivered so far:
   `event_version = 1`, per-preset canonical trace hashes and run counts, and
   preset-invariant spawn/despawn/remaining counts at 12.5 s.
 
-Still owed, each sized as its own session (§ Increment 0 of `PHASE_2_PLAN.md`):
+Still owed, groomed into targeted child sessions (§ Increment 0 of `PHASE_2_PLAN.md`):
 
-1. Schema version 2, a deterministic version-1 `migrate` command, and run
-   manifest provenance (source schema version, source content hash, normalized
-   version-2 hash, migration version). `SUPPORTED_SCHEMA_VERSION` is still 1 and
-   the CLI has no `migrate` subcommand.
-2. Compiled agent components (body, motion, tactical capability, access,
-   occupancy, social state), mode-template validation, controller-stage
-   interfaces, and a model-card template. The compiled profiles, the
+1. [[TAS-057-schema-v2-migration-and-provenance]] — schema version 2, a
+   deterministic version-1 `migrate` path, and run-manifest provenance. Its
+   direct children are the leaves
+   [[TAS-061-version-2-schema-contract]],
+   [[TAS-062-version-2-source-shapes]],
+   [[TAS-063-v1-to-v2-migration-and-cli]],
+   [[TAS-064-migration-provenance]], and
+   [[TAS-065-phase-1-migration-regression]]. `SUPPORTED_SCHEMA_VERSION` is still
+   1 and the CLI has no `migrate` subcommand.
+2. [[TAS-058-agent-components-and-controller-stages]] — the compiled component
+   model, mode-template validation, the four controller stages, and a model-card
+   template. Its leaves are
+   [[TAS-066-compiled-agent-component-model]],
+   [[TAS-067-mode-template-compilation]],
+   [[TAS-068-controller-stage-interfaces]], [[TAS-069-model-card-template]], and
+   [[TAS-070-synthetic-template-gate]]. The compiled profiles, the
    `crates/tangle-sim/src/controller.rs` seam, and the vehicle and pedestrian
    model cards exist, but there is no template layer.
-3. Benchmark matrix and quantitative tolerances for independent, pairwise, and
-   mixed-mode validation, building on the existing fidelity presets.
-4. Viewer and output representation for arbitrary body kinds and optional body
-   segments; the presenters handle box and circle only.
+3. [[TAS-059-benchmark-matrix-and-tolerances]] — the benchmark matrix and
+   quantitative tolerances for independent, pairwise, and mixed-mode validation,
+   building on the existing fidelity presets.
+4. [[TAS-060-body-kinds-and-segments]] — arbitrary body kinds and optional body
+   segments in output and presenters, with leaves
+   [[TAS-071-body-kind-and-segment-output]] and
+   [[TAS-072-body-kind-and-segment-presenters]]. The presenters handle box and
+   circle only.
 
 Evidence: `cargo test -p tangle-cli` passes, including
 `checked_in_baseline_matches_a_fresh_capture`,
