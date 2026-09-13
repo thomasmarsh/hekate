@@ -1,0 +1,36 @@
+{
+  "experiment_version": 1,
+  "id": "increment6_signal_timing_v1",
+  "summary": "Two fixed-time signal timing variants of one four-leg car/pedestrian intersection. The independent variable is the signal plan: which approach receives the longer green and, coordinated to it, each crosswalk's walk interval. Both variants run from one common-random-number seed bank so the per-seed runs are paired.",
+  "fidelity": "standard",
+  "step_s": 0.05,
+  "ticks": 6000,
+  "duration_s": 300.0,
+  "seed_bank": "experiments/increment6_signal_timing_v1/seed_bank.json",
+  "sampling": {
+    "policy_version": 1,
+    "events": "all",
+    "trajectories": {
+      "retention": "sampled",
+      "stride_ticks": 10,
+      "max_samples": 100000
+    }
+  },
+  "controlled": [
+    "intersection geometry",
+    "vehicle and pedestrian demand",
+    "vehicle and pedestrian profiles",
+    "control rules other than the signal plan"
+  ],
+  "independent_variable": "the fixed-time signal plan: the green split between the two approaches and the crosswalk walk intervals coordinated to it",
+  "variants": [
+    {
+      "variant": "ew_priority",
+      "scenario": "scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5"
+    },
+    {
+      "variant": "ns_priority",
+      "scenario": "scenarios/experiments/four_leg_pedestrian_ns_priority_v1.json5"
+    }
+  ]
+}

@@ -60,6 +60,7 @@ fn benchmark_layouts_compile_from_general_primitives() {
         "red_light_compliance_v1",
         "pedestrian_crossing_v1",
         "mixed_interaction_v1",
+        "offset_junction_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
@@ -148,6 +149,7 @@ fn benchmark_demand_generates_routed_vehicles() {
         "red_light_compliance_v1",
         "pedestrian_crossing_v1",
         "mixed_interaction_v1",
+        "offset_junction_v1",
     ] {
         let path = repo_path(&format!("scenarios/benchmarks/{name}.json5"));
         let scenario = load_scenario(&path)
