@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-12T15:12:03Z
+updated: 2026-09-13T18:19:09Z
 summary: Coordinate Phase 2 mixed traffic through eight gated increments to a released mixed-mode comparison.
-next: [[TAS-018-phase-2-increment-0-baseline-extension-contract]]
+next: [[TAS-019-phase-2-increment-1-facilities-narrow-modes]]
 ---
 
 # Context

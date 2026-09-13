@@ -32,7 +32,7 @@ pub use safety::{
 };
 pub use scenario::{LoadError, load_scenario};
 pub use scene::{
-    DEFAULT_BODY_LENGTH_M, DEFAULT_BODY_WIDTH_M, FrameStatus, Overlay, Overlays,
+    BodyShape, DEFAULT_BODY_LENGTH_M, DEFAULT_BODY_WIDTH_M, FrameStatus, Overlay, Overlays,
     SELECT_RADIUS_PIXELS, SceneBody, SceneBoundary, SceneConflictRegion, SceneCrossing, SceneFrame,
     SceneGeometry, SceneMovement, ScenePath, ScenePortal, SceneRegion, SceneRule, SceneSignal,
     SceneSignalHead, Viewport, decision_summary, intent_summary, profile_summary,

@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use glam::DVec2;
-use tangle_present::{BodyEmphasis, SceneFrame, Viewport};
+use tangle_present::{BodyEmphasis, BodyShape, SceneFrame, Viewport};
 
 use crate::palette::Rgb;
 use crate::raster::{
@@ -308,47 +308,6 @@ impl PixelRasterizer {
     ) {
         for body in &frame.bodies {
             let selected = frame.status.selection == Some(body.id);
-            let (sin, cos) = body.heading_rad.sin_cos();
-            let forward = DVec2::new(cos, sin);
-            let left = DVec2::new(-sin, cos);
-            let half_length = body.length_m * 0.5;
-            let half_width = body.width_m * 0.5;
-
-            let corners = [
-                body.position + forward * half_length + left * half_width,
-                body.position + forward * half_length - left * half_width,
-                body.position - forward * half_length + left * half_width,
-                body.position - forward * half_length - left * half_width,
-            ];
-            let projected: Vec<(f64, f64)> = corners
-                .iter()
-                .map(|corner| self.project(frame.viewport, *corner))
-                .collect();
-            let min_col = projected
-                .iter()
-                .map(|point| point.0)
-                .fold(f64::INFINITY, f64::min)
-                .floor()
-                .max(0.0) as i64;
-            let max_col = projected
-                .iter()
-                .map(|point| point.0)
-                .fold(f64::NEG_INFINITY, f64::max)
-                .ceil()
-                .min(f64::from(image.width())) as i64;
-            let min_row = projected
-                .iter()
-                .map(|point| point.1)
-                .fold(f64::INFINITY, f64::min)
-                .floor()
-                .max(0.0) as i64;
-            let max_row = projected
-                .iter()
-                .map(|point| point.1)
-                .fold(f64::NEG_INFINITY, f64::max)
-                .ceil()
-                .min(f64::from(image.height())) as i64;
-
             let (fill, outline) = if selected {
                 (SELECTED_COLOR, SELECTED_BACKGROUND)
             } else if let Some(emphasis) = emphasis.get(&body.id) {
@@ -357,34 +316,149 @@ impl PixelRasterizer {
             } else {
                 (BODY_COLOR, BODY_COLOR)
             };
-            for row in min_row..max_row {
-                for col in min_col..max_col {
-                    let world = self.cells.world_at(
-                        frame.viewport,
-                        col as f64 / f64::from(self.pixels_per_column),
-                        row as f64 / f64::from(self.pixels_per_row()),
-                    );
-                    let offset = world - body.position;
-                    if offset.dot(forward).abs() <= half_length
-                        && offset.dot(left).abs() <= half_width
-                    {
-                        image.put(col, row, fill);
+            // A body draws the shapes the shared scene projection chooses for
+            // it: one box or circle, or one box per ordered segment. The choice
+            // reads scene data, so no presenter branch names a mode or
+            // scenario.
+            for shape in body.shapes() {
+                match shape {
+                    BodyShape::Circle { center, radius_m } => {
+                        self.draw_circle(image, frame.viewport, center, radius_m, fill);
+                        // A mark at the centre keeps a sub-pixel circle visible.
+                        let point = self.project(frame.viewport, center);
+                        image.put(point.0.round() as i64, point.1.round() as i64, fill);
                     }
+                    BodyShape::Box {
+                        center,
+                        heading_rad,
+                        length_m,
+                        width_m,
+                    } => self.draw_box(
+                        image,
+                        frame.viewport,
+                        center,
+                        heading_rad,
+                        length_m,
+                        width_m,
+                        fill,
+                        outline,
+                    ),
                 }
             }
-            // Always mark the outline so a sub-pixel body stays visible.
-            for pair in [
-                (corners[0], corners[1]),
-                (corners[1], corners[3]),
-                (corners[3], corners[2]),
-                (corners[2], corners[0]),
-            ] {
-                image.segment(
-                    self.project(frame.viewport, pair.0),
-                    self.project(frame.viewport, pair.1),
-                    outline,
-                    0,
+        }
+    }
+
+    /// Fill an oriented box and outline its four edges.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_box(
+        &self,
+        image: &mut RgbaImage,
+        viewport: Viewport,
+        center: DVec2,
+        heading_rad: f64,
+        length_m: f64,
+        width_m: f64,
+        fill: Rgb,
+        outline: Rgb,
+    ) {
+        let (sin, cos) = heading_rad.sin_cos();
+        let forward = DVec2::new(cos, sin);
+        let left = DVec2::new(-sin, cos);
+        let half_length = length_m * 0.5;
+        let half_width = width_m * 0.5;
+
+        let corners = [
+            center + forward * half_length + left * half_width,
+            center + forward * half_length - left * half_width,
+            center - forward * half_length + left * half_width,
+            center - forward * half_length - left * half_width,
+        ];
+        let projected: Vec<(f64, f64)> = corners
+            .iter()
+            .map(|corner| self.project(viewport, *corner))
+            .collect();
+        let min_col = projected
+            .iter()
+            .map(|point| point.0)
+            .fold(f64::INFINITY, f64::min)
+            .floor()
+            .max(0.0) as i64;
+        let max_col = projected
+            .iter()
+            .map(|point| point.0)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .ceil()
+            .min(f64::from(image.width())) as i64;
+        let min_row = projected
+            .iter()
+            .map(|point| point.1)
+            .fold(f64::INFINITY, f64::min)
+            .floor()
+            .max(0.0) as i64;
+        let max_row = projected
+            .iter()
+            .map(|point| point.1)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .ceil()
+            .min(f64::from(image.height())) as i64;
+
+        for row in min_row..max_row {
+            for col in min_col..max_col {
+                let world = self.cells.world_at(
+                    viewport,
+                    col as f64 / f64::from(self.pixels_per_column),
+                    row as f64 / f64::from(self.pixels_per_row()),
                 );
+                let offset = world - center;
+                if offset.dot(forward).abs() <= half_length && offset.dot(left).abs() <= half_width
+                {
+                    image.put(col, row, fill);
+                }
+            }
+        }
+        // Always mark the outline so a sub-pixel body stays visible.
+        for pair in [
+            (corners[0], corners[1]),
+            (corners[1], corners[3]),
+            (corners[3], corners[2]),
+            (corners[2], corners[0]),
+        ] {
+            image.segment(
+                self.project(viewport, pair.0),
+                self.project(viewport, pair.1),
+                outline,
+                0,
+            );
+        }
+    }
+
+    /// Fill the pixels inside a circle of `radius_m` metres.
+    fn draw_circle(
+        &self,
+        image: &mut RgbaImage,
+        viewport: Viewport,
+        center: DVec2,
+        radius_m: f64,
+        color: Rgb,
+    ) {
+        let corner = DVec2::splat(radius_m);
+        let low = self.project(viewport, center - corner);
+        let high = self.project(viewport, center + corner);
+        let min_col = low.0.min(high.0).floor().max(0.0) as i64;
+        let max_col = low.0.max(high.0).ceil().min(f64::from(image.width())) as i64;
+        let min_row = low.1.min(high.1).floor().max(0.0) as i64;
+        let max_row = low.1.max(high.1).ceil().min(f64::from(image.height())) as i64;
+
+        for row in min_row..max_row {
+            for col in min_col..max_col {
+                let world = self.cells.world_at(
+                    viewport,
+                    col as f64 / f64::from(self.pixels_per_column),
+                    row as f64 / f64::from(self.pixels_per_row()),
+                );
+                if (world - center).length() <= radius_m {
+                    image.put(col, row, color);
+                }
             }
         }
     }
@@ -434,9 +508,12 @@ mod tests {
 
     use std::sync::Arc;
 
-    use tangle_model::{CompiledScenario, CrossingId, parse_scenario_source};
+    use tangle_model::{BodyKind, CompiledScenario, CrossingId, parse_scenario_source};
     use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed};
-    use tangle_sim::{AgentId, AgentMode, Event, RegionKey, RunConfig, Simulation, SnapshotDetail};
+    use tangle_sim::{
+        AgentId, AgentMode, BodySegmentSample, Event, RegionKey, RunConfig, Simulation,
+        SnapshotDetail,
+    };
 
     use crate::raster::{COLLISION_COLOR, QUEUE_COLOR};
 
@@ -691,5 +768,138 @@ mod tests {
                 "{name} primitive was not drawn in its color"
             );
         }
+    }
+
+    /// One scene body with no ordered segments, so a test draws a single
+    /// envelope the shared shape decision chooses by body kind.
+    fn body(
+        id: usize,
+        body_kind: BodyKind,
+        position: DVec2,
+        length_m: f64,
+        width_m: f64,
+    ) -> tangle_present::SceneBody {
+        tangle_present::SceneBody {
+            id,
+            position,
+            heading_rad: 0.0,
+            length_m,
+            width_m,
+            mode: AgentMode::Vehicle,
+            body_kind,
+            segments: Vec::new(),
+            speed_mps: Some(0.0),
+            path: None,
+            path_distance_m: None,
+            route: None,
+            profile: None,
+            decision: None,
+        }
+    }
+
+    /// A frame over an empty geometry carrying only `bodies`.
+    fn synthetic_frame(bodies: Vec<tangle_present::SceneBody>) -> SceneFrame {
+        SceneFrame {
+            scenario_id: "presenter-shapes".to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: bodies.len(),
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport: Viewport::new(DVec2::ZERO, 1.0),
+            geometry: Arc::new(SceneGeometry::default()),
+            bodies,
+            overlays: Overlays {
+                geometry: false,
+                vectors: false,
+                safety: false,
+            },
+            safety: SafetyOverlay::default(),
+        }
+    }
+
+    /// The RGBA bytes at an integer pixel coordinate.
+    fn pixel_at(image: &RgbaImage, x: i64, y: i64) -> [u8; 4] {
+        let index = ((y as u32 * image.width() + x as u32) * 4) as usize;
+        image.rgba()[index..index + 4]
+            .try_into()
+            .expect("four bytes")
+    }
+
+    /// The pixel the world point `point` projects to.
+    fn pixel_of(
+        raster: &PixelRasterizer,
+        viewport: Viewport,
+        image: &RgbaImage,
+        point: DVec2,
+    ) -> [u8; 4] {
+        let (x, y) = raster.project(viewport, point);
+        pixel_at(image, x.round() as i64, y.round() as i64)
+    }
+
+    /// A box body and a circle body draw visibly different pixels, and a body
+    /// carrying ordered segments draws each segment at its own pose: a box
+    /// fills its bounding square's corner that a circle of the same extent
+    /// leaves empty, and both segment centres carry the body color.
+    #[test]
+    fn each_body_kind_and_ordered_segment_is_drawn_from_scene_data() {
+        let raster = PixelRasterizer::new(80, 40);
+        let viewport = Viewport::new(DVec2::ZERO, 1.0);
+        // 80x40 cells at scale 1: one cell is one metre wide, two metres tall.
+        let box_body = body(0, BodyKind::Box, DVec2::new(-10.0, 0.0), 6.0, 6.0);
+        let circle = body(1, BodyKind::Circle, DVec2::new(10.0, 0.0), 6.0, 6.0);
+        let mut articulated = body(
+            2,
+            BodyKind::ArticulatedChain,
+            DVec2::new(0.0, 8.0),
+            8.0,
+            2.0,
+        );
+        articulated.segments = vec![
+            BodySegmentSample {
+                position: DVec2::new(-2.0, 8.0),
+                heading_rad: 0.0,
+            },
+            BodySegmentSample {
+                position: DVec2::new(2.0, 8.0),
+                heading_rad: 0.0,
+            },
+        ];
+        let image = raster.rasterize(&synthetic_frame(vec![box_body, circle, articulated]));
+        let body_color = opaque(BODY_COLOR);
+
+        assert_eq!(
+            pixel_of(&raster, viewport, &image, DVec2::new(-13.0, 2.0)),
+            body_color,
+            "the box must fill its corner"
+        );
+        assert_ne!(
+            pixel_of(&raster, viewport, &image, DVec2::new(13.0, 2.0)),
+            body_color,
+            "the circle must not fill its bounding square's corner"
+        );
+        assert_eq!(
+            pixel_of(&raster, viewport, &image, DVec2::new(-10.0, 0.0)),
+            body_color,
+            "the box centre must draw"
+        );
+        assert_eq!(
+            pixel_of(&raster, viewport, &image, DVec2::new(10.0, 0.0)),
+            body_color,
+            "the circle centre must draw"
+        );
+        assert_eq!(
+            pixel_of(&raster, viewport, &image, DVec2::new(-2.0, 8.0)),
+            body_color,
+            "segment 0 must draw at its pose"
+        );
+        assert_eq!(
+            pixel_of(&raster, viewport, &image, DVec2::new(2.0, 8.0)),
+            body_color,
+            "segment 1 must draw at its pose"
+        );
     }
 }

@@ -6,8 +6,10 @@
 //! than from kernel state. The ECS is responsible for actually presenting the
 //! captured frame to the window.
 
-use bevy::prelude::Resource;
-use tangle_present::{BackendCapabilities, BackendResult, RendererBackend, SceneFrame};
+use bevy::prelude::{Quat, Resource, Transform, Vec3};
+use tangle_present::{
+    BackendCapabilities, BackendResult, BodyShape, RendererBackend, SceneBody, SceneFrame,
+};
 
 /// The most recent frame the shared presentation layer projected, as captured
 /// by the Bevy backend's [`RendererBackend::draw`].
@@ -53,5 +55,138 @@ impl RendererBackend for CurrentFrame {
     fn present(&mut self) -> BackendResult {
         // Window presentation is driven by Bevy's render schedule.
         Ok(())
+    }
+}
+
+/// Shared unit mesh a rendered body shape draws with.
+///
+/// Both meshes are unit-sized and scaled by the shape's world transform, so a
+/// body reuses one mesh handle instead of allocating per agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyMesh {
+    /// A unit rectangle scaled to the shape's length and width.
+    Box,
+    /// A unit-diameter circle scaled to the shape's diameter.
+    Circle,
+}
+
+/// One body shape resolved to the shared mesh and world transform a Bevy
+/// entity renders it with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyVisual {
+    /// Shared mesh this shape draws with.
+    pub mesh: BodyMesh,
+    /// World transform: translation in the world plane, a heading rotation, and
+    /// a length-by-width scale.
+    pub transform: Transform,
+}
+
+/// Resolve a scene body to the visuals the viewer renders, one per shared
+/// shape.
+///
+/// The shape decision is the backend-independent
+/// [`SceneBody::shapes`], so the viewer draws a vehicle box and a pedestrian
+/// circle by the body's reported kind and one entity per ordered segment,
+/// without a branch on mode or scenario.
+pub fn body_visuals(body: &SceneBody) -> Vec<BodyVisual> {
+    body.shapes()
+        .into_iter()
+        .map(|shape| match shape {
+            BodyShape::Box {
+                center,
+                heading_rad,
+                length_m,
+                width_m,
+            } => BodyVisual {
+                mesh: BodyMesh::Box,
+                transform: Transform {
+                    translation: Vec3::new(center.x as f32, center.y as f32, 1.0),
+                    rotation: Quat::from_rotation_z(heading_rad as f32),
+                    scale: Vec3::new(length_m as f32, width_m as f32, 1.0),
+                },
+            },
+            BodyShape::Circle { center, radius_m } => BodyVisual {
+                mesh: BodyMesh::Circle,
+                transform: Transform {
+                    translation: Vec3::new(center.x as f32, center.y as f32, 1.0),
+                    rotation: Quat::IDENTITY,
+                    scale: Vec3::new((radius_m * 2.0) as f32, (radius_m * 2.0) as f32, 1.0),
+                },
+            },
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use glam::DVec2;
+    use tangle_model::BodyKind;
+    use tangle_sim::{AgentMode, BodySegmentSample};
+
+    /// A scene body with no segments, for the single-envelope shapes.
+    fn body(
+        id: usize,
+        body_kind: BodyKind,
+        position: DVec2,
+        length_m: f64,
+        width_m: f64,
+    ) -> SceneBody {
+        SceneBody {
+            id,
+            position,
+            heading_rad: 0.0,
+            length_m,
+            width_m,
+            mode: AgentMode::Vehicle,
+            body_kind,
+            segments: Vec::new(),
+            speed_mps: Some(0.0),
+            path: None,
+            path_distance_m: None,
+            route: None,
+            profile: None,
+            decision: None,
+        }
+    }
+
+    /// The viewer's shape selection follows the body's kind and ordered
+    /// segments, with no branch on mode or scenario: a vehicle box draws a box
+    /// scaled to its extent, a pedestrian circle draws a circle scaled to its
+    /// diameter, and a segmented body draws one entity per segment at the
+    /// segment's own pose.
+    #[test]
+    fn a_body_selects_its_mesh_from_kind_and_draws_a_segment_each() {
+        let vehicle = body(0, BodyKind::Box, DVec2::new(1.0, 2.0), 4.5, 1.8);
+        let visuals = body_visuals(&vehicle);
+        assert_eq!(visuals.len(), 1);
+        assert_eq!(visuals[0].mesh, BodyMesh::Box);
+        assert_eq!(visuals[0].transform.translation, Vec3::new(1.0, 2.0, 1.0));
+        assert_eq!(visuals[0].transform.scale, Vec3::new(4.5, 1.8, 1.0));
+
+        let pedestrian = body(1, BodyKind::Circle, DVec2::ZERO, 0.5, 0.5);
+        let visuals = body_visuals(&pedestrian);
+        assert_eq!(visuals.len(), 1);
+        assert_eq!(visuals[0].mesh, BodyMesh::Circle);
+        assert_eq!(visuals[0].transform.scale, Vec3::new(0.5, 0.5, 1.0));
+
+        let mut articulated = body(2, BodyKind::ArticulatedChain, DVec2::ZERO, 6.0, 2.0);
+        articulated.segments = vec![
+            BodySegmentSample {
+                position: DVec2::new(0.0, 0.0),
+                heading_rad: 0.0,
+            },
+            BodySegmentSample {
+                position: DVec2::new(3.0, 0.0),
+                heading_rad: 0.1,
+            },
+        ];
+        let visuals = body_visuals(&articulated);
+        assert_eq!(visuals.len(), 2);
+        assert!(visuals.iter().all(|visual| visual.mesh == BodyMesh::Box));
+        assert_eq!(visuals[0].transform.translation, Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(visuals[0].transform.scale, Vec3::new(3.0, 2.0, 1.0));
+        assert_eq!(visuals[1].transform.translation, Vec3::new(3.0, 0.0, 1.0));
     }
 }

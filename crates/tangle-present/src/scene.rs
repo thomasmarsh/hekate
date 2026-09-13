@@ -627,6 +627,36 @@ impl SceneGeometry {
     }
 }
 
+/// One convex piece of a rendered body envelope, in world space.
+///
+/// A backend draws these without knowing a body's mode or scenario: the shared
+/// projection from a [`SceneBody`]'s reported `body_kind` and ordered segments
+/// to this list is the only place that decides a body's drawn shape, so a
+/// vehicle box and a pedestrian circle are distinguished by scene data rather
+/// than by a presenter branch. A `Box` is an oriented rectangle and a `Circle`
+/// its radius, both in metres.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BodyShape {
+    /// A circle of `radius_m` metres centred on `center`.
+    Circle {
+        /// Circle centre in world metres.
+        center: DVec2,
+        /// Circle radius in metres.
+        radius_m: f64,
+    },
+    /// An oriented rectangle: `length_m` along its heading, `width_m` across.
+    Box {
+        /// Rectangle centre in world metres.
+        center: DVec2,
+        /// Rectangle heading in world radians.
+        heading_rad: f64,
+        /// Rectangle length along its heading in metres.
+        length_m: f64,
+        /// Rectangle width across its heading in metres.
+        width_m: f64,
+    },
+}
+
 /// One agent projected into the scene, with interpolation already applied.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneBody {
@@ -694,6 +724,51 @@ impl SceneBody {
             route: motion.and_then(|motion| motion.route),
             profile: motion.and_then(|motion| motion.profile),
             decision: motion.and_then(|motion| motion.decision),
+        }
+    }
+
+    /// The ordered convex shapes this body draws, in world space.
+    ///
+    /// The shape decision is shared by every backend and reads only scene
+    /// data. A body with no ordered segments draws one envelope determined by
+    /// its reported body kind; a body carrying ordered segments draws one box
+    /// per segment at the segment's own pose, so an articulated chain renders
+    /// without a mode branch. A scene segment sample carries only a pose, so a
+    /// segmented body's authored length is divided evenly across its chain.
+    pub fn shapes(&self) -> Vec<BodyShape> {
+        let segment_count = self.segments.len();
+        if segment_count == 0 {
+            return vec![self.envelope_shape()];
+        }
+        let segment_length_m = self.length_m / segment_count as f64;
+        self.segments
+            .iter()
+            .map(|segment| BodyShape::Box {
+                center: segment.position,
+                heading_rad: segment.heading_rad,
+                length_m: segment_length_m,
+                width_m: self.width_m,
+            })
+            .collect()
+    }
+
+    /// The single-envelope shape a body without ordered segments draws.
+    fn envelope_shape(&self) -> BodyShape {
+        match self.body_kind {
+            BodyKind::Circle => BodyShape::Circle {
+                center: self.position,
+                radius_m: self.length_m * 0.5,
+            },
+            // A box, a capsule, and a segment-less articulated chain all draw
+            // their reported extent as an oriented rectangle; a body that
+            // reports a capsule or chain carries its finer shape in its
+            // ordered segments, and a scene segment carries only a pose.
+            BodyKind::Box | BodyKind::Capsule | BodyKind::ArticulatedChain => BodyShape::Box {
+                center: self.position,
+                heading_rad: self.heading_rad,
+                length_m: self.length_m,
+                width_m: self.width_m,
+            },
         }
     }
 }
@@ -1017,6 +1092,69 @@ mod tests {
         assert_eq!(
             SceneBody::project(&[], &coarse, 0.0).body_kind,
             BodyKind::Box
+        );
+    }
+
+    /// The shared shape decision maps a body kind and its ordered segments to
+    /// drawable shapes: a box body to a box, a circle body to its inscribed
+    /// circle, and a segmented body to one box per segment at its own pose.
+    #[test]
+    fn body_shapes_follow_kind_and_ordered_segments() {
+        let vehicle = SceneBody::project(&[], &sample(0, AgentMode::Vehicle), 0.0);
+        assert_eq!(
+            vehicle.shapes(),
+            vec![BodyShape::Box {
+                center: DVec2::ZERO,
+                heading_rad: 0.0,
+                length_m: 0.5,
+                width_m: 0.5,
+            }]
+        );
+
+        let pedestrian = SceneBody::project(&[], &sample(1, AgentMode::Pedestrian), 0.0);
+        assert_eq!(
+            pedestrian.shapes(),
+            vec![BodyShape::Circle {
+                center: DVec2::ZERO,
+                radius_m: 0.25,
+            }]
+        );
+
+        // A segmented body draws one box per segment at the segment's own pose,
+        // its authored length split evenly across the ordered chain.
+        let mut segmented = sample(2, AgentMode::Vehicle);
+        {
+            let motion = segmented.motion.as_mut().expect("motion");
+            motion.body_kind = BodyKind::ArticulatedChain;
+            motion.body_length_m = 6.0;
+            motion.body_width_m = 2.0;
+            motion.segments = vec![
+                BodySegmentSample {
+                    position: DVec2::new(0.0, 0.0),
+                    heading_rad: 0.0,
+                },
+                BodySegmentSample {
+                    position: DVec2::new(4.0, 1.0),
+                    heading_rad: 0.5,
+                },
+            ];
+        }
+        assert_eq!(
+            SceneBody::project(&[], &segmented, 0.0).shapes(),
+            vec![
+                BodyShape::Box {
+                    center: DVec2::new(0.0, 0.0),
+                    heading_rad: 0.0,
+                    length_m: 3.0,
+                    width_m: 2.0,
+                },
+                BodyShape::Box {
+                    center: DVec2::new(4.0, 1.0),
+                    heading_rad: 0.5,
+                    length_m: 3.0,
+                    width_m: 2.0,
+                },
+            ]
         );
     }
 

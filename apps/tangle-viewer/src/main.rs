@@ -22,8 +22,8 @@ use tangle_present::{
     RestartMode, SafetyMarker, SceneBody, SceneFrame, SceneGeometry, Speed, ViewCommand, Viewport,
     decision_summary, event_summary, intent_summary, load_scenario, profile_summary,
 };
-use tangle_sim::{AgentMode, Event, RunConfig, Simulation, Snapshot, SnapshotDetail};
-use tangle_viewer::CurrentFrame;
+use tangle_sim::{Event, RunConfig, Simulation, Snapshot, SnapshotDetail};
+use tangle_viewer::{BodyMesh, CurrentFrame, body_visuals};
 
 /// Scenario used when no path is passed on the command line.
 const DEFAULT_SCENARIO: &str = "scenarios/walking/walking_guide_v1.json5";
@@ -145,23 +145,32 @@ impl ViewerState {
     }
 }
 
-/// Shared mesh and material handles. Every vehicle reuses one mesh and
-/// material and every pedestrian another; there is no per-agent mesh or
+/// Shared mesh and material handles. Every box shape reuses one mesh and
+/// material and every circle shape another; there is no per-agent mesh or
 /// material allocation.
 #[derive(Resource)]
 struct AgentAssets {
-    vehicle_mesh: Handle<Mesh>,
-    pedestrian_mesh: Handle<Mesh>,
-    vehicle_material: Handle<ColorMaterial>,
-    pedestrian_material: Handle<ColorMaterial>,
+    box_mesh: Handle<Mesh>,
+    circle_mesh: Handle<Mesh>,
+    box_material: Handle<ColorMaterial>,
+    circle_material: Handle<ColorMaterial>,
 }
 
-/// Maps an agent's stable id to its rendered entity so entities are reused
-/// across frames and despawns rather than recreated every frame.
-#[derive(Resource, Default)]
-struct Visuals(HashMap<usize, Entity>);
+/// Identifies one rendered shape of one agent, so a body carrying ordered
+/// segments reuses one entity per segment across frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct BodyVisualKey {
+    agent: usize,
+    shape: usize,
+}
 
-/// Marks a rendered car entity.
+/// Maps an agent's stable id and shape index to its rendered entity so
+/// entities are reused across frames and despawns rather than recreated every
+/// frame.
+#[derive(Resource, Default)]
+struct Visuals(HashMap<BodyVisualKey, Entity>);
+
+/// Marks a rendered body entity.
 #[derive(Component)]
 struct AgentVisual;
 
@@ -201,12 +210,12 @@ fn setup(
     ));
 
     commands.insert_resource(AgentAssets {
-        // A vehicle body is a box scaled to its length and width; a pedestrian
-        // body is the circle its reported diameter inscribes.
-        vehicle_mesh: meshes.add(Rectangle::new(1.0, 1.0)),
-        pedestrian_mesh: meshes.add(Circle::new(0.5)),
-        vehicle_material: materials.add(Color::srgb(0.85, 0.87, 0.92)),
-        pedestrian_material: materials.add(Color::srgb(0.65, 0.90, 0.75)),
+        // A box shape is a unit rectangle scaled to its length and width; a
+        // circle shape is the unit-diameter circle its radius inscribes.
+        box_mesh: meshes.add(Rectangle::new(1.0, 1.0)),
+        circle_mesh: meshes.add(Circle::new(0.5)),
+        box_material: materials.add(Color::srgb(0.85, 0.87, 0.92)),
+        circle_material: materials.add(Color::srgb(0.65, 0.90, 0.75)),
     });
 
     commands.spawn((
@@ -447,9 +456,10 @@ fn click_select(
 
 /// Create, move, and retire body entities from the current frame.
 ///
-/// An entity keeps the mesh and material of the mode it spawned with: an
-/// agent's mode is fixed for the life of its slot, so a body never has to
-/// change either.
+/// Each body contributes the visuals the shared scene projection chose for it
+/// ([`body_visuals`]): one box or circle, or one box per ordered segment. An
+/// entity keeps the mesh and material of the shape kind it spawned with, so a
+/// body only reuses or re-spawns entities as its shape list changes.
 fn sync_agents(
     mut commands: Commands,
     frame: Res<CurrentFrame>,
@@ -461,44 +471,40 @@ fn sync_agents(
         return;
     };
 
-    let mut live = Vec::with_capacity(frame.bodies.len());
+    let mut live = Vec::new();
     for body in &frame.bodies {
-        let id = body.id;
-        let transform = Transform {
-            translation: Vec3::new(body.position.x as f32, body.position.y as f32, 1.0),
-            rotation: Quat::from_rotation_z(body.heading_rad as f32),
-            scale: Vec3::new(body.length_m as f32, body.width_m as f32, 1.0),
-        };
-
-        if let Some(&entity) = visuals.0.get(&id) {
-            if let Ok(mut current) = transforms.get_mut(entity) {
-                *current = transform;
-            }
-        } else {
-            let (mesh, material) = match body.mode {
-                AgentMode::Vehicle => {
-                    (assets.vehicle_mesh.clone(), assets.vehicle_material.clone())
-                }
-                AgentMode::Pedestrian => (
-                    assets.pedestrian_mesh.clone(),
-                    assets.pedestrian_material.clone(),
-                ),
+        for (shape, visual) in body_visuals(body).into_iter().enumerate() {
+            let key = BodyVisualKey {
+                agent: body.id,
+                shape,
             };
-            let entity = commands
-                .spawn((
-                    AgentVisual,
-                    Mesh2d(mesh),
-                    MeshMaterial2d(material),
-                    transform,
-                ))
-                .id();
-            visuals.0.insert(id, entity);
+            if let Some(&entity) = visuals.0.get(&key) {
+                if let Ok(mut current) = transforms.get_mut(entity) {
+                    *current = visual.transform;
+                }
+            } else {
+                let (mesh, material) = match visual.mesh {
+                    BodyMesh::Box => (assets.box_mesh.clone(), assets.box_material.clone()),
+                    BodyMesh::Circle => {
+                        (assets.circle_mesh.clone(), assets.circle_material.clone())
+                    }
+                };
+                let entity = commands
+                    .spawn((
+                        AgentVisual,
+                        Mesh2d(mesh),
+                        MeshMaterial2d(material),
+                        visual.transform,
+                    ))
+                    .id();
+                visuals.0.insert(key, entity);
+            }
+            live.push(key);
         }
-        live.push(id);
     }
 
-    visuals.0.retain(|id, entity| {
-        if live.contains(id) {
+    visuals.0.retain(|key, entity| {
+        if live.contains(key) {
             true
         } else {
             commands.entity(*entity).despawn();

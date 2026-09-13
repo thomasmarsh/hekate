@@ -8,7 +8,7 @@
 
 use glam::DVec2;
 use std::collections::BTreeMap;
-use tangle_present::{BodyEmphasis, SceneFrame, Viewport};
+use tangle_present::{BodyEmphasis, BodyShape, SceneFrame, Viewport};
 use tangle_sim::EventKind;
 
 use crate::grid::{Cell, CellGrid};
@@ -310,47 +310,6 @@ impl Rasterizer {
     ) {
         for body in &frame.bodies {
             let selected = frame.status.selection == Some(body.id);
-            let (sin, cos) = body.heading_rad.sin_cos();
-            let forward = DVec2::new(cos, sin);
-            let left = DVec2::new(-sin, cos);
-            let half_length = body.length_m * 0.5;
-            let half_width = body.width_m * 0.5;
-
-            let corners = [
-                body.position + forward * half_length + left * half_width,
-                body.position + forward * half_length - left * half_width,
-                body.position - forward * half_length + left * half_width,
-                body.position - forward * half_length - left * half_width,
-            ];
-            let projected: Vec<(f64, f64)> = corners
-                .iter()
-                .map(|corner| self.project(frame.viewport, *corner))
-                .collect();
-            let min_col = projected
-                .iter()
-                .map(|point| point.0)
-                .fold(f64::INFINITY, f64::min)
-                .floor()
-                .max(0.0) as i64;
-            let max_col = projected
-                .iter()
-                .map(|point| point.0)
-                .fold(f64::NEG_INFINITY, f64::max)
-                .ceil()
-                .min(f64::from(self.width)) as i64;
-            let min_row = projected
-                .iter()
-                .map(|point| point.1)
-                .fold(f64::INFINITY, f64::min)
-                .floor()
-                .max(0.0) as i64;
-            let max_row = projected
-                .iter()
-                .map(|point| point.1)
-                .fold(f64::NEG_INFINITY, f64::max)
-                .ceil()
-                .min(f64::from(self.height)) as i64;
-
             let (fg, bg) = if selected {
                 (SELECTED_COLOR, SELECTED_BACKGROUND)
             } else if let Some(emphasis) = emphasis.get(&body.id) {
@@ -359,21 +318,130 @@ impl Rasterizer {
                 (BODY_COLOR, BACKGROUND)
             };
             let cell = Cell::new(BODY_GLYPH, fg, bg);
-            for row in min_row..max_row {
-                for col in min_col..max_col {
-                    let world = self.world_at(frame.viewport, col as f64, row as f64);
-                    let offset = world - body.position;
-                    if offset.dot(forward).abs() <= half_length
-                        && offset.dot(left).abs() <= half_width
-                    {
-                        grid.put(col, row, cell);
+            // A body draws the shapes the shared scene projection chooses for
+            // it: one box or circle, or one box per ordered segment. The choice
+            // reads scene data, so no presenter branch names a mode or
+            // scenario.
+            for shape in body.shapes() {
+                let center = match shape {
+                    BodyShape::Circle { center, radius_m } => {
+                        self.draw_circle(grid, frame.viewport, center, radius_m, cell);
+                        center
                     }
+                    BodyShape::Box {
+                        center,
+                        heading_rad,
+                        length_m,
+                        width_m,
+                    } => {
+                        self.draw_box(
+                            grid,
+                            frame.viewport,
+                            center,
+                            heading_rad,
+                            length_m,
+                            width_m,
+                            cell,
+                        );
+                        center
+                    }
+                };
+                // Always mark the centre so a sub-cell shape stays visible.
+                let point = self.project(frame.viewport, center);
+                grid.put(point.0.round() as i64, point.1.round() as i64, cell);
+            }
+        }
+    }
+
+    /// Fill the cells inside an oriented box of `length_m` by `width_m`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_box(
+        &self,
+        grid: &mut CellGrid,
+        viewport: Viewport,
+        center: DVec2,
+        heading_rad: f64,
+        length_m: f64,
+        width_m: f64,
+        cell: Cell,
+    ) {
+        let (sin, cos) = heading_rad.sin_cos();
+        let forward = DVec2::new(cos, sin);
+        let left = DVec2::new(-sin, cos);
+        let half_length = length_m * 0.5;
+        let half_width = width_m * 0.5;
+
+        let corners = [
+            center + forward * half_length + left * half_width,
+            center + forward * half_length - left * half_width,
+            center - forward * half_length + left * half_width,
+            center - forward * half_length - left * half_width,
+        ];
+        let projected: Vec<(f64, f64)> = corners
+            .iter()
+            .map(|corner| self.project(viewport, *corner))
+            .collect();
+        let min_col = projected
+            .iter()
+            .map(|point| point.0)
+            .fold(f64::INFINITY, f64::min)
+            .floor()
+            .max(0.0) as i64;
+        let max_col = projected
+            .iter()
+            .map(|point| point.0)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .ceil()
+            .min(f64::from(self.width)) as i64;
+        let min_row = projected
+            .iter()
+            .map(|point| point.1)
+            .fold(f64::INFINITY, f64::min)
+            .floor()
+            .max(0.0) as i64;
+        let max_row = projected
+            .iter()
+            .map(|point| point.1)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .ceil()
+            .min(f64::from(self.height)) as i64;
+
+        for row in min_row..max_row {
+            for col in min_col..max_col {
+                let world = self.world_at(viewport, col as f64, row as f64);
+                let offset = world - center;
+                if offset.dot(forward).abs() <= half_length && offset.dot(left).abs() <= half_width
+                {
+                    grid.put(col, row, cell);
                 }
             }
+        }
+    }
 
-            // Always mark the center so a sub-cell body stays visible.
-            let center = self.project(frame.viewport, body.position);
-            grid.put(center.0.round() as i64, center.1.round() as i64, cell);
+    /// Fill the cells inside a circle of `radius_m` metres.
+    fn draw_circle(
+        &self,
+        grid: &mut CellGrid,
+        viewport: Viewport,
+        center: DVec2,
+        radius_m: f64,
+        cell: Cell,
+    ) {
+        let corner = DVec2::splat(radius_m);
+        let low = self.project(viewport, center - corner);
+        let high = self.project(viewport, center + corner);
+        let min_col = low.0.min(high.0).floor().max(0.0) as i64;
+        let max_col = low.0.max(high.0).ceil().min(f64::from(self.width)) as i64;
+        let min_row = low.1.min(high.1).floor().max(0.0) as i64;
+        let max_row = low.1.max(high.1).ceil().min(f64::from(self.height)) as i64;
+
+        for row in min_row..max_row {
+            for col in min_col..max_col {
+                let world = self.world_at(viewport, col as f64, row as f64);
+                if (world - center).length() <= radius_m {
+                    grid.put(col, row, cell);
+                }
+            }
         }
     }
 
@@ -455,9 +523,14 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use tangle_model::{CompiledScenario, CrossingId, parse_scenario_source};
-    use tangle_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport};
-    use tangle_sim::{AgentId, Event, RegionKey, RunConfig, Simulation, SnapshotDetail};
+    use tangle_model::{BodyKind, CompiledScenario, CrossingId, parse_scenario_source};
+    use tangle_present::{
+        FrameStatus, Overlays, SafetyOverlay, SceneBody, SceneGeometry, Speed, Viewport,
+    };
+    use tangle_sim::{
+        AgentId, AgentMode, BodySegmentSample, Event, RegionKey, RunConfig, Simulation,
+        SnapshotDetail,
+    };
 
     fn scenario() -> CompiledScenario {
         let source = parse_scenario_source(
@@ -736,5 +809,109 @@ mod tests {
                 "{name} primitive was not rasterized in its color"
             );
         }
+    }
+
+    /// One scene body with no ordered segments, so a test draws a single
+    /// envelope the shared shape decision chooses by body kind.
+    fn body(
+        id: usize,
+        body_kind: BodyKind,
+        position: DVec2,
+        length_m: f64,
+        width_m: f64,
+    ) -> SceneBody {
+        SceneBody {
+            id,
+            position,
+            heading_rad: 0.0,
+            length_m,
+            width_m,
+            mode: AgentMode::Vehicle,
+            body_kind,
+            segments: Vec::new(),
+            speed_mps: Some(0.0),
+            path: None,
+            path_distance_m: None,
+            route: None,
+            profile: None,
+            decision: None,
+        }
+    }
+
+    /// A frame over an empty geometry, carrying only `bodies`, so a body-shape
+    /// test sees no scene geometry.
+    fn synthetic_frame(bodies: Vec<SceneBody>) -> SceneFrame {
+        SceneFrame {
+            scenario_id: "presenter-shapes".to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: bodies.len(),
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport: Viewport::new(DVec2::ZERO, 1.0),
+            geometry: Arc::new(SceneGeometry::default()),
+            bodies,
+            overlays: Overlays {
+                geometry: false,
+                vectors: false,
+                safety: false,
+            },
+            safety: SafetyOverlay::default(),
+        }
+    }
+
+    /// True when the cell at `(col, row)` carries the body glyph and color.
+    fn is_body(grid: &CellGrid, col: i64, row: i64) -> bool {
+        grid.get(col, row)
+            .is_some_and(|cell| cell.ch == BODY_GLYPH && cell.fg == BODY_COLOR)
+    }
+
+    /// A box body and a circle body draw visibly different shapes, and a body
+    /// carrying ordered segments draws each segment at its own pose: the cell
+    /// filling a circle's bounding square corner stays empty for the circle but
+    /// is filled for the box, and both segment centres carry the body glyph.
+    #[test]
+    fn each_body_kind_and_ordered_segment_is_rasterized_from_scene_data() {
+        let raster = Rasterizer::new(80, 40);
+        // 80x40 cells at scale 1: one column is one metre, one row two metres.
+        // A 6x6 box at (-10, 0) and a 6 m diameter circle at (10, 0).
+        let box_body = body(0, BodyKind::Box, DVec2::new(-10.0, 0.0), 6.0, 6.0);
+        let circle = body(1, BodyKind::Circle, DVec2::new(10.0, 0.0), 6.0, 6.0);
+        let mut articulated = body(
+            2,
+            BodyKind::ArticulatedChain,
+            DVec2::new(0.0, 8.0),
+            8.0,
+            2.0,
+        );
+        articulated.segments = vec![
+            BodySegmentSample {
+                position: DVec2::new(-2.0, 8.0),
+                heading_rad: 0.0,
+            },
+            BodySegmentSample {
+                position: DVec2::new(2.0, 8.0),
+                heading_rad: 0.0,
+            },
+        ];
+        let grid = raster.rasterize(&synthetic_frame(vec![box_body, circle, articulated]));
+
+        // A box corner cell (world (-13, 2)) is inside the box; the mirrored
+        // circle corner cell (world (13, 2)) is outside the circle.
+        assert!(is_body(&grid, 27, 19), "the box must fill its corner");
+        assert!(
+            !is_body(&grid, 53, 19),
+            "the circle must not fill its bounding square's corner"
+        );
+        // Both body centres draw, so neither kind is skipped.
+        assert!(is_body(&grid, 30, 20), "the box centre must draw");
+        assert!(is_body(&grid, 50, 20), "the circle centre must draw");
+
+        // Each segment centre draws its own box at the segment's pose.
+        assert!(is_body(&grid, 38, 16), "segment 0 must draw at its pose");
+        assert!(is_body(&grid, 42, 16), "segment 1 must draw at its pose");
     }
 }
