@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T12:14:45Z
+updated: 2026-09-13T12:15:33Z
 summary: The operational gate metrics v1 deferred are implemented and reported - throughput, travel time, stopped delay, control delay, and queue length and duration, each with a unit, applicability status, tie-break, and mode and movement disaggregation - metric_definition_version is 2 in every surface that emits a metric, DEF-005-metric-definition-v2 is settled from the implemented surface, and DEF-004-metric-definition-v1 is superseded.
-next: Move this node to .braintree/resolved/ with a Closes TAS-046 commit once the coordinator advances TAS-045's next to the scenario-variants slice.
 ---
 
 # Context
@@ -152,11 +151,13 @@ All five gates are green on this tree: `cargo test --workspace --all-features`,
 `braintree check`. No golden or baseline was regenerated: the pass is read-only
 and no state-affecting path changed.
 
-## Deferred to closeout
+## Closeout
 
-The node stays active until TAS-045's `next` advances to
+The node stayed active until TAS-045's `next` advanced to
 [[TAS-047-increment-6-scenario-variants-and-experiment-spec]], because moving it
-to resolved while that route still names it fails `braintree check` (FBK-011/012).
-The `next` above is that step, and it spells no wikilink so the checker reads it
-as the action it is (FBK-004-adjacent: a frontier sentence a checker parses as a
-route).
+to resolved while that route still named it fails `braintree check`
+(FBK-011/012). The coordinator advanced that route (commit `7abf598`), and this
+node now moves to `.braintree/resolved/` with its `next` removed and a
+`Closes TAS-046` commit. The `next` this node carried until then spelled no
+wikilink, because a checker reads a wikilink in a `next` as the route form
+(recorded as `FBK-019`).
