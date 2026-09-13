@@ -15,6 +15,13 @@
 //! non-zero on any invalid input, and advances no tick or run artifact. It is
 //! the check a CI job or a pre-batch step runs.
 //!
+//! `batch` runs one scenario once per seed, each seed into its own immutable run
+//! directory under an output root, and writes the batch manifest `batch.json`
+//! linking every run in ascending seed order. It is resumable — a run directory
+//! that already holds a completed run is skipped, and one without the completion
+//! marker is re-run — and `--jobs` runs whole independent single-threaded runs
+//! concurrently without changing any per-run trace hash.
+//!
 //! `baseline` captures the deterministic Phase 1 baseline manifest at every
 //! fidelity preset and optionally a non-normative wall-clock report.
 
@@ -26,9 +33,9 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
-    CaptureRequest, RunDirectoryRequest, SamplingPolicy, ScenarioProvenance, canonical_run,
-    canonical_run_sampled, capture, load_scenario_hashed, render_validation_failure,
-    validate_scenario, write_run_directory,
+    BATCH_MANIFEST_FILE, BatchRequest, CaptureRequest, RunDirectoryRequest, SamplingPolicy,
+    ScenarioProvenance, canonical_run, canonical_run_sampled, capture, load_scenario_hashed,
+    render_validation_failure, run_batch, validate_scenario, write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -59,12 +66,47 @@ struct Cli {
 enum Command {
     /// Run a scenario and emit its canonical trace and hash.
     Run(RunArgs),
+    /// Run a scenario once per seed into an output root and write a batch manifest.
+    #[command(long_about = BATCH_LONG_ABOUT)]
+    Batch(BatchArgs),
     /// Check a scenario source and report diagnostics without running it.
     #[command(long_about = VALIDATE_LONG_ABOUT)]
     Validate(ValidateArgs),
     /// Capture the deterministic Phase 1 baseline and a performance report.
     Baseline(BaselineArgs),
 }
+
+/// The `batch` contract shown by `--help`: inputs, resume, parallelism, exits.
+const BATCH_LONG_ABOUT: &str = "\
+Run one scenario once per seed, each seed into its own immutable run directory
+under the output root, and write the batch manifest batch.json listing every run
+in ascending seed order.
+
+Usage:
+  tangle-cli batch <SCENARIO> --seeds <LIST> --out-root <DIR> [--ticks <N>] [--jobs <N>] [--full-trajectories]
+
+Inputs:
+  <SCENARIO>  Path to a JSON5 scenario source document.
+  --seeds     Comma-separated seeds, e.g. `--seeds 0,1,2`; sorted and deduplicated.
+  --out-root  Directory holding batch.json and one seed-<n> run directory per seed.
+  --jobs      Whole runs to execute at once; every run stays single-threaded.
+
+Output:
+  batch.json names the specification, the seed list, and each run's directory,
+  trace hash, and manifest hash. Each seed directory is a run directory: the
+  same manifest.json, summary.json, compressed event stream, and sampled
+  trajectories `run --run-dir` writes.
+
+Resume:
+  A seed whose run directory already holds manifest.json is skipped and never
+  touched; a directory without it is cleared and re-run. Re-invoking a completed
+  batch rewrites batch.json and changes no completed artifact.
+
+Exit codes:
+  0  every run in the batch is complete
+  1  a run failed, a run directory did not match the batch, or an artifact could
+     not be written
+  2  command-line usage error";
 
 /// The `validate` contract shown by `--help`: usage, inputs, and exit codes.
 const VALIDATE_LONG_ABOUT: &str = "\
@@ -128,6 +170,7 @@ struct RunArgs {
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Run(args) => run(args),
+        Command::Batch(args) => batch(args),
         Command::Validate(args) => validate(args),
         Command::Baseline(args) => baseline(args),
     }
@@ -147,7 +190,7 @@ fn run(args: RunArgs) -> ExitCode {
     };
 
     let config = RunConfig::new(args.seed);
-    let sampling = sampling_policy(&args);
+    let sampling = sampling_policy(args.full_trajectories);
     // Without a run directory nothing consumes the trajectories, so the run
     // takes the plain path and pays no sampling cost.
     let (trace, summary, trajectories) = if args.run_dir.is_some() {
@@ -206,16 +249,78 @@ fn run(args: RunArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The sampling policy this `run` invocation declares and applies.
+/// The sampling policy a command declares and applies.
 ///
 /// The applied policy is what the manifest records, so a consumer reading only
 /// the run directory can tell a bounded sample from a full trajectory.
-fn sampling_policy(args: &RunArgs) -> SamplingPolicy {
-    if args.full_trajectories {
+fn sampling_policy(full_trajectories: bool) -> SamplingPolicy {
+    if full_trajectories {
         SamplingPolicy::full_trajectories()
     } else {
         SamplingPolicy::default()
     }
+}
+
+/// Arguments for `batch`.
+#[derive(Args)]
+struct BatchArgs {
+    /// Path to the JSON5 scenario.
+    scenario: PathBuf,
+
+    /// Seeds to run, comma-separated and sorted ascending, e.g. `0,1,2`.
+    #[arg(long, value_delimiter = ',', required = true)]
+    seeds: Vec<u64>,
+
+    /// Number of fixed steps every run advances.
+    #[arg(long, default_value_t = DEFAULT_TICKS)]
+    ticks: u64,
+
+    /// Output root for the batch manifest and one run directory per seed.
+    #[arg(long)]
+    out_root: PathBuf,
+
+    /// Whole runs to execute at once; every run stays single-threaded.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+    jobs: u64,
+
+    /// Keep every tick's trajectory in each run directory.
+    #[arg(long)]
+    full_trajectories: bool,
+}
+
+fn batch(args: BatchArgs) -> ExitCode {
+    let (scenario, content_sha256) = match load_scenario_hashed(&args.scenario) {
+        Ok(loaded) => loaded,
+        Err(error) => return fail(error),
+    };
+
+    let provenance = ScenarioProvenance {
+        id: scenario.id().to_owned(),
+        source_path: args.scenario.to_string_lossy().into_owned(),
+        schema_version: scenario.schema_version(),
+        content_sha256,
+    };
+    let out_root = args.out_root;
+    let manifest = match run_batch(BatchRequest {
+        root: out_root.clone(),
+        scenario,
+        provenance,
+        ticks: args.ticks,
+        step_s: RunConfig::new(0).step().as_secs(),
+        sampling: sampling_policy(args.full_trajectories),
+        seeds: args.seeds,
+        jobs: args.jobs,
+    }) {
+        Ok(manifest) => manifest,
+        Err(error) => return fail(error),
+    };
+
+    eprintln!(
+        "batch manifest: {} ({} runs)",
+        out_root.join(BATCH_MANIFEST_FILE).display(),
+        manifest.runs.len()
+    );
+    ExitCode::SUCCESS
 }
 
 /// Arguments for `validate`.

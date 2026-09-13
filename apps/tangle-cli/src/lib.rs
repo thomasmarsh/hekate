@@ -10,6 +10,7 @@
 //! this crate depends on them rather than the other way around.
 
 mod baseline;
+mod batch;
 mod run_dir;
 mod trace;
 mod trajectories;
@@ -23,6 +24,10 @@ pub use baseline::{
     BASELINE_VERSION, Baseline, CaptureError, CaptureRequest, Convergence,
     PERFORMANCE_REPORT_VERSION, PRESETS, PerformanceReport, Preset, PresetPerformance, PresetTrace,
     ScenarioProvenance, capture,
+};
+pub use batch::{
+    BATCH_MANIFEST_FILE, BATCH_MANIFEST_VERSION, BatchError, BatchManifest, BatchRequest, BatchRun,
+    BatchSpec, run_batch,
 };
 pub use run_dir::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_COMPRESSION,

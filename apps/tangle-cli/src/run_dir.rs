@@ -476,8 +476,10 @@ fn count_records(bytes: &[u8]) -> u64 {
 ///
 /// `run` advances the Standard step, so the label normally reads `standard`. A
 /// step no preset uses is labelled [`FIDELITY_CUSTOM`]; the manifest stays
-/// reproducible either way because it also records the numeric `step_s`.
-fn fidelity(step_s: f64) -> &'static str {
+/// reproducible either way because it also records the numeric `step_s`. The
+/// batch manifest labels its specification the same way, so both manifests name
+/// a step identically.
+pub(crate) fn fidelity(step_s: f64) -> &'static str {
     PRESETS
         .iter()
         .find(|preset| preset.step_s == step_s)

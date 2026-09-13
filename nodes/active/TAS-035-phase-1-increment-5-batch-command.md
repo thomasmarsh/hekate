@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T00:35:43Z
+updated: 2026-09-13T00:37:03Z
 summary: Slice A2 of Phase 1 Increment 5 adds a `batch` CLI command that runs a seed list into one immutable run directory per run under an output root, can be stopped and resumed without mutating completed artifacts, and produces identical per-run trace hashes under parallel and serial execution.
 next: Read the B1/B2 run-directory API and implement `batch` with a batch manifest, resumable completed-run skipping, and a `--jobs` outer loop, then test serial-versus-parallel trace-hash equality.
 ---
@@ -70,4 +70,12 @@ and parallel/serial identical trace hashes.
 
 # Result
 
-Pending.
+## Claim and write set
+
+Base hash `b4ebee451077330dbc107725bed3b91e3b452068d73002cce2e004383c7df897`
+from `braintree hash TAS-035`, claimed by `worker` for 14400 s. Write set:
+`apps/tangle-cli/src/**`, `apps/tangle-cli/tests/**`,
+`apps/tangle-cli/Cargo.toml`, `Cargo.lock` (root), and this node's own frontier
+transition (moved `nodes/proposed/` to `nodes/active/`).
+
+Pending implementation.
