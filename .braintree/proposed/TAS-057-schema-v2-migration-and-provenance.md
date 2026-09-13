@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T14:34:51Z
+updated: 2026-09-13T16:05:00Z
 summary: Deliver schema version 2 with a deterministic version-1 migrate path and run-manifest provenance
-next: [[TAS-061-version-2-schema-contract]]
+next: [[TAS-062-version-2-source-shapes]]
 ---
 
 Parent [[TAS-018-phase-2-increment-0-baseline-extension-contract]].
