@@ -1,9 +1,9 @@
 ---
 context_rev: 3
 priority: P1
-updated: 2026-09-13T14:33:08Z
-summary: The Phase 1 entry gate is satisfied, unblocking Phase 2; Increment 0 still owes schema version 2 with migration and provenance, the compiled agent components with mode templates and a model-card template, the benchmark matrix, and arbitrary-body-kind representation.
-next: [[TAS-057-schema-v2-migration-and-provenance]]
+updated: 2026-09-13T15:41:36Z
+summary: The Phase 1 entry gate is satisfied and the schema-version-2 increment is delivered; Increment 0 still owes the compiled agent components with mode templates and a model-card template, the benchmark matrix, and arbitrary-body-kind representation.
+next: [[TAS-058-agent-components-and-controller-stages]]
 ---
 
 # Outcome
@@ -62,15 +62,12 @@ Increment 0 is **not** complete. Delivered so far:
 
 Still owed, groomed into targeted child sessions (§ Increment 0 of `PHASE_2_PLAN.md`):
 
-1. [[TAS-057-schema-v2-migration-and-provenance]] — schema version 2, a
-   deterministic version-1 `migrate` path, and run-manifest provenance. Its
-   direct children are the leaves
-   [[TAS-061-version-2-schema-contract]],
-   [[TAS-062-version-2-source-shapes]],
-   [[TAS-063-v1-to-v2-migration-and-cli]],
-   [[TAS-064-migration-provenance]], and
-   [[TAS-065-phase-1-migration-regression]]. `SUPPORTED_SCHEMA_VERSION` is still
-   1 and the CLI has no `migrate` subcommand.
+1. [[TAS-057-schema-v2-migration-and-provenance]] — **delivered and resolved.**
+   Schema version 2 parses, validates, and compiles (`SUPPORTED_SCHEMA_VERSION`
+   is 2); the pure version-1 `migrate` transform and `tangle-cli migrate`
+   subcommand are in place; run and baseline manifests record source and
+   normalized hashes plus the migration version; and every Phase 1 scenario
+   passes through the migration path or its original reader.
 2. [[TAS-058-agent-components-and-controller-stages]] — the compiled component
    model, mode-template validation, the four controller stages, and a model-card
    template. Its leaves are
