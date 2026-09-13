@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T13:05:14Z
+updated: 2026-09-13T13:05:56Z
 summary: Slice C of Phase 1 Increment 6 runs the two variants into immutable run directories and produces the concise comparison report over throughput, delay, queues, violations, collision/contact events, TTC, PET, and minimum separation by mode and movement, adding the F6 event-family aggregation and per-metric convergence tolerance that the report depends on.
-next: Once the coordinator advances the TAS-045 frontier route to the evidence-and-reproduction slice, move this node to resolved with Closes TAS-048.
 ---
 
 # Context
@@ -222,9 +221,56 @@ silently.
 
 ## Closeout
 
-The node stays `active` until the coordinator advances TAS-045's `next` from
-this node to the evidence-and-reproduction slice, because moving it to resolved
-while that route still names it fails `braintree check` (FBK-011/012/017).
+The node stayed `active` until the coordinator advanced TAS-045's `next` from
+this node to the evidence-and-reproduction slice (commit `bf0db10`,
+`braintree check` green), because moving it to resolved while that route still
+named it fails `braintree check` (FBK-011/012/017). The `Closes TAS-048` commit
+moves this node to `.braintree/resolved/` with its `next` removed.
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree, with the evidence in
+`# Result`:
+
+1. **Immutable run directories exist for both variants across the specified
+   seeds, with the declared artifacts and sampling policy.** Both variants ran
+   all ten bank seeds at the spec's Standard fidelity into
+   `experiments/increment6_signal_timing_v1/runs/<variant>/seed-<n>/` through
+   the batch machinery, whose completed run directories are never rewritten (the
+   parallel test re-runs a completed experiment and shows every artifact
+   byte-identical). The policy is the spec's declared bounded default, and the
+   report records it.
+2. **The comparison report reports throughput, delay, queues, violations,
+   collision/contact events, TTC, PET, and minimum separation by mode and
+   movement, and every number links to its manifest(s) and to
+   `metric_definition_version` 2.** `comparison_report.json` holds 254 records
+   across ten sections and 33 slices, including the two modes, the four
+   pedestrian routes, and the two vehicle movements; every record states version
+   2 and its unit, each variant's `runs` table resolves a seed to its
+   `manifest_sha256`, and
+   `the_checked_in_report_matches_the_checked_in_inputs` and
+   `the_experiment_runs_both_variants_over_one_bank_and_reports_by_mode_and_movement`
+   check the coverage, the attribution, and four re-derived numbers.
+3. **Aggregation carries the full mode and movement slices including
+   event-family counts (F6 closed), with tests.** `mode_event_slices` and
+   `agent_movement_slices` in `aggregate.rs`, the paired equivalents in
+   `compare.rs`, and the tests named in `# Result`.
+4. **Convergence uses a per-metric relative tolerance and the report states
+   material sensitivity per metric; tests cover the tolerance rule.**
+   `MetricTolerance` per metric, carried by every `MetricSensitivity` and
+   declared in the report's tolerance block, with the rewritten unit test and
+   `the_tolerance_is_per_metric_because_a_count_has_an_absolute_part`.
+5. **Parallel and serial batch execution produce identical per-run trace
+   hashes.** Both checked-in variants' `batch.json` files are byte-identical
+   between `--jobs 1` and `--jobs 8`, and the property is pinned by the parallel
+   test.
+6. **No existing golden or baseline is broken without a deliberate, reported
+   regeneration.** All of `tests/golden/`, `baselines/`, and `schemas/` are
+   unmodified and their tests pass; no regeneration was needed or performed.
+7. **The five gates pass.** `cargo test --workspace --all-features` 576 passed,
+   0 failed, 1 ignored; clippy clean with `-D warnings`; `cargo fmt --all
+   --check` clean; `dependency direction OK`; `braintree check` passed (89
+   nodes) on the tree this Resolution lands in.
 
 - Immutable run directories exist for both variants across the specified seeds,
   with manifests, summaries, event streams, and sampled trajectories consistent
