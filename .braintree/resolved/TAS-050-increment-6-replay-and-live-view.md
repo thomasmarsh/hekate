@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T13:54:12Z
+updated: 2026-09-13T13:56:13Z
 summary: Slice E of Phase 1 Increment 6 produces a recorded replay of the comparison and live-view instructions so a reviewer can inspect geometry, state, decisions, and events visually, reusing the existing replay and viewer/TUI surfaces.
-next: Resolve this node once the coordinator has advanced TAS-045's next to the slice F/G closeout, then commit the resolution.
 ---
 
 # Context
@@ -123,7 +122,6 @@ All five gates were run on the final tree:
 
 ## Node status
 
-This node stays `active`: TAS-045's `next` still names it, so the coordinator
-owns advancing that route to the slice F/G closeout before this node resolves
-(FBK-011/012/017). Phase 2 moves this node to `.braintree/resolved/`, drops
-`next`, and re-runs `braintree check`.
+Resolved. TAS-045's `next` was advanced to the slice F/G action (commit
+`5a91999`), so this node moved to `.braintree/resolved/` and dropped `next`.
+The frontier is now slice F/G closeout under TAS-045.
