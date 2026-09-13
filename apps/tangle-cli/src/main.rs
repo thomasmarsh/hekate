@@ -110,6 +110,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run a scenario and emit its canonical trace and hash.
+    #[command(long_about = RUN_LONG_ABOUT)]
     Run(RunArgs),
     /// Run a scenario once per seed into an output root and write a batch manifest.
     #[command(long_about = BATCH_LONG_ABOUT)]
@@ -135,6 +136,41 @@ enum Command {
     /// Capture the deterministic Phase 1 baseline and a performance report.
     Baseline(BaselineArgs),
 }
+
+/// The `run` contract shown by `--help`: usage, inputs, outputs, exit codes.
+const RUN_LONG_ABOUT: &str = "\
+Run a scenario and emit its canonical trace and hash. The trace goes to stdout
+by default or to --output, and the SHA-256 of its exact bytes is printed to
+stderr and optionally written to --hash-file. With --run-dir the run also writes
+an immutable run directory holding manifest.json, summary.json, the
+gzip-compressed canonical event stream, and the sampled trajectories; a
+completed run directory is never rewritten.
+
+Usage:
+  tangle-cli run <SCENARIO> [--seed <N>] [--ticks <N>] [--output <FILE>] [--hash-file <FILE>] [--run-dir <DIR>] [--full-trajectories]
+
+Inputs:
+  <SCENARIO>           Path to a JSON5 scenario source document.
+  --seed <N>           Root seed recorded for the run (default 0).
+  --ticks <N>          Fixed steps to advance (default 250).
+  --output <FILE>      Destination for the canonical trace; `-` is stdout.
+  --hash-file <FILE>   Also write the trace's lowercase SHA-256 to this path.
+  --run-dir <DIR>      Also write an immutable run directory here, holding
+                       manifest.json, summary.json, the gzip-compressed
+                       canonical event stream, and the sampled trajectories.
+  --full-trajectories  Sample nothing: keep every tick's trajectory in the run
+                       directory. Requires --run-dir.
+
+Output:
+  The canonical trace on stdout when --output is `-`, otherwise in the given
+  file; the trace hash on stderr.
+
+Exit codes:
+  0  the run completed and its artifacts were written
+  1  the scenario cannot be read or is invalid, a destination cannot be
+     written, or the run directory already holds a completed run or foreign
+     content
+  2  command-line usage error";
 
 /// The `batch` contract shown by `--help`: inputs, resume, parallelism, exits.
 const BATCH_LONG_ABOUT: &str = "\

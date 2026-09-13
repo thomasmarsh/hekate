@@ -22,8 +22,8 @@ use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     BATCH_MANIFEST_FILE, BATCH_MANIFEST_VERSION, BatchError, BatchManifest, BatchRequest,
-    EVENT_STREAM_FILE, MANIFEST_FILE, METRICS_FILE, RunManifest, SUMMARY_FILE, SamplingPolicy,
-    ScenarioProvenance, TRAJECTORY_FILE, load_scenario_hashed, run_batch,
+    EVENT_STREAM_FILE, MANIFEST_FILE, MANIFEST_TEMP_FILE, METRICS_FILE, RunManifest, SUMMARY_FILE,
+    SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, load_scenario_hashed, run_batch,
 };
 use tangle_model::CompiledScenario;
 use tangle_sim::{EVENT_VERSION, RunConfig};
@@ -305,6 +305,43 @@ fn resume_skips_completed_runs_and_completes_an_incomplete_one() {
     assert!(
         interrupted.join(MANIFEST_FILE).exists(),
         "the incomplete run must be completed"
+    );
+}
+
+/// A marker write that a crash interrupted does not fail the batch closed: the
+/// marker is staged in a temporary file and renamed into place, so the
+/// interrupted directory holds the staging file and no marker, reads as a
+/// partial run, and is re-run to the same completed bytes.
+#[test]
+fn an_interrupted_marker_write_is_completed_rather_than_refused() {
+    let scratch = Scratch::new("interrupted-marker");
+    let out_root = scratch.path("batch");
+
+    let first = run_batch(request(&out_root, &[0], TICKS, 1)).expect("batch runs");
+    let directory = out_root.join(&first.runs[0].directory);
+    let completed = content_hashes(&directory);
+
+    // Simulate the crash: the marker is gone and only the staging file the
+    // writer had not renamed yet remains, holding truncated bytes.
+    std::fs::remove_file(directory.join(MANIFEST_FILE)).expect("the marker is removed");
+    std::fs::write(
+        directory.join(MANIFEST_TEMP_FILE),
+        br#"{"manifest_version": 1, "seed": 0, "scenario": {"id": "walk""#,
+    )
+    .expect("the interrupted write is staged");
+    assert!(!directory.join(MANIFEST_FILE).exists());
+
+    let second = run_batch(request(&out_root, &[0], TICKS, 1)).expect("batch completes the run");
+
+    assert_eq!(second, first, "the re-run must reproduce the same manifest");
+    assert!(
+        directory.join(MANIFEST_FILE).exists(),
+        "the interrupted run must be completed"
+    );
+    assert_eq!(
+        content_hashes(&directory),
+        completed,
+        "the completed run must hold the same artifacts and no staging file"
     );
 }
 

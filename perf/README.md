@@ -154,7 +154,8 @@ trace going to `/dev/null`, and attaches `sample <pid> 8`, this host's 1 ms
 sampler, one second in. `scripts/profile-symbols.py` folds the capture into
 `profiles/mixed_interaction_v1-release.summary.txt`: the samples under
 `Simulation::step`, every direct child of it with its share, the tick body's own
-self time, and the interaction-metrics pass as one line.
+self time, the interaction-metrics pass as one line, and the frames inside that
+pass with their share of it.
 
 Of 5 741 tick samples in that capture:
 
@@ -179,11 +180,15 @@ The largest single leaf frame is the broad-phase candidate query,
 `tangle_sim::index::BroadPhase::candidates_in_aabb`, at 33 % of the tick
 (1 913 samples) — and inside the metrics pass the candidate query
 (`SweptBroadPhase::candidate_pairs`) is 1 898 of the pass's 2 944 samples (64 %)
-against 458 (16 %) for the TTC bisection (`time_to_collision`). That **corrects
-the profiling candidate Increment 4 deferred to this slice**: it named the TTC
-bisections as the dominant cost of the pass, and on this evidence the pass's
-dominant cost is the candidate query both the metrics pass and the safety monitor
-run every tick.
+against 458 (16 %) for the TTC bisection (`time_to_collision`). Both within-pass
+numbers are rows of the folded table's `within-pass frames` section, which folds
+the rows below the pass's frames by terminal symbol name and reports each one's
+share of the pass; folding by terminal name is what puts the bisection's inlined
+`first_fraction` closure (174 samples) with the bisection (284) rather than
+reporting them apart. That **corrects the profiling candidate Increment 4
+deferred to this slice**: it named the TTC bisections as the dominant cost of
+the pass, and on this evidence the pass's dominant cost is the candidate query
+both the metrics pass and the safety monitor run every tick.
 
 ## Swept time-of-impact state (baseline)
 

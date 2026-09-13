@@ -55,10 +55,10 @@ pub use converge::{
 pub use replay::{ReplayError, replay_run_directory};
 pub use run_dir::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_COMPRESSION,
-    EVENT_STREAM_FILE, EventRetention, EventStream, MANIFEST_FILE, RUN_MANIFEST_VERSION,
-    RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest, RunSummary,
-    SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy, TrajectoryRetention, TrajectorySampling,
-    write_run_directory,
+    EVENT_STREAM_FILE, EventRetention, EventStream, MANIFEST_FILE, MANIFEST_TEMP_FILE,
+    RUN_MANIFEST_VERSION, RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest,
+    RunSummary, SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy, TrajectoryRetention,
+    TrajectorySampling, write_run_directory,
 };
 pub use run_metrics::{
     EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue,

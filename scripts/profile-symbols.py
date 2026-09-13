@@ -6,7 +6,15 @@ the stack for, in Rust's legacy mangled form, and it splits one symbol into
 several rows when the frames under it differ. This folds the capture into the
 phase table `perf/README.md` documents: the samples under `Simulation::step`,
 every direct child of it with its share of the tick, the tick body's own self
-time, and the always-on interaction-metrics pass as one line.
+time, the always-on interaction-metrics pass as one line, and the frames inside
+that pass with their share of it.
+
+The within-pass table folds rows by terminal symbol name, because a symbol is
+split across rows and an inlined instantiation carries the name of the function
+it was leaf-copied into: the TTC bisection's `first_fraction` closure is one row
+per call site and reports the bisection, not `first_fraction`. The rows overlap
+— a frame's samples include the calls it makes — so the column does not sum to
+the pass total.
 
 Sampling attributes inlined callee time to the enclosing frame, so read the table
 as an attribution of the hot path, not as an exact split: the split that does not
@@ -27,6 +35,8 @@ DIGITS = re.compile(r"(\d+)")
 # hash cannot be mistaken for identifiers.
 ROOT = re.compile(r"(?:^|_)(3std|5alloc|4core|6object|11rand_chacha|10tangle_sim|10tangle_cli|12tangle_model)")
 STEP = re.compile(r"_10tangle_sim3simNtB5_10Simulation4step$")
+# The always-on per-tick interaction-metrics pass, as its frame paths start.
+PASS = "tangle_sim::metrics::"
 
 
 def pretty(symbol: str) -> str:
@@ -106,6 +116,24 @@ def self_time_frames(lines):
     return rows
 
 
+def in_pass(rows, parents, pass_frames):
+    """The rows below a pass frame, excluding the pass frames themselves.
+
+    A pass frame's samples already are the pass's cost, so the table reads as
+    what the pass's frames call: the rows a frame reaches, at any depth.
+    """
+    frames = set(pass_frames)
+    inside = []
+    for index in range(len(rows)):
+        parent = parents[index]
+        while parent is not None:
+            if parent in frames:
+                inside.append(index)
+                break
+            parent = parents[parent]
+    return inside
+
+
 def main() -> None:
     path = sys.argv[1]
     top = int(sys.argv[2]) if len(sys.argv) > 2 else 12
@@ -139,11 +167,26 @@ def main() -> None:
             children[pretty(symbol)] += samples
     child_samples = sum(children.values())
     tick_self = tick_samples - child_samples
-    pass_samples = sum(samples for name, samples in children.items() if name.startswith("tangle_sim::metrics::"))
+    pass_frames = [
+        index
+        for index in range(len(rows))
+        if parents[index] in root_steps and pretty(rows[index][2]).startswith(PASS)
+    ]
+    pass_samples = sum(rows[index][1] for index in pass_frames)
     rest_samples = tick_samples - pass_samples
+
+    # Folded by terminal symbol name: an inlined instantiation reports the
+    # symbol of the function it was copied into, so one callee appears under
+    # several paths and both belong to the callee's cost.
+    within = collections.Counter()
+    for index in in_pass(rows, parents, pass_frames):
+        within[pretty(rows[index][2]).rsplit("::", 1)[-1]] += rows[index][1]
 
     def share(samples):
         return f"{100.0 * samples / tick_samples:5.1f}%"
+
+    def pass_share(samples):
+        return f"{100.0 * samples / pass_samples:5.1f}%"
 
     print("# release-mode sampled profile phase table")
     print(f"capture: {path}")
@@ -162,6 +205,12 @@ def main() -> None:
     print()
     print(f"{'interaction-metrics pass (tangle_sim::metrics::*)':<72}{pass_samples:>9}{share(pass_samples):>8}")
     print(f"{'rest of the tick':<72}{rest_samples:>9}{share(rest_samples):>8}")
+    print()
+    print("## within-pass frames: what the interaction-metrics pass calls")
+    print(f"pass_samples: {pass_samples}")
+    print(f"{'frame (terminal symbol)':<72}{'samples':>9}{'share':>8}")
+    for name, samples in within.most_common()[:top]:
+        print(f"{name[:70]:<72}{samples:>9}{pass_share(samples):>8}")
     print()
     print("## top self-time frames (top of stack)")
     print(f"{'frame':<72}{'samples':>9}")

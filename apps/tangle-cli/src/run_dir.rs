@@ -6,8 +6,9 @@
 //!   path and content hash, seed, step and fidelity profile, the scenario
 //!   schema version, [`EVENT_VERSION`], the model version, the build revision,
 //!   and the declared sampling policy — and a descriptor of the event stream;
-//! - `summary.json` carries the run's aggregate counts, tied back to the
-//!   manifest by its SHA-256;
+//! - `summary.json` carries the run's aggregate counts and the metric
+//!   definition revision its `metrics.json` reports, tied back to the manifest
+//!   by its SHA-256;
 //! - `events.jsonl.gz` carries the canonical JSON Lines event stream,
 //!   gzip-compressed. It is the canonical trace's exact bytes, so the trace
 //!   golden and the trace hash golden pin this artifact too;
@@ -17,9 +18,12 @@
 //!
 //! The directory is immutable once complete. `manifest.json` is written last
 //! and is the completion marker, so its presence means every artifact it names
-//! is present and final; a second run targeting a completed directory fails
-//! with [`RunDirectoryError::Completed`] and mutates nothing. A batch can
-//! therefore be stopped and resumed without changing completed run artifacts.
+//! is present and final; it is written through [`MANIFEST_TEMP_FILE`] and
+//! renamed into place, so an interrupted write leaves no truncated marker and
+//! the directory still reads as incomplete. A second run targeting a completed
+//! directory fails with [`RunDirectoryError::Completed`] and mutates nothing. A
+//! batch can therefore be stopped and resumed without changing completed run
+//! artifacts.
 //!
 //! Nothing here reads the wall clock or the environment, so the same inputs
 //! produce byte-identical artifacts: the gzip header is fixed (no file name,
@@ -43,7 +47,7 @@ use tangle_model::MODEL_VERSION;
 use tangle_sim::{EVENT_VERSION, RunSummary as KernelRunSummary};
 
 use crate::baseline::{PRESETS, ScenarioProvenance};
-use crate::run_metrics::{METRICS_FILE, RunMetrics, RunMetricsArtifact};
+use crate::run_metrics::{METRIC_DEFINITION_VERSION, METRICS_FILE, RunMetrics, RunMetricsArtifact};
 use crate::trace::{Trace, sha256_hex};
 use crate::trajectories::{
     TrajectoryArtifact, TrajectoryError, TrajectorySample, write_trajectories,
@@ -60,6 +64,15 @@ pub const SAMPLING_POLICY_VERSION: u32 = 1;
 
 /// Completion marker of a run directory; written after every other artifact.
 pub const MANIFEST_FILE: &str = "manifest.json";
+
+/// File the completion marker is staged in before it is renamed into place.
+///
+/// The marker's presence is what makes a run directory complete, so it is
+/// written atomically: a crash mid-write leaves this file rather than a
+/// truncated `manifest.json`, which would read as a complete run no consumer
+/// can parse. A leftover staging file is not a marker, so a directory holding
+/// one reads as a partial run that a batch clears and re-runs.
+pub const MANIFEST_TEMP_FILE: &str = "manifest.json.tmp";
 
 /// The run's aggregate summary inside a run directory.
 pub const SUMMARY_FILE: &str = "summary.json";
@@ -315,6 +328,9 @@ pub struct RunManifest {
 pub struct RunSummary {
     /// Summary format version.
     pub summary_version: u32,
+    /// The metric definition revision the run's `metrics.json` reports, so a
+    /// reader can attribute the run's numbers to the definition that fixed them.
+    pub metric_definition_version: u32,
     /// SHA-256 of the manifest's exact bytes, which ties every value here back
     /// to the provenance that produced it.
     pub manifest_sha256: String,
@@ -386,7 +402,7 @@ pub fn write_run_directory(
     write_file(&directory.join(EVENT_STREAM_FILE), &stream)?;
     write_file(&directory.join(SUMMARY_FILE), summary_json.as_bytes())?;
     write_file(&directory.join(METRICS_FILE), metrics_json.as_bytes())?;
-    write_file(&directory.join(MANIFEST_FILE), manifest_json.as_bytes())?;
+    write_manifest(directory, manifest_json.as_bytes())?;
     Ok(())
 }
 
@@ -421,6 +437,7 @@ impl RunSummary {
     fn new(manifest_json: &str, summary: &KernelRunSummary) -> Self {
         Self {
             summary_version: RUN_SUMMARY_VERSION,
+            metric_definition_version: METRIC_DEFINITION_VERSION,
             manifest_sha256: sha256_hex(manifest_json.as_bytes()),
             ticks: summary.ticks(),
             spawned: summary.spawned(),
@@ -495,6 +512,19 @@ pub(crate) fn fidelity(step_s: f64) -> &'static str {
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), RunDirectoryError> {
     fs::write(path, bytes).map_err(|source| RunDirectoryError::Io {
         path: path.to_path_buf(),
+        action: "write",
+        source,
+    })
+}
+
+/// Write the completion marker through [`MANIFEST_TEMP_FILE`] and rename it into
+/// place, so `manifest.json` is either absent or complete and never truncated.
+fn write_manifest(directory: &Path, bytes: &[u8]) -> Result<(), RunDirectoryError> {
+    let temporary = directory.join(MANIFEST_TEMP_FILE);
+    write_file(&temporary, bytes)?;
+    let marker = directory.join(MANIFEST_FILE);
+    fs::rename(&temporary, &marker).map_err(|source| RunDirectoryError::Io {
+        path: marker,
         action: "write",
         source,
     })

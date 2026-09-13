@@ -35,6 +35,22 @@ Simulation::step (self: inlined and non-frame work)                          119
 interaction-metrics pass (tangle_sim::metrics::*)                            2944   51.3%
 rest of the tick                                                             2797   48.7%
 
+## within-pass frames: what the interaction-metrics pass calls
+pass_samples: 2944
+frame (terminal symbol)                                                   samples   share
+candidate_pairs                                                              1898   64.5%
+candidates_in_aabb                                                           1791   60.8%
+time_to_collision                                                             458   15.6%
+tick_minimum_clearance_m                                                      214    7.3%
+rebuild                                                                       199    6.8%
+body_clearance_m                                                              192    6.5%
+clearance_rate                                                                175    5.9%
+body_contact_normal                                                            84    2.9%
+Vec                                                                            76    2.6%
+circle_box_clearance_m                                                         61    2.1%
+nanov2_free                                                                    48    1.6%
+box_box_least_overlap_axis                                                     41    1.4%
+
 ## top self-time frames (top of stack)
 frame                                                                     samples
 tangle_sim::index::BroadPhase::candidates_in_aabb                            1913

@@ -387,6 +387,10 @@ fn metrics_json_carries_the_versioned_run_minima_and_slices() {
     )
     .expect("summary is JSON");
     assert_eq!(artifact.manifest_sha256, summary.manifest_sha256);
+    assert_eq!(
+        artifact.metric_definition_version, summary.metric_definition_version,
+        "the summary must report the revision its metrics.json reports"
+    );
 
     // The run-level minima are exactly the in-process accessors' values.
     let separation = reference

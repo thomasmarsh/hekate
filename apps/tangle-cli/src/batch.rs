@@ -11,8 +11,10 @@
 //! - **Resumable.** Resume is detected from the artifacts on disk, never from
 //!   in-memory state: a run directory whose `manifest.json` completion marker
 //!   is present is skipped and never touched, while a directory without the
-//!   marker is cleared and re-run from scratch. Re-invoking a completed batch
-//!   rewrites `batch.json` byte for byte and changes no completed artifact.
+//!   marker is cleared and re-run from scratch — including a directory whose
+//!   marker write was interrupted, which holds the staging file and no marker.
+//!   Re-invoking a completed batch rewrites `batch.json` byte for byte and
+//!   changes no completed artifact.
 //! - **Parallel equals serial.** `jobs` is an outer loop over whole
 //!   single-threaded runs, each owning a private simulation, so a parallel
 //!   batch and a serial batch produce identical per-run trace hashes and
@@ -33,8 +35,8 @@ use tangle_sim::{EVENT_VERSION, InitError, RunConfig};
 
 use crate::baseline::ScenarioProvenance;
 use crate::run_dir::{
-    EVENT_STREAM_FILE, MANIFEST_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest,
-    SUMMARY_FILE, SamplingPolicy, fidelity, write_run_directory,
+    EVENT_STREAM_FILE, MANIFEST_FILE, MANIFEST_TEMP_FILE, RunDirectoryError, RunDirectoryRequest,
+    RunManifest, SUMMARY_FILE, SamplingPolicy, fidelity, write_run_directory,
 };
 use crate::run_metrics::METRICS_FILE;
 use crate::seed_bank::SeedBankReference;
@@ -308,6 +310,10 @@ fn inspect(request: &BatchRequest, seed: u64) -> Result<Option<BatchRun>, BatchE
 
 /// Whether a directory without a completion marker holds only run artifacts,
 /// so it is a partial run rather than foreign content.
+///
+/// [`MANIFEST_TEMP_FILE`] counts as a run artifact: the marker is written through
+/// it and renamed into place, so a crash mid-write leaves the staging file and
+/// no marker, which is a partial run the batch completes.
 fn holds_only_run_artifacts(directory: &Path) -> Result<bool, BatchError> {
     let entries = fs::read_dir(directory).map_err(|source| BatchError::Io {
         path: directory.to_path_buf(),
@@ -325,6 +331,7 @@ fn holds_only_run_artifacts(directory: &Path) -> Result<bool, BatchError> {
         let known = name == EVENT_STREAM_FILE
             || name == SUMMARY_FILE
             || name == TRAJECTORY_FILE
+            || name == MANIFEST_TEMP_FILE
             || name == METRICS_FILE;
         if !known {
             return Ok(false);

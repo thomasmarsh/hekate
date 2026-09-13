@@ -19,11 +19,11 @@ use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_COMPRESSION,
-    EVENT_STREAM_FILE, EventRetention, MANIFEST_FILE, METRICS_FILE, RUN_MANIFEST_VERSION,
-    RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest, RunMetrics,
-    RunSummary, SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy, ScenarioProvenance,
-    TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryRetention, TrajectorySample, canonical_run,
-    canonical_run_captured, load_scenario_hashed, write_run_directory,
+    EVENT_STREAM_FILE, EventRetention, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE,
+    RUN_MANIFEST_VERSION, RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest,
+    RunMetrics, RunSummary, SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy,
+    ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryRetention, TrajectorySample,
+    canonical_run, canonical_run_captured, load_scenario_hashed, write_run_directory,
 };
 use tangle_sim::{EVENT_VERSION, RunConfig};
 
@@ -349,6 +349,10 @@ fn summary_reports_the_run_and_traces_back_to_the_manifest() {
     let summary = read_summary(&run_dir);
 
     assert_eq!(summary.summary_version, RUN_SUMMARY_VERSION);
+    assert_eq!(
+        summary.metric_definition_version, METRIC_DEFINITION_VERSION,
+        "the summary must name the revision its metrics.json reports"
+    );
     assert_eq!(summary.ticks, kernel_summary.ticks());
     assert_eq!(summary.spawned, kernel_summary.spawned());
     assert_eq!(summary.despawned, kernel_summary.despawned());
@@ -431,6 +435,36 @@ fn run_directories_are_reproducible_byte_for_byte() {
             std::fs::read(first.join(&name)).expect("artifact is readable"),
             std::fs::read(second.join(&name)).expect("artifact is readable"),
             "run directory artifact '{name}' is not reproducible"
+        );
+    }
+}
+
+/// `run --help` documents the contract its sibling commands document: usage,
+/// inputs, outputs, and exit codes.
+#[test]
+fn help_documents_usage_inputs_outputs_and_exit_codes() {
+    let output = Command::new(CLI)
+        .args(["run", "--help"])
+        .output()
+        .expect("tangle-cli runs");
+
+    assert_eq!(output.status.code(), Some(0));
+    let help = stdout(&output);
+    for expected in [
+        "Usage:",
+        "tangle-cli run <SCENARIO>",
+        "<SCENARIO>",
+        "--hash-file",
+        "--run-dir",
+        "--full-trajectories",
+        "Output:",
+        "Exit codes:",
+        "the run completed and its artifacts were written",
+        "command-line usage error",
+    ] {
+        assert!(
+            help.contains(expected),
+            "help text is missing '{expected}':\n{help}"
         );
     }
 }
