@@ -11,6 +11,10 @@ description = "Headless command-line interface for Tangle."
 tangle-model.workspace = true
 tangle-sim.workspace = true
 clap.workspace = true
+# Compression for the run directory's gzip event stream. Declared here rather
+# than at the workspace level because it belongs to the output layer alone:
+# `tangle-model` and `tangle-sim` must never depend on it.
+flate2 = "1.1.10"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

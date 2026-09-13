@@ -9,6 +9,7 @@
 //! the other way around.
 
 mod baseline;
+mod run_dir;
 mod trace;
 mod validate;
 
@@ -21,7 +22,14 @@ pub use baseline::{
     PERFORMANCE_REPORT_VERSION, PRESETS, PerformanceReport, Preset, PresetPerformance, PresetTrace,
     ScenarioProvenance, capture,
 };
-pub use trace::{Trace, TraceRecorder, canonical_trace};
+pub use run_dir::{
+    DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_COMPRESSION,
+    EVENT_STREAM_FILE, EventRetention, EventStream, MANIFEST_FILE, RUN_MANIFEST_VERSION,
+    RUN_SUMMARY_VERSION, RunDirectoryError, RunDirectoryRequest, RunManifest, RunSummary,
+    SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy, TrajectoryRetention, TrajectorySampling,
+    write_run_directory,
+};
+pub use trace::{Trace, TraceRecorder, canonical_run, canonical_trace};
 pub use validate::{ValidationSummary, render_validation_failure, validate_scenario};
 
 /// Failure to load and compile a scenario file.

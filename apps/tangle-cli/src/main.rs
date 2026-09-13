@@ -2,7 +2,11 @@
 //!
 //! `run` loads a JSON5 scenario, advances the kernel for a fixed number of
 //! ticks, and writes the canonical trace. The trace hash printed to stderr is
-//! the value a golden test or manifest compares.
+//! the value a golden test or manifest compares. When `--run-dir` is given it
+//! also writes the immutable per-run directory holding `manifest.json`,
+//! `summary.json`, and the gzip-compressed canonical event stream; a completed
+//! run directory is never rewritten, so that destination fails rather than
+//! mutating finished artifacts.
 //!
 //! `validate` loads the same source through the same loader but stops there:
 //! it reports whether the schema and the semantic invariants hold, exits
@@ -20,8 +24,8 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
-    CaptureRequest, canonical_trace, capture, load_scenario, load_scenario_hashed,
-    render_validation_failure, validate_scenario,
+    CaptureRequest, RunDirectoryRequest, ScenarioProvenance, canonical_run, capture,
+    load_scenario_hashed, render_validation_failure, validate_scenario, write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -101,6 +105,12 @@ struct RunArgs {
     /// Also write the lowercase hexadecimal SHA-256 of the trace to this path.
     #[arg(long)]
     hash_file: Option<PathBuf>,
+
+    /// Also write an immutable run directory here, holding manifest.json,
+    /// summary.json, and the gzip-compressed canonical event stream. The
+    /// directory must not hold a completed run, which is never rewritten.
+    #[arg(long)]
+    run_dir: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -112,15 +122,41 @@ fn main() -> ExitCode {
 }
 
 fn run(args: RunArgs) -> ExitCode {
-    let scenario = match load_scenario(&args.scenario) {
-        Ok(scenario) => scenario,
+    let (scenario, content_sha256) = match load_scenario_hashed(&args.scenario) {
+        Ok(loaded) => loaded,
         Err(error) => return fail(error),
     };
 
-    let trace = match canonical_trace(scenario, RunConfig::new(args.seed), args.ticks) {
-        Ok(trace) => trace,
+    let provenance = ScenarioProvenance {
+        id: scenario.id().to_owned(),
+        source_path: args.scenario.to_string_lossy().into_owned(),
+        schema_version: scenario.schema_version(),
+        content_sha256,
+    };
+
+    let config = RunConfig::new(args.seed);
+    let (trace, summary) = match canonical_run(scenario, config, args.ticks) {
+        Ok(run) => run,
         Err(error) => return fail(error),
     };
+
+    // The run directory is written before the trace output: a completed run
+    // directory rejects the rerun, and that rejection must not also emit a
+    // trace to the caller's destination.
+    if let Some(directory) = &args.run_dir
+        && let Err(error) = write_run_directory(
+            directory,
+            RunDirectoryRequest {
+                scenario: &provenance,
+                seed: args.seed,
+                step_s: config.step().as_secs(),
+                trace: &trace,
+                summary: &summary,
+            },
+        )
+    {
+        return fail(error);
+    }
 
     if args.output.as_os_str() == "-" {
         if let Err(error) = io::stdout().write_all(trace.bytes()) {

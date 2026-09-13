@@ -118,6 +118,21 @@ pub fn canonical_trace(
     config: RunConfig,
     ticks: u64,
 ) -> Result<Trace, InitError> {
+    canonical_run(scenario, config, ticks).map(|(trace, _)| trace)
+}
+
+/// Run a compiled scenario for exactly `ticks` fixed steps and return both the
+/// canonical trace and the kernel's summary of the run.
+///
+/// A run directory records the summary alongside the trace, and [`canonical_trace`]
+/// delegates here, so both consumers share one run loop: the recorded bytes
+/// cannot drift from the golden contract just because a caller also wants the
+/// run's totals.
+pub fn canonical_run(
+    scenario: CompiledScenario,
+    config: RunConfig,
+    ticks: u64,
+) -> Result<(Trace, RunSummary), InitError> {
     let mut sim = Simulation::new(scenario, config)?;
     let mut recorder = TraceRecorder::new(&sim, &config, ticks);
 
@@ -125,7 +140,9 @@ pub fn canonical_trace(
         recorder.record(&sim.step());
     }
 
-    Ok(recorder.finish(sim.finish()))
+    let summary = sim.finish();
+    let trace = recorder.finish(summary.clone());
+    Ok((trace, summary))
 }
 
 fn write_line<T: Serialize>(bytes: &mut Vec<u8>, record: &T) {
