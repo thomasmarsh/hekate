@@ -1,0 +1,331 @@
+{
+  "artifact_version": 1,
+  "kind": "release-end-to-end-benchmark",
+  "generated_unix_s": 1789267370,
+  "build_profile": "release",
+  "method": {
+    "harness": "apps/tangle-cli/tests/release_benchmark.rs",
+    "command": "scripts/bench-release.sh",
+    "profile": "release (no LTO, debug = false), the pinned toolchain in rust-toolchain.toml",
+    "clock": "std::time::Instant around the fixed-step loop only: scenario load, warm-up, artifact writing, and process start-up are outside the measured interval",
+    "aggregate": "three independent passes per scenario; the artifact reports every pass, the fastest, and the median, and derives the ratios from the median",
+    "simulated_seconds_per_scenario": 3600.0,
+    "repeats": 3,
+    "warmup_ticks": 2000,
+    "agent_steps": "live agents counted before each step and summed over the run, the same quantity baselines/phase1/performance.json reports",
+    "output_bytes": "the canonical JSON Lines trace and the immutable run directory the default sampling policy writes, each extrapolated to one simulated hour",
+    "run_directory_policy": "SamplingPolicy::default(): every event, trajectories sampled at stride 10 ticks up to 100 000 rows",
+    "notes": [
+      "Wall clock is evidence about one machine at one time, not a gate: no test asserts these numbers.",
+      "Single-threaded: one simulation per pass, no parallelism, so the numbers are per-core.",
+      "The host was otherwise idle; runs are not pinned to a core and not repeated under load.",
+      "Agent counts are small by design (tens of live bodies), so per-tick cost is dominated by the fixed per-tick passes, not by agent count.",
+      "Extrapolating bytes to one simulated hour is a ratio of the measured hour, not a model of a longer run."
+    ]
+  },
+  "machine": {
+    "os": "macos",
+    "os_version": "13.7.8",
+    "arch": "x86_64",
+    "cpu": "Intel(R) Core(TM) i5-7600K CPU @ 3.80GHz",
+    "logical_cpus": 4,
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)"
+  },
+  "scenarios": [
+    {
+      "scenario": "walking_guide_v1",
+      "source_path": "scenarios/walking/walking_guide_v1.json5",
+      "role": "Phase 1 walking skeleton: a static constant-speed population that leaves the 120 m path and is never replaced, so the row is the empty-tick floor (6 agents, 704 agent steps over the hour)",
+      "step_s": 0.05,
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "wall_seconds": [
+        0.009190728,
+        0.009233195,
+        0.009155361
+      ],
+      "wall_seconds_min": 0.009155361,
+      "wall_seconds_median": 0.009190728,
+      "simulated_seconds_per_wall_second": 391699.11240981123,
+      "microseconds_per_tick": 0.127649,
+      "agent_steps": 704,
+      "agent_steps_per_second": 76598.93753791865,
+      "spawned": 6,
+      "despawned": 6,
+      "remaining": 0,
+      "canonical_trace_bytes": 1321,
+      "canonical_trace_sha256": "954c470f3cb3c7ff4dc553fc21f70a8d717973e283e5453bebd541751aec1210",
+      "canonical_trace_bytes_per_simulated_hour": 1321.0,
+      "run_directory_bytes": 5743,
+      "run_directory_bytes_per_simulated_hour": 5743.0,
+      "run_directory_files": [
+        {
+          "name": "events.jsonl.gz",
+          "bytes": 280
+        },
+        {
+          "name": "manifest.json",
+          "bytes": 994
+        },
+        {
+          "name": "metrics.json",
+          "bytes": 1495
+        },
+        {
+          "name": "summary.json",
+          "bytes": 209
+        },
+        {
+          "name": "trajectories.parquet",
+          "bytes": 2765
+        }
+      ]
+    },
+    {
+      "scenario": "car_following_v1",
+      "source_path": "scenarios/benchmarks/car_following_v1.json5",
+      "role": "single corridor at high demand: IDM car following is the only interaction",
+      "step_s": 0.05,
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "wall_seconds": [
+        5.737138495,
+        5.033183298,
+        5.070767525
+      ],
+      "wall_seconds_min": 5.033183298,
+      "wall_seconds_median": 5.070767525,
+      "simulated_seconds_per_wall_second": 709.9516951331741,
+      "microseconds_per_tick": 70.42732673611111,
+      "agent_steps": 1094162,
+      "agent_steps_per_second": 215778.37962508446,
+      "spawned": 1199,
+      "despawned": 1183,
+      "remaining": 16,
+      "canonical_trace_bytes": 237986,
+      "canonical_trace_sha256": "498cf0e2cb5e973aa5e7260f5fa5a08583b5102a04ddbfa8d64f8b3dc41fda72",
+      "canonical_trace_bytes_per_simulated_hour": 237986.0,
+      "run_directory_bytes": 2113807,
+      "run_directory_bytes_per_simulated_hour": 2113807.0,
+      "run_directory_files": [
+        {
+          "name": "events.jsonl.gz",
+          "bytes": 16804
+        },
+        {
+          "name": "manifest.json",
+          "bytes": 1005
+        },
+        {
+          "name": "metrics.json",
+          "bytes": 2636
+        },
+        {
+          "name": "summary.json",
+          "bytes": 216
+        },
+        {
+          "name": "trajectories.parquet",
+          "bytes": 2093146
+        }
+      ]
+    },
+    {
+      "scenario": "red_light_compliance_v1",
+      "source_path": "scenarios/benchmarks/red_light_compliance_v1.json5",
+      "role": "signalized approach: compliance decisions, queueing, and red-light running",
+      "step_s": 0.05,
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "wall_seconds": [
+        1.080083425,
+        1.076262313,
+        1.109889171
+      ],
+      "wall_seconds_min": 1.076262313,
+      "wall_seconds_median": 1.080083425,
+      "simulated_seconds_per_wall_second": 3333.075868653387,
+      "microseconds_per_tick": 15.001158680555557,
+      "agent_steps": 278749,
+      "agent_steps_per_second": 258080.9903642397,
+      "spawned": 910,
+      "despawned": 904,
+      "remaining": 6,
+      "canonical_trace_bytes": 373821,
+      "canonical_trace_sha256": "cd6e4f2a56bfa79e7431950904ec1021e62fdc0e8e9778dbda54c597ab4d0ff3",
+      "canonical_trace_bytes_per_simulated_hour": 373821.0,
+      "run_directory_bytes": 657893,
+      "run_directory_bytes_per_simulated_hour": 657893.0,
+      "run_directory_files": [
+        {
+          "name": "events.jsonl.gz",
+          "bytes": 23952
+        },
+        {
+          "name": "manifest.json",
+          "bytes": 1018
+        },
+        {
+          "name": "metrics.json",
+          "bytes": 2808
+        },
+        {
+          "name": "summary.json",
+          "bytes": 213
+        },
+        {
+          "name": "trajectories.parquet",
+          "bytes": 629902
+        }
+      ]
+    },
+    {
+      "scenario": "pedestrian_crossing_v1",
+      "source_path": "scenarios/benchmarks/pedestrian_crossing_v1.json5",
+      "role": "one crosswalk: pedestrian compliance and vehicle yielding across modes",
+      "step_s": 0.05,
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "wall_seconds": [
+        2.902085068,
+        3.092298916,
+        2.872459702
+      ],
+      "wall_seconds_min": 2.872459702,
+      "wall_seconds_median": 2.902085068,
+      "simulated_seconds_per_wall_second": 1240.4874135825987,
+      "microseconds_per_tick": 40.30673705555556,
+      "agent_steps": 630911,
+      "agent_steps_per_second": 217399.2096085586,
+      "spawned": 1004,
+      "despawned": 995,
+      "remaining": 9,
+      "canonical_trace_bytes": 865973,
+      "canonical_trace_sha256": "f65d5b23194b886c920276145504a573b8dae50f7b4fffa5e4054c9db4ecea54",
+      "canonical_trace_bytes_per_simulated_hour": 865973.0,
+      "run_directory_bytes": 1548941,
+      "run_directory_bytes_per_simulated_hour": 1548941.0,
+      "run_directory_files": [
+        {
+          "name": "events.jsonl.gz",
+          "bytes": 60425
+        },
+        {
+          "name": "manifest.json",
+          "bytes": 1016
+        },
+        {
+          "name": "metrics.json",
+          "bytes": 5627
+        },
+        {
+          "name": "summary.json",
+          "bytes": 214
+        },
+        {
+          "name": "trajectories.parquet",
+          "bytes": 1481659
+        }
+      ]
+    },
+    {
+      "scenario": "four_leg_signal_v1",
+      "source_path": "scenarios/benchmarks/four_leg_signal_v1.json5",
+      "role": "four-leg signalized intersection with two pedestrian crossings",
+      "step_s": 0.05,
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "wall_seconds": [
+        1.8583838940000001,
+        1.870379019,
+        1.86963645
+      ],
+      "wall_seconds_min": 1.8583838940000001,
+      "wall_seconds_median": 1.86963645,
+      "simulated_seconds_per_wall_second": 1925.5080312538837,
+      "microseconds_per_tick": 25.967172916666666,
+      "agent_steps": 372213,
+      "agent_steps_per_second": 199083.08912141717,
+      "spawned": 1091,
+      "despawned": 1085,
+      "remaining": 6,
+      "canonical_trace_bytes": 1264328,
+      "canonical_trace_sha256": "af0fa6c01364331acfa400858204b7392039856fe84eb706aa6cf8da5c169ffe",
+      "canonical_trace_bytes_per_simulated_hour": 1264328.0,
+      "run_directory_bytes": 956514,
+      "run_directory_bytes_per_simulated_hour": 956514.0,
+      "run_directory_files": [
+        {
+          "name": "events.jsonl.gz",
+          "bytes": 86409
+        },
+        {
+          "name": "manifest.json",
+          "bytes": 1010
+        },
+        {
+          "name": "metrics.json",
+          "bytes": 5102
+        },
+        {
+          "name": "summary.json",
+          "bytes": 215
+        },
+        {
+          "name": "trajectories.parquet",
+          "bytes": 863778
+        }
+      ]
+    },
+    {
+      "scenario": "mixed_interaction_v1",
+      "source_path": "scenarios/benchmarks/mixed_interaction_v1.json5",
+      "role": "two crosswalks, four pedestrian routes: the Increment 3 mixed gate fixture and the scenario the interaction-metrics pass is measured on",
+      "step_s": 0.05,
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "wall_seconds": [
+        3.206018704,
+        3.184518504,
+        3.180756777
+      ],
+      "wall_seconds_min": 3.180756777,
+      "wall_seconds_median": 3.184518504,
+      "simulated_seconds_per_wall_second": 1130.469173119303,
+      "microseconds_per_tick": 44.22942366666667,
+      "agent_steps": 761111,
+      "agent_steps_per_second": 239003.47856166828,
+      "spawned": 938,
+      "despawned": 929,
+      "remaining": 9,
+      "canonical_trace_bytes": 2169350,
+      "canonical_trace_sha256": "d11d4d02ec1ec85dad73ee64088fcd1aa1a642a912b2489aaa8b9ea0c4ba7d82",
+      "canonical_trace_bytes_per_simulated_hour": 2169350.0,
+      "run_directory_bytes": 2064969,
+      "run_directory_bytes_per_simulated_hour": 2064969.0,
+      "run_directory_files": [
+        {
+          "name": "events.jsonl.gz",
+          "bytes": 162474
+        },
+        {
+          "name": "manifest.json",
+          "bytes": 1014
+        },
+        {
+          "name": "metrics.json",
+          "bytes": 12766
+        },
+        {
+          "name": "summary.json",
+          "bytes": 213
+        },
+        {
+          "name": "trajectories.parquet",
+          "bytes": 1888502
+        }
+      ]
+    }
+  ]
+}

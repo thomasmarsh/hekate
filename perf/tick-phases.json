@@ -1,0 +1,126 @@
+{
+  "artifact_version": 1,
+  "kind": "interaction-metrics-pass-cost",
+  "generated_unix_s": 1789267632,
+  "scenario": "scenarios/benchmarks/mixed_interaction_v1.json5",
+  "step_s": 0.05,
+  "seed": 0,
+  "build_profile": "release",
+  "machine": {
+    "os": "macos",
+    "os_version": "13.7.8",
+    "arch": "x86_64",
+    "cpu": "Intel(R) Core(TM) i5-7600K CPU @ 3.80GHz",
+    "logical_cpus": 4,
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)"
+  },
+  "method": {
+    "isolation": "the interaction-metrics pass has no switch: InteractionMetrics::begin_tick and observe are crate-private and Simulation::advance_one_tick always calls them. The measured split is an A/B ablation.",
+    "base_commit": "b79d0585bc9db4c9d55bb580da61c09a103bd211",
+    "procedure": [
+      "git archive HEAD into a temporary directory",
+      "write a throwaway crates/tangle-sim/examples/tick_phase_bench.rs driver into that copy",
+      "cargo build --release --offline -p tangle-sim --example tick_phase_bench",
+      "remove the two self.metrics.* calls from the copy's crates/tangle-sim/src/sim.rs and rebuild",
+      "time the identical bare step loop in both builds over 5 passes per window and report the minimum and the median"
+    ],
+    "limitation": "removing the calls lets the compiler re-codegen the rest of the loop, so rest is the rest of the tick as compiled without the pass, not as compiled with it",
+    "integrity_check": "the repository's crates/ is verified clean before and after, and the two builds must report the same event count and event-stream hash",
+    "clock": "std::time::Instant around the bare step loop of a fresh Simulation, excluding scenario load, warm-up, and process start-up",
+    "window_note": "the pass has no switch, so no absolute number here is a gate"
+  },
+  "integrity": {
+    "repo_crates_clean_before": true,
+    "repo_crates_clean_after": true,
+    "ablated_build_observes_the_same_run": true
+  },
+  "windows": [
+    {
+      "ticks": 2500,
+      "simulated_seconds": 125.0,
+      "agent_steps": 20127,
+      "events": 646,
+      "event_hash_committed": "da4182ed1b1a8ef1",
+      "event_hash_ablated": "da4182ed1b1a8ef1",
+      "event_stream_identical": true,
+      "committed": {
+        "wall_min_s": 0.055806703,
+        "wall_median_s": 0.059872478,
+        "us_per_tick_min": 22.3227,
+        "us_per_tick_median": 23.9490
+      },
+      "ablated": {
+        "wall_min_s": 0.014220788,
+        "wall_median_s": 0.014912869,
+        "us_per_tick_min": 5.6883,
+        "us_per_tick_median": 5.9651
+      },
+      "pass_us_per_tick": 17.9838,
+      "rest_us_per_tick": 5.9651,
+      "pass_share_of_tick": 0.7509,
+      "pass_over_rest_ratio": 3.0148,
+      "pass_us_per_tick_from_minimum": 16.6344,
+      "pass_share_of_tick_from_minimum": 0.7452
+    },
+    {
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "agent_steps": 761111,
+      "events": 25549,
+      "event_hash_committed": "c3a2cda64120a9da",
+      "event_hash_ablated": "c3a2cda64120a9da",
+      "event_stream_identical": true,
+      "committed": {
+        "wall_min_s": 3.258532643,
+        "wall_median_s": 3.447868891,
+        "us_per_tick_min": 45.2574,
+        "us_per_tick_median": 47.8871
+      },
+      "ablated": {
+        "wall_min_s": 1.014928083,
+        "wall_median_s": 1.05786626,
+        "us_per_tick_min": 14.0962,
+        "us_per_tick_median": 14.6926
+      },
+      "pass_us_per_tick": 33.1945,
+      "rest_us_per_tick": 14.6926,
+      "pass_share_of_tick": 0.6932,
+      "pass_over_rest_ratio": 2.2593,
+      "pass_us_per_tick_from_minimum": 31.1612,
+      "pass_share_of_tick_from_minimum": 0.6885
+    },
+    {
+      "ticks": 300000,
+      "simulated_seconds": 15000.0,
+      "agent_steps": 2896169,
+      "events": 101347,
+      "event_hash_committed": "c0bc2a99bd477101",
+      "event_hash_ablated": "c0bc2a99bd477101",
+      "event_stream_identical": true,
+      "committed": {
+        "wall_min_s": 18.249932684,
+        "wall_median_s": 18.532202785,
+        "us_per_tick_min": 60.8331,
+        "us_per_tick_median": 61.7740
+      },
+      "ablated": {
+        "wall_min_s": 8.535205358,
+        "wall_median_s": 8.560856946,
+        "us_per_tick_min": 28.4507,
+        "us_per_tick_median": 28.5362
+      },
+      "pass_us_per_tick": 33.2378,
+      "rest_us_per_tick": 28.5362,
+      "pass_share_of_tick": 0.5381,
+      "pass_over_rest_ratio": 1.1648,
+      "pass_us_per_tick_from_minimum": 32.3824,
+      "pass_share_of_tick_from_minimum": 0.5323
+    }
+  ],
+  "tas_030_reference": {
+    "pass_us_per_tick": 22.0,
+    "rest_us_per_tick": 7.0,
+    "source": ".braintree/resolved/TAS-030-phase-1-increment-4-geometry-queries-safety-events.md, Measured cost",
+    "note": "Increment 4's figure, re-measured here independently; this artifact is the Increment 5 baseline"
+  }
+}
