@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T03:15:00Z
+updated: 2026-09-13T03:45:00Z
 summary: Slice C1a of Phase 1 Increment 5 persists the versioned, disaggregated metric values into the immutable run directory as metrics.json (linked to the manifest and to metric_definition_version 1) so multi-seed aggregation can read mode- and movement-sliced metrics from artifacts.
-next: Read DEF-004 and the run-directory writer, then emit metrics.json with run-level, per-mode-pair, and per-movement metric minima plus event counts, and test the values against `Simulation::interaction_metrics()`.
 ---
 
 # Outcome
@@ -185,3 +184,76 @@ All five passed on this tree: `cargo test --workspace --all-features` (0
 failures), clippy with `-D warnings`, `cargo fmt --all --check`,
 `./scripts/check-dependency-direction.sh` (`dependency direction OK`), and
 `braintree check nodes` (`graph check: passed`).
+
+# Resolution
+
+Every `# Done when` criterion holds on the committed tree (implementation in
+`e473a30`), verified by rerunning the five gates on that tree.
+
+1. **A completed run directory contains `metrics.json` with
+   `metric_definition_version: 1` and the `manifest_sha256` link.**
+   `run_dir.rs:382` builds `RunMetricsArtifact::new` and `:388` writes it before
+   the `manifest.json` completion marker; `run_metrics.rs:68` fixes
+   `METRICS_FILE`, `:75` fixes `METRIC_DEFINITION_VERSION` at 1, and `:324`
+   stamps `manifest_sha256` from the manifest bytes. Both `run --run-dir`
+   (`main.rs:235`) and `batch` (`batch.rs:416`) write it. Asserted by
+   `tests/run_metrics.rs:368` (version and manifest link) and `:697` (the
+   command wiring).
+2. **The file records the run minima, the per-`ModePair` separation minimum,
+   the per-movement (pair of movement keys) metric minima, and event counts
+   with their mode and movement slices.** `run_metrics.rs:286`/`:304` define
+   `RunMetrics`/`RunMetricsArtifact`; `:398` reads the live run-level minima,
+   `:504` the `ModePair` slice, `:524` the movement slice (bucket rule in the
+   module doc at `:44`; `:682` spells the tagged movement key, `:697` the sorted
+   bucket key), and `:434` the event counts with their `by_family`,
+   `by_family_kind`, `by_family_mode`, and `by_family_movement` slices. Asserted
+   by `tests/run_metrics.rs:368` against the in-process accessors and the
+   decompressed stream.
+3. **Not-applicable metrics are emitted as an explicit no-value status, not
+   `0`.** `run_metrics.rs:84` defines `reported` / `not_applicable` /
+   `not_observed`, and `MetricValue` (`:104`) omits `value` for the no-value
+   statuses, so it can never serialize as `0`. Asserted by
+   `tests/run_metrics.rs:615` (time to collision `not_applicable` with no value,
+   post-encroachment time `not_observed`) and by the round-trip unit test
+   `the_artifact_round_trips_through_json` in `run_metrics.rs`.
+4. **Tests compare the written metric values against the in-process
+   `Simulation::interaction_metrics()` (and the event stream) for a real
+   scenario, and cover the movement/mode slices.**
+   `tests/run_metrics.rs:368` runs `mixed_interaction_v1` and compares every
+   run-level minimum, every `ModePair`, every movement bucket, and the whole
+   event-count block against an independent count of the decompressed stream;
+   `:615` covers the walking scenario and the empty movement slice. The real
+   per-pair time to collision the movement slice needs is the new read-only
+   accessor `interaction_metrics::pair_minimum_ttc_s` (`metrics.rs:569`),
+   covered by the kernel test
+   `the_pass_records_each_observed_pairs_least_time_to_collision`
+   (`metrics.rs:1130`).
+5. **The canonical trace, trace golden, trace hash golden, Phase 1 baseline,
+   and all goldens are unchanged; `EVENT_VERSION` stays 2.** The implementation
+   commit touches only `apps/tangle-cli/src`, `apps/tangle-cli/tests`,
+   `crates/tangle-sim/src/metrics.rs`, and this node; no file under
+   `tests/golden/`, `baselines/`, `scenarios/`, or `schemas/` changed, and
+   `EVENT_VERSION` stays 2 (`crates/tangle-sim/src/event.rs`). `trace.rs:169`
+   keeps one run loop, so the golden and baseline guards
+   (`tests/golden_trace.rs`, `tests/baseline.rs`) and the run-directory stream
+   round-trip still pass. No dependency was added, so `Cargo.toml` and
+   `Cargo.lock` are unchanged and `tangle-model` and `tangle-sim` gained none.
+6. **The five gates pass on the final tree** (rerun on `e473a30`): `cargo test
+   --workspace --all-features` passed with 496 tests and 0 failures; clippy with
+   `--all-targets --all-features -- -D warnings` was clean; `cargo fmt --all
+   --check` was clean; `./scripts/check-dependency-direction.sh` printed
+   `dependency direction OK`; `braintree check nodes` printed
+   `graph check: passed (64 nodes)`.
+
+Outcome complete: the versioned, disaggregated `metrics.json` artifact, its
+immutable write-once placement, the batch resume treatment, and the gate
+evidence are on the committed tree.
+
+## Handoff note
+
+`TAS-031`'s `next` still names this node and its exclusive write set excludes
+the parent, so this worker did not edit it; advancing that pointer is the
+coordinator's, per [[FBK-011-skill-md-s-mutation-rules-say-advancing-a-coordi]].
+The widening the coordinator sanctioned was exactly
+`crates/tangle-sim/src/metrics.rs`; no re-export in `sim.rs` or `lib.rs` was
+required.
