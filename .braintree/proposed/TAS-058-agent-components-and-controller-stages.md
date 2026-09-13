@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T16:56:33Z
+updated: 2026-09-13T17:08:04Z
 summary: Compile mode templates into agent components behind four explicit controller stages.
-next: [[TAS-069-model-card-template]]
+next: [[TAS-070-synthetic-template-gate]]
 ---
 
 Parent [[TAS-018-phase-2-increment-0-baseline-extension-contract]].

@@ -6,11 +6,12 @@
 //! stub-controller swap in `crates/tangle-sim/src/controller.rs` plus the
 //! measured fixture in `mixed_interaction.rs`. The cards are documentation, so
 //! this test checks the card inventory directly from the source text with
-//! `include_str!`: a card that loses its state, parameter, constant,
-//! decision-input, bounds, tie-break, or emergency-backstop section fails here,
-//! and a card that stops naming its model family or its replaceable interface
-//! fails here too. That is drift protection for a documentation deliverable, and
-//! the one part of the deliverable no other test can observe.
+//! `include_str!`: the required sections come from the checked-in model-card
+//! template, so a card that loses a section, or states the sections out of the
+//! template's order, fails here, and a card that stops naming its model family
+//! or its replaceable interface fails here too. That is drift protection for a
+//! documentation deliverable, and the one part of the deliverable no other test
+//! can observe.
 
 /// The vehicle model card: the documented IDM longitudinal controller.
 const VEHICLE_CARD: &str = include_str!("../src/control.rs");
@@ -20,22 +21,24 @@ const PEDESTRIAN_CARD: &str = include_str!("../src/pedestrian.rs");
 const SEAM: &str = include_str!("../src/controller.rs");
 /// The checked-in mixed gate fixture, run through both documented models.
 const BENCHMARK: &str = include_str!("../../../scenarios/benchmarks/mixed_interaction_v1.json5");
+/// The checked-in model-card template, the inventory of record for the required
+/// sections every card must state, in order.
+const TEMPLATE: &str = include_str!("../../../docs/model-card-template.md");
 
-/// Sections every model card must state, in this order.
+/// The required sections, in order, read from the template's `##` headings.
 ///
-/// The seam's model-card index documents the same inventory, and the cards
-/// themselves are the account of the model: state variables, sampled parameters,
-/// model constants, decision inputs, bounds, tie-breaks, and the emergency
-/// backstop outside the bounds.
-const CARD_SECTIONS: [&str; 7] = [
-    "## State",
-    "## Parameters",
-    "## Constants",
-    "## Decision inputs",
-    "## Bounds",
-    "## Tie-breaks",
-    "## Emergency backstop",
-];
+/// The template is the inventory of record, so the test derives the list from it
+/// rather than hardcoding one: a new required section is a template edit, and
+/// every card must then state it too. The template's `##` headings are its
+/// section list, so the template itself uses `##` for nothing else.
+fn required_sections() -> Vec<String> {
+    TEMPLATE
+        .lines()
+        .filter_map(|line| line.strip_prefix("## "))
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect()
+}
 
 /// The sections a card must carry, in order, as `(card name, text)`.
 fn cards() -> [(&'static str, &'static str); 2] {
@@ -47,17 +50,23 @@ fn cards() -> [(&'static str, &'static str); 2] {
 
 #[test]
 fn both_initial_model_cards_state_the_full_model_inventory() {
+    let sections = required_sections();
+    assert!(
+        !sections.is_empty(),
+        "the model-card template must name at least one required section"
+    );
     for (name, card) in cards() {
         assert!(
             card.contains("# Model card"),
             "the {name} card must open with a `# Model card` heading"
         );
         let mut cursor = 0;
-        for section in CARD_SECTIONS {
-            let Some(found) = card[cursor..].find(section) else {
-                panic!("the {name} card is missing the `{section}` section after its bounds");
+        for section in &sections {
+            let heading = format!("## {section}");
+            let Some(found) = card[cursor..].find(&heading) else {
+                panic!("the {name} card is missing the `{heading}` section in template order");
             };
-            cursor += found + section.len();
+            cursor += found + heading.len();
         }
     }
 }
@@ -103,6 +112,7 @@ fn the_seam_indexes_both_cards_and_both_interfaces() {
         "crate::pedestrian",
         "Intelligent Driver Model",
         "Coulter",
+        "docs/model-card-template.md",
     ] {
         assert!(
             SEAM.contains(required),

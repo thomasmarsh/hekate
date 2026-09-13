@@ -61,7 +61,7 @@
 //!
 //! An empty list is free-flow driving. The model sees only these constraints,
 //! the sampled profile, and the current speed; the kernel owns which of them
-//! exist, and the position caps in [Emergency backstops](#emergency-backstops)
+//! exist, and the position caps in [Emergency backstop](#emergency-backstop)
 //! are applied outside the model.
 //!
 //! ## Equations
@@ -109,7 +109,7 @@
 //! opposite-direction body on the same path is not a constraint for this
 //! model; opposite-direction and crossing-path interaction is later work.
 //!
-//! ## Emergency backstops
+//! ## Emergency backstop
 //!
 //! The profile bound above describes the IDM command only. The kernel adds
 //! three position caps outside that clamp: the next speed may not pass the
@@ -146,6 +146,65 @@
 //! vehicle's braking distance. The crossing entry, its region, and the movement
 //! it crosses all come from the shared scenario representation, so the rule is
 //! scenario data rather than a controller branch.
+//!
+//! ## Assumptions
+//!
+//! The model assumes one longitudinal degree of freedom: the vehicle is a point
+//! mass on a fixed guide path, so it steers nothing and has no lateral state.
+//! It assumes the sampled profile fully describes the driver and is fixed for
+//! the run, with no learning, memory, or per-vehicle variation. It assumes the
+//! kernel supplies every interaction constraint and every position cap listed
+//! above; IDM itself never guarantees an exact rest position at a stop line, and
+//! the only longitudinal interactions in Phase 1 are the leader, the required
+//! stop line, and the occupied crossing of [Decision inputs](#decision-inputs).
+//! Nothing here is calibrated against observed trajectories.
+//!
+//! ## Parameter sources
+//!
+//! Every parameter is authored scenario data, sampled once per vehicle from the
+//! scenario's `profiles` envelope and never fitted to observations. The Phase 1
+//! parser defaults in `ProfileSource` are provisional engineering values
+//! (desired speed 9–15 m/s, length 4.0–5.2 m, width 1.7–2.0 m, time gap 1.0–2.0
+//! s, maximum acceleration 1.2–2.5 m/s², comfortable deceleration 2.0–3.5 m/s²),
+//! and every checked-in scenario restates its envelope explicitly rather than
+//! relying on that default. The IDM constants — the exponent `delta`, the
+//! standstill gap, and the gap floor — are model properties, not sampled values.
+//!
+//! ## Validated ranges
+//!
+//! Evidence covers the Phase 1 vehicle fixtures: the mixed-profile
+//! `car_following_v1` corridor and the signalized, pedestrian-crossing, and
+//! mixed-interaction benchmarks, at the sampled envelope above (desired speed
+//! 9–15 m/s) and the Fast, Standard, and Fine steps. The bounded model is kept
+//! collision-free by the kernel's position caps, not by a collision resolver.
+//! Envelopes, densities, and speeds outside those fixtures are unvalidated: the
+//! model has no evidence there, and its output should be labelled rather than
+//! treated as credible.
+//!
+//! ## Known failure modes
+//!
+//! - The raw acceleration is clamped to `[-b, +a_max]`, so a constraint closer
+//!   than the comfortable braking distance saturates the command and IDM alone
+//!   cannot guarantee a stop; the kernel's position caps, not this model, keep
+//!   bodies from overlapping.
+//! - With `a_max * b == 0` the interaction term drops the closing-speed
+//!   contribution, and the desired dynamic gap loses its `dv` term.
+//! - A non-positive or non-finite desired speed is floored to
+//!   `f64::MIN_POSITIVE`, and a non-finite gap contributes no interaction, so a
+//!   malformed parameter or constraint is silently absorbed rather than
+//!   rejected.
+//! - The model has no lateral or steering state, so it cannot represent lane
+//!   changing, passing, or wrong-way movement, and it treats only same-direction
+//!   leaders as constraints.
+//!
+//! ## Incompatible fidelity settings
+//!
+//! The IDM takes no fidelity parameter: `a_max`, `b`, `T`, and `delta` are
+//! properties of the model, not of the step, so Fast, Standard, and Fine produce
+//! the same command from the same state and the model is compatible with all
+//! three Phase 1 presets. It is incompatible with any preset that disables the
+//! kernel's position caps or that requires lateral or steering state, which it
+//! does not express. The kernel resolves the step; see [`crate::RunConfig`].
 
 use crate::profile::VehicleProfile;
 

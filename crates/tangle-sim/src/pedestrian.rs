@@ -192,6 +192,67 @@
 //! brakes for the crossing it crosses while a pedestrian occupies it, so a
 //! pedestrian is overlapped only by a vehicle that is not obliged or is already
 //! committed.
+//!
+//! ## Assumptions
+//!
+//! The model assumes a pedestrian is a point-mass circle that steers a heading
+//! and speed on a plane: it has no body articulation, balance, lean, or
+//! biomechanics. It assumes the kernel derives the waypoints, owns the
+//! sense-radius scan, conflict ordering, integration, the despawn test, and the
+//! compliance decision, and hands the model only its target waypoint and the
+//! nearby bodies of [Decision inputs](#decision-inputs). Its interaction is a
+//! bounded steering deflection in the spirit of the social-force model, not a
+//! reimplementation of that model's exponential law, and nothing here is
+//! calibrated against empirical pedestrian trajectories.
+//!
+//! ## Parameter sources
+//!
+//! Every parameter is authored scenario data, sampled once per pedestrian from
+//! the scenario's `pedestrian_profiles` envelope and never fitted to
+//! observations: `radius_m` and `desired_speed_mps` are the sampled fields,
+//! while `compliance` belongs to [`crate::PedestrianComplianceDecision`], not to
+//! this steering model. The Phase 1 parser defaults in
+//! `PedestrianProfileSource` are provisional engineering values (radius
+//! 0.20–0.30 m, desired speed 1.0–1.6 m/s), and every checked-in scenario
+//! restates its envelope explicitly. The named constants above are engineering
+//! defaults of this implementation, not fitted values.
+//!
+//! ## Validated ranges
+//!
+//! Evidence covers the Phase 1 pedestrian fixtures: the pedestrian-crossing and
+//! mixed-interaction benchmarks at the sampled envelope above (desired speed
+//! 1.0–1.6 m/s) and the Fast, Standard, and Fine steps. The bounded model is
+//! kept collision-free by the kernel's spacing cap, not by a collision
+//! resolver. Denser crowds, larger bodies, higher speeds, and group behavior
+//! are outside those fixtures and unvalidated: the model has no evidence there,
+//! and its output should be labelled rather than treated as credible.
+//!
+//! ## Known failure modes
+//!
+//! - The spacing cap bounds closure against the neighbour's translation but not
+//!   against a body whose orientation changes within the step, which can sweep a
+//!   corner across a neighbouring circle without moving its centre; exact swept
+//!   queries that close that gap are later-increment work.
+//! - When the cap demands a deceleration beyond [`MAX_DECEL_MPS2`] the step is
+//!   outside the comfort bound and is counted in
+//!   `Simulation::pedestrian_cap_steps`.
+//! - The repulsion is a local, one-step heuristic within [`SENSE_RADIUS_M`]; a
+//!   body entering that horizon at speed can leave no bounded stopping distance
+//!   and the cap, not the steering law, then does the stopping.
+//! - An exactly overlapping body has no radial direction and relies on the
+//!   documented left/right tie-break to separate.
+//! - No parameter is calibrated, so the controller reproduces waypoint seeking
+//!   and a qualitative deflection, not measured pedestrian trajectories.
+//!
+//! ## Incompatible fidelity settings
+//!
+//! The waypoint controller takes no fidelity parameter: its constants are
+//! properties of the model, so Fast, Standard, and Fine produce the same command
+//! from the same state and the model is compatible with all three Phase 1
+//! presets. The decision cadence that re-evaluates it is a kernel and manifest
+//! setting, not a model property. It is incompatible with any preset that
+//! disables the kernel's spacing cap, or that assumes a fidelity-dependent model
+//! parameter this controller does not have.
 
 use glam::DVec2;
 use tangle_model::{

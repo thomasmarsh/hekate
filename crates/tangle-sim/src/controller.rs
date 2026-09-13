@@ -44,13 +44,17 @@
 //! | [`IdmController`] | Intelligent Driver Model, Treiber, Hennecke & Helbing (2000) | [`crate::control`] |
 //! | [`WaypointController`] | pure-pursuit waypoint seeking, Coulter (1992), with a bounded social-force-style repulsion, Helbing & Molnár (1995) | [`crate::pedestrian`] |
 //!
-//! Each card states, in the same order, the model's state variables, its
-//! parameters (sampled) and constants (model properties), its decision inputs,
-//! its bounds, its tie-breaks, and its emergency backstop outside those bounds,
-//! with its equations or steering law in between; the pedestrian card
-//! additionally states its waypoints and its determinism. This module adds no
-//! third model: the vehicle longitudinal model and the pedestrian model are the
-//! two Phase 1 modes, and `PHASE_2_PLAN.md` owns any deferred mode.
+//! Each card follows the checked-in template
+//! (`docs/model-card-template.md`), which is the inventory of record. In that
+//! order a card states its state variables; its parameters (sampled) and
+//! constants (model properties); its decision inputs; its bounds; its
+//! tie-breaks; its emergency backstop outside those bounds; and then its
+//! assumptions, parameter sources, validated ranges, known failure modes, and
+//! incompatible fidelity settings, with its equations or steering law in
+//! between; the pedestrian card additionally states its waypoints and its
+//! determinism. This module adds no third model: the vehicle longitudinal model
+//! and the pedestrian model are the two Phase 1 modes, and `PHASE_2_PLAN.md`
+//! owns any deferred mode.
 
 use crate::control::{self, Constraint};
 use crate::pedestrian::{self, Conflict, PedestrianState, Steering};
