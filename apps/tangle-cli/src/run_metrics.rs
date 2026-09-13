@@ -9,10 +9,11 @@
 //! `manifest.json`, `summary.json`, `events.jsonl.gz`, and
 //! `trajectories.parquet`.
 //!
-//! The artifact carries `metric_definition_version: 1` and the run's
+//! The artifact carries `metric_definition_version: 2` and the run's
 //! `manifest_sha256`, so every number ties back to the versioned definition
-//! ([[DEF-004-metric-definition-v1]]) and to the manifest that produced it. It
-//! holds:
+//! ([[DEF-005-metric-definition-v2]], which carries
+//! [[DEF-004-metric-definition-v1]] forward) and to the manifest that produced
+//! it. It holds:
 //!
 //! - the run-level interaction-metric minima — minimum time to collision,
 //!   minimum surface separation, and minimum post-encroachment time — each with
@@ -25,7 +26,11 @@
 //!   `PedestrianRouteId` for pedestrians that [[DEF-004-metric-definition-v1]]
 //!   chose;
 //! - the countable event families, with the mode and movement slices the records
-//!   and the compiled scenario allow.
+//!   and the compiled scenario allow;
+//! - the operational families [[DEF-005-metric-definition-v2]] adds —
+//!   throughput, delay (travel time, stopped delay, control delay), and queues
+//!   (length and duration) — at the run level, per [`AgentMode`], and per
+//!   movement, each with its unit, its status, and its provenance.
 //!
 //! ## Movement bucket rule
 //!
@@ -35,11 +40,13 @@
 //! `CompiledScenario::movement_name` and
 //! `CompiledScenario::pedestrian_route_name`. A pairwise metric belongs to the
 //! bucket named by its two bodies' movement keys, sorted lexicographically and
-//! joined with `|`, so a pair and its mirror share one bucket. A bucket's value
-//! is the least observed value over every pair whose two movement keys name it.
-//! A body with no assigned movement (the initial static population) has no
-//! movement key, so a pair with such a body contributes to the run-level and
-//! mode-pair minima but to no movement bucket.
+//! joined with `|`, so a pair and its mirror share one bucket; an operational
+//! metric is a property of one agent alone, so it belongs to the bucket of that
+//! agent's own movement key. A bucket's value is the least observed value over
+//! every pair whose two movement keys name it. A body with no assigned movement
+//! (the initial static population) has no movement key, so a pair with such a
+//! body contributes to the run-level and mode-pair minima but to no movement
+//! bucket.
 //!
 //! The per-bucket minima come from the kernel's per-pair minima
 //! ([`InteractionMetrics::pair_minimum_separation_m`] and
@@ -59,7 +66,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use tangle_sim::{
-    AgentId, AgentMode, Event, InteractionMetrics, MetricMinimum, ModePair, Simulation, StepOutput,
+    AgentId, AgentMode, Event, InteractionMetrics, MetricMinimum, ModePair, MovementKey,
+    OperationValues as ObservedValues, Simulation, StepOutput,
 };
 
 use crate::trace::sha256_hex;
@@ -69,16 +77,20 @@ pub const METRICS_FILE: &str = "metrics.json";
 
 /// The metric definition revision this artifact reports.
 ///
-/// Fixed at `1` by [[DEF-004-metric-definition-v1]]; a change to any reported
-/// metric's name, formula, unit, applicability, tie-break, or disaggregation key
-/// bumps this with the code change.
-pub const METRIC_DEFINITION_VERSION: u32 = 1;
+/// Fixed at `2` by [[DEF-005-metric-definition-v2]], which carries metric
+/// definition v1 ([[DEF-004-metric-definition-v1]]) forward unchanged and adds
+/// the operational families — throughput, delay, and queues — that v1
+/// explicitly deferred. A change to any reported metric's name, formula, unit,
+/// applicability, tie-break, or disaggregation key bumps this with the code
+/// change, and an artifact already written stays attributed to the revision that
+/// produced it.
+pub const METRIC_DEFINITION_VERSION: u32 = 2;
 
 /// The reporting status of one metric value.
 ///
-/// The three statuses [[DEF-004-metric-definition-v1]] distinguishes, kept
-/// distinct so an artifact never conflates "no claim was made" with "the
-/// interaction was safe".
+/// The three statuses metric definition v1 distinguishes and v2 carries
+/// forward, kept distinct so an artifact never conflates "no claim was made"
+/// with "the interaction was safe".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricStatus {
@@ -118,9 +130,11 @@ pub struct MetricValue {
     /// The [`ModePair`] of the pair that produced the value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_pair: Option<String>,
-    /// Completed tick the value was observed on, for a run-level minimum. A
-    /// per-movement value omits it, because the per-pair accessor records the
-    /// pair's minimum and not the tick that produced it.
+    /// Completed tick the value was observed on, for a run-level minimum or a
+    /// queue statistic. A per-movement value omits it, because the per-pair
+    /// accessor records the pair's minimum and not the tick that produced it,
+    /// and an aggregate over a run (a total, mean, or rate) is not observed on
+    /// one tick at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tick: Option<u64>,
 }
@@ -136,6 +150,37 @@ impl MetricValue {
             other: Some(other),
             mode_pair: Some(mode_pair.to_owned()),
             tick,
+        }
+    }
+
+    /// A reported value that is a property of the run rather than of one pair:
+    /// a total, a mean, or a rate. Absent provenance is exactly that.
+    fn reported_run(value: f64) -> Self {
+        Self {
+            status: MetricStatus::Reported,
+            value: Some(value),
+            agent: None,
+            other: None,
+            mode_pair: None,
+            tick: None,
+        }
+    }
+
+    /// A reported value observed on one completed tick, without an agent: the
+    /// standing-agent count a queue length reports.
+    fn reported_tick(value: f64, tick: u64) -> Self {
+        Self {
+            tick: Some(tick),
+            ..Self::reported_run(value)
+        }
+    }
+
+    /// A reported value one agent produced, observed on one completed tick: the
+    /// longest stopped state a queue duration reports.
+    fn reported_agent(value: f64, agent: AgentId, tick: u64) -> Self {
+        Self {
+            agent: Some(agent.get()),
+            ..Self::reported_tick(value, tick)
         }
     }
 
@@ -281,6 +326,124 @@ pub struct EventCounts {
     pub by_family_movement: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
+/// The operational values of one disaggregation bucket of metric definition v2.
+///
+/// Every field is a metric value with the v1 statuses: `reported` with its
+/// value and provenance, `not_applicable` when the predicate that would define
+/// the value is false, and `not_observed` when the bucket made no observation.
+/// A reported zero is a value (`0.0`), never a marker for an absent one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OperationalValues {
+    /// Served agents per simulated second.
+    pub throughput_agents_per_s: MetricValue,
+    /// Mean trip time in seconds of a served agent.
+    pub mean_travel_time_s: MetricValue,
+    /// Total trip time in seconds over the bucket's served agents.
+    pub total_travel_time_s: MetricValue,
+    /// Mean stopped delay in seconds per served agent.
+    pub mean_stopped_delay_s: MetricValue,
+    /// Total stopped delay in seconds over the bucket's served agents.
+    pub total_stopped_delay_s: MetricValue,
+    /// Mean control delay in seconds per served agent.
+    pub mean_control_delay_s: MetricValue,
+    /// Total control delay in seconds over the bucket's served agents.
+    pub total_control_delay_s: MetricValue,
+    /// Most standing agents the bucket held at one tick end.
+    pub maximum_queue_length_agents: MetricValue,
+    /// Longest stopped state the bucket closed, in seconds.
+    pub maximum_queue_duration_s: MetricValue,
+    /// Mean duration in seconds of the stopped states the bucket closed.
+    pub mean_queue_duration_s: MetricValue,
+}
+
+impl OperationalValues {
+    /// The values of a bucket that observed nothing: every metric is
+    /// `not_observed`, which is what a run that never held an agent reports.
+    ///
+    /// A consumer reading an artifact uses this shape to interpret a bucket no
+    /// agent reached; nothing here is a reported zero.
+    pub fn not_observed() -> Self {
+        let absent = || MetricValue::not_observed();
+        Self {
+            throughput_agents_per_s: absent(),
+            mean_travel_time_s: absent(),
+            total_travel_time_s: absent(),
+            mean_stopped_delay_s: absent(),
+            total_stopped_delay_s: absent(),
+            mean_control_delay_s: absent(),
+            total_control_delay_s: absent(),
+            maximum_queue_length_agents: absent(),
+            maximum_queue_duration_s: absent(),
+            mean_queue_duration_s: absent(),
+        }
+    }
+
+    /// The artifact values of one observed bucket, with each metric's status.
+    ///
+    /// The absence rule comes from the observation the kernel reports and never
+    /// from the value: a bucket that held agents but served none reports a
+    /// throughput of `0.0`, while a bucket that never held an agent reports no
+    /// observation at all. Throughput is the one metric whose value needs
+    /// elapsed time, so a run that has elapsed none is `not_applicable` rather
+    /// than reported or unobserved.
+    fn of(observed: &ObservedValues) -> Self {
+        let unobserved = observed.observed_agents == 0;
+        let unserved = observed.served_agents == 0;
+        let delay = |value: f64| match unserved {
+            true => MetricValue::not_observed(),
+            false => MetricValue::reported_run(value),
+        };
+        Self {
+            throughput_agents_per_s: match observed.throughput_agents_per_s {
+                Some(value) => MetricValue::reported_run(value),
+                None if unobserved => MetricValue::not_observed(),
+                None => MetricValue::not_applicable(),
+            },
+            mean_travel_time_s: match observed.mean_travel_time_s {
+                Some(value) => MetricValue::reported_run(value),
+                None => MetricValue::not_observed(),
+            },
+            total_travel_time_s: delay(observed.total_travel_time_s),
+            mean_stopped_delay_s: match observed.mean_stopped_delay_s {
+                Some(value) => MetricValue::reported_run(value),
+                None => MetricValue::not_observed(),
+            },
+            total_stopped_delay_s: delay(observed.total_stopped_delay_s),
+            mean_control_delay_s: match observed.mean_control_delay_s {
+                Some(value) => MetricValue::reported_run(value),
+                None => MetricValue::not_observed(),
+            },
+            total_control_delay_s: delay(observed.total_control_delay_s),
+            maximum_queue_length_agents: match observed.maximum_queue_length {
+                Some(length) => MetricValue::reported_tick(length.agents as f64, length.tick),
+                None => MetricValue::not_observed(),
+            },
+            maximum_queue_duration_s: match observed.maximum_queue_duration {
+                Some(duration) => {
+                    MetricValue::reported_agent(duration.seconds, duration.agent, duration.tick)
+                }
+                None => MetricValue::not_observed(),
+            },
+            mean_queue_duration_s: match observed.mean_queue_duration_s {
+                Some(value) => MetricValue::reported_run(value),
+                None => MetricValue::not_observed(),
+            },
+        }
+    }
+}
+
+/// Metric definition v2's operational metrics: over the run, per mode, and per
+/// movement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OperationalMetrics {
+    /// The values over the whole run.
+    pub run: OperationalValues,
+    /// The values per [`AgentMode`] label (`vehicle`, `pedestrian`).
+    pub by_mode: BTreeMap<String, OperationalValues>,
+    /// The values per movement key, for the movements the run observed.
+    pub by_movement: BTreeMap<String, OperationalValues>,
+}
+
 /// The metric values one completed run reports (the artifact body).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunMetrics {
@@ -296,6 +459,9 @@ pub struct RunMetrics {
     pub movement_minima: BTreeMap<String, MovementMinima>,
     /// Event counts with their mode and movement slices.
     pub event_counts: EventCounts,
+    /// Throughput, delay, and queue values over the run, per mode, and per
+    /// movement.
+    pub operational: OperationalMetrics,
 }
 
 /// `metrics.json`: the metric values of one run, linked to its metric
@@ -319,6 +485,9 @@ pub struct RunMetricsArtifact {
     pub movement_minima: BTreeMap<String, MovementMinima>,
     /// Event counts with their mode and movement slices.
     pub event_counts: EventCounts,
+    /// Throughput, delay, and queue values over the run, per mode, and per
+    /// movement.
+    pub operational: OperationalMetrics,
 }
 
 impl RunMetricsArtifact {
@@ -334,6 +503,7 @@ impl RunMetricsArtifact {
             mode_pair_minimum_separation_m: metrics.mode_pair_minimum_separation_m.clone(),
             movement_minima: metrics.movement_minima.clone(),
             event_counts: metrics.event_counts.clone(),
+            operational: metrics.operational.clone(),
         }
     }
 }
@@ -397,6 +567,7 @@ impl RunMetricsRecorder {
     /// Call before the simulation is consumed.
     pub fn finish(self, sim: &Simulation) -> RunMetrics {
         let interaction = sim.interaction_metrics();
+        let operation = interaction.operation();
         let candidate_observed = interaction.minimum_separation_m().is_some();
         let region_entries = self
             .by_family
@@ -427,6 +598,7 @@ impl RunMetricsRecorder {
             mode_pair_minimum_separation_m: mode_pair_minima(interaction),
             movement_minima: movement_minima(sim, interaction, &self.agents, region_entries > 0),
             event_counts: self.event_counts(sim),
+            operational: operational_metrics(sim, operation),
         }
     }
 
@@ -680,15 +852,59 @@ impl MovementAccumulator {
 /// The movement key of an agent: the tagged union of `MovementId` and
 /// `PedestrianRouteId` that metric definition v1 chose.
 fn movement_key(sim: &Simulation, agent: AgentId) -> Option<String> {
+    operational_movement_key(sim, agent_movement_key(sim, agent)?)
+}
+
+/// The movement identity of an agent, as the kernel's operational observer keys
+/// its movement buckets.
+fn agent_movement_key(sim: &Simulation, agent: AgentId) -> Option<MovementKey> {
     match sim.agent_mode(agent)? {
-        AgentMode::Vehicle => sim
-            .agent_route(agent)
-            .and_then(|movement| sim.scenario().movement(movement))
-            .map(|movement| format!("movement:{}", movement.name())),
+        AgentMode::Vehicle => sim.agent_route(agent).map(MovementKey::Vehicle),
         AgentMode::Pedestrian => sim
             .agent_pedestrian_route(agent)
-            .and_then(|route| sim.scenario().pedestrian_route(route))
+            .map(MovementKey::Pedestrian),
+    }
+}
+
+/// The report spelling of one movement key, identical to the spelling a pair
+/// bucket uses for the same movement.
+fn operational_movement_key(sim: &Simulation, key: MovementKey) -> Option<String> {
+    match key {
+        MovementKey::Vehicle(movement) => sim
+            .scenario()
+            .movement(movement)
+            .map(|movement| format!("movement:{}", movement.name())),
+        MovementKey::Pedestrian(route) => sim
+            .scenario()
+            .pedestrian_route(route)
             .map(|route| format!("pedestrian_route:{}", route.name())),
+    }
+}
+
+/// The operational values of the run, of each mode, and of each observed
+/// movement, spelled as their artifact keys.
+fn operational_metrics(
+    sim: &Simulation,
+    operation: &tangle_sim::OperationMetrics,
+) -> OperationalMetrics {
+    OperationalMetrics {
+        run: OperationalValues::of(&operation.values()),
+        by_mode: [AgentMode::Vehicle, AgentMode::Pedestrian]
+            .into_iter()
+            .map(|mode| {
+                (
+                    mode.label().to_owned(),
+                    OperationalValues::of(&operation.mode_values(mode)),
+                )
+            })
+            .collect(),
+        by_movement: operation
+            .movements()
+            .filter_map(|(key, values)| {
+                let spelled = operational_movement_key(sim, key)?;
+                Some((spelled, OperationalValues::of(&values)))
+            })
+            .collect(),
     }
 }
 
@@ -789,6 +1005,14 @@ mod tests {
                 by_family_kind: BTreeMap::new(),
                 by_family_mode: BTreeMap::new(),
                 by_family_movement: BTreeMap::new(),
+            },
+            operational: OperationalMetrics {
+                run: OperationalValues::not_observed(),
+                by_mode: ["vehicle", "pedestrian"]
+                    .into_iter()
+                    .map(|mode| (mode.to_owned(), OperationalValues::not_observed()))
+                    .collect(),
+                by_movement: BTreeMap::new(),
             },
         };
         let json = serde_json::to_string_pretty(&artifact).expect("artifact serializes");

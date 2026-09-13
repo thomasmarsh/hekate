@@ -1,5 +1,7 @@
-//! Online interaction metrics: time to collision, minimum surface separation,
-//! and conflict-region post-encroachment time.
+//! Online metrics: the interaction metrics of metric definition v1 (time to
+//! collision, minimum surface separation, and conflict-region post-encroachment
+//! time) and the operational metrics metric definition v2 adds (throughput,
+//! delay, and queues).
 //!
 //! # Model card
 //!
@@ -126,6 +128,82 @@
 //! region's edges in, so the successions, their records, and the minimum are
 //! deterministic.
 //!
+//! ## Operational metrics
+//!
+//! Metric definition v2 adds three operational families. They are derived from
+//! the same per-tick event stream the safety pass produces and from the live
+//! agent store, so they add no second predicate about stopped, waiting, or
+//! served state and cannot disagree with the records they read:
+//!
+//! - **Throughput**: `throughput_agents_per_s = served_agents / elapsed_s`,
+//!   the agents whose [`Event::Despawned`] completed a trip inside the run per
+//!   simulated second. `DespawnReason::ExitedPath` is the only despawn reason
+//!   the kernel reports, so every despawn is a completed trip.
+//! - **Travel time**: `travel_time_s(agent) = despawn_s - spawn_s`, the
+//!   simulated time a served agent's trip took. A bucket reports the mean and
+//!   the total over its served agents.
+//! - **Stopped delay**: the seconds a served agent spent in a stopped state,
+//!   the predicate [`Event::Queue`] reports (speed at or below
+//!   [`QUEUE_STOP_SPEED_MPS`](crate::QUEUE_STOP_SPEED_MPS)): a stopped state
+//!   opens on the joining record and closes on the departing record. A bucket
+//!   reports the mean and the total over its served agents.
+//! - **Control delay**: the seconds a served agent spent with a recorded
+//!   waiting controller state active, the predicate [`Event::ControlTransition`]
+//!   reports. The state follows the agent's own signal-compliance decision, so it
+//!   begins when that decision turns to wait — while the body is still braking —
+//!   and ends when the decision turns away: it is the time the control device
+//!   held the agent, not a subset of the stopped delay. A bucket reports the
+//!   mean and the total over its served agents.
+//! - **Queue length**: the number of the bucket's agents standing at one tick
+//!   end. The bucket reports the most it ever held.
+//! - **Queue duration**: `depart_s - join_s` of one stopped state. The bucket
+//!   reports the longest and the mean of the states that closed inside the run;
+//!   a state still open at the end of the run is not a duration, exactly as an
+//!   open region occupancy is not a post-encroachment time.
+//!
+//! Spawn time is the end of the tick that admitted the agent, which this pass
+//! reads from the agent store rather than from a second hook: an agent live at
+//! the start of tick `t` was admitted at the end of tick `t - 1`, and the
+//! initial population is live at tick zero. Demand admission therefore stays
+//! untouched, and its [`Event::Spawned`] records need not be observed at all.
+//! A despawn closes the agent's stream, so a state still open then ends at the
+//! despawn; the closing record the safety pass emits for a despawned agent
+//! carries the same tick, so the two agree exactly rather than double-counting.
+//!
+//! ### Disaggregation
+//!
+//! The operational families are observed per agent and reported at three
+//! levels: over the whole run, per [`AgentMode`] (`vehicle`, `pedestrian`), and
+//! per movement — the [`MovementKey`] tagged union of `MovementId` for vehicles
+//! and `PedestrianRouteId` for pedestrians that metric definition v1 chose for
+//! the interaction metrics. A key is the scenario's dense identifier; resolving
+//! it to the authored name is the output layer's step, as it is for the v1
+//! movement buckets. An agent with no assigned movement (the initial static
+//! population) contributes to the run-level and mode buckets and to no movement
+//! bucket, matching v1.
+//!
+//! ### Statuses and tie-breaks
+//!
+//! Every operational value carries the v1 statuses, and a reported zero is a
+//! value rather than a marker for an absent one:
+//!
+//! - **not observed** — the bucket made no observation. For a rate or a length
+//!   that is a bucket that never held a live agent; for a delay or a queue
+//!   duration it is a bucket that served no agent, or closed no stopped state.
+//! - **not applicable** — the predicate that would define the value is false:
+//!   a throughput has none before the run has elapsed any time, and no
+//!   operational metric is applicable without elapsed time to divide by.
+//! - **reported** — the value holds, including the true zero of a bucket whose
+//!   served agents were never stopped, never waited, or never queued.
+//!
+//! A rate, a sum, or a mean selects nothing, so no tie-break applies: the sums
+//! accumulate in tick order and, within a tick, in ascending [`AgentId`] order,
+//! which makes the floating-point total a property of the run and not of an
+//! iteration order. The two maximum statistics select a record, and both update
+//! on a strictly-greater comparison, so a tie keeps the first: the earliest
+//! tick that held a queue length, and the earliest closed stopped state, which
+//! within one tick is the lowest [`AgentId`].
+//!
 //! ## Units, tolerances, and tie-breaks
 //!
 //! Times are seconds and separations metres, over `f64`/`glam::DVec2` state. The
@@ -159,10 +237,11 @@
 use std::collections::BTreeMap;
 
 use glam::DVec2;
+use tangle_model::{MovementId, PedestrianRouteId};
 
 use crate::agent::{AgentId, AgentMode, AgentStore};
 use crate::config::RunConfig;
-use crate::event::{Event, RegionKey};
+use crate::event::{ControlTransitionKind, Event, RegionKey};
 use crate::index::SweptBroadPhase;
 use crate::query::{self, BodyShape, body_clearance_m};
 use crate::swept::{SweptBody, clearance_rate, first_fraction};
@@ -498,6 +577,9 @@ pub struct InteractionMetrics {
     post_encroachments: Vec<PostEncroachment>,
     /// The least recorded post-encroachment time in seconds.
     minimum_post_encroachment_s: Option<PostEncroachment>,
+    /// The operational metrics of metric definition v2: throughput, delay, and
+    /// queues, observed from the same tick and the same event records.
+    operation: OperationMetrics,
 }
 
 impl Default for InteractionMetrics {
@@ -519,6 +601,7 @@ impl Default for InteractionMetrics {
             occupancies: BTreeMap::new(),
             post_encroachments: Vec::new(),
             minimum_post_encroachment_s: None,
+            operation: OperationMetrics::default(),
         }
     }
 }
@@ -600,6 +683,16 @@ impl InteractionMetrics {
         self.occupancies.get(&region).map_or(&[], Vec::as_slice)
     }
 
+    /// The operational metrics of the run so far: throughput, delay, and
+    /// queues, at the run level and per mode and movement.
+    ///
+    /// Observed by the same pass, from the same tick, and against the same
+    /// event records as the interaction metrics. See [`OperationMetrics`] and
+    /// the module card for the formulas, units, statuses, and tie-breaks.
+    pub fn operation(&self) -> &OperationMetrics {
+        &self.operation
+    }
+
     /// Record every live body's tick-start shape.
     ///
     /// Call once before the state-affecting loop, so the swept bodies this pass
@@ -635,6 +728,7 @@ impl InteractionMetrics {
         self.index_bodies(agents);
         self.scan_pairs(tick, config.step());
         self.scan_events(SimTime::from_tick(tick, config.step()).seconds(), events);
+        self.operation.observe(agents, tick, config.step(), events);
     }
 
     /// Rebuild the tick-swept bodies and the candidate grid.
@@ -804,6 +898,436 @@ impl InteractionMetrics {
 fn keep_minimum(slot: &mut Option<MetricMinimum>, candidate: MetricMinimum) {
     if slot.is_none_or(|current| candidate.value < current.value) {
         *slot = Some(candidate);
+    }
+}
+
+/// The movement identity of one agent for the operational metrics: the tagged
+/// union of a vehicle's [`MovementId`] and a pedestrian's
+/// [`PedestrianRouteId`] that metric definition v1 chose and v2 carries
+/// forward.
+///
+/// The two identifiers live in separate id spaces, so the variant tag is part
+/// of the key's stable order. The dense identifier is all the kernel needs;
+/// the output layer resolves it to the scenario's authored name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MovementKey {
+    /// A vehicle movement connector.
+    Vehicle(MovementId),
+    /// A pedestrian route.
+    Pedestrian(PedestrianRouteId),
+}
+
+/// The most standing agents one disaggregation bucket held at one observed tick
+/// end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueLength {
+    /// Standing agents at that tick end.
+    pub agents: u64,
+    /// The completed tick the count was observed on, counted from one as
+    /// [`SimTime::tick`](crate::SimTime::tick) counts.
+    pub tick: u64,
+}
+
+/// One agent's stopped-and-waiting interval.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QueueDuration {
+    /// The agent that stood.
+    pub agent: AgentId,
+    /// Seconds from the joining record to the departing record.
+    pub seconds: f64,
+    /// The completed tick whose departing record closed the interval.
+    pub tick: u64,
+}
+
+/// The operational values of one disaggregation bucket, in metric definition
+/// v2's units.
+///
+/// `None` marks a value the bucket has no observation for; a reported zero is
+/// the value `0.0` or `0`, never a marker for an absent one. The status rule
+/// each `None` stands for is in the field's own doc and in the module card.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OperationValues {
+    /// End of the last observed tick, in simulated seconds: the elapsed time a
+    /// rate divides by, and the not-applicable test of every rate.
+    pub elapsed_s: f64,
+    /// Agents the bucket observed live in at least one tick, which is what
+    /// distinguishes a reported zero from no observation at all.
+    pub observed_agents: u64,
+    /// Agents the bucket served: their despawn completed a trip inside the run.
+    pub served_agents: u64,
+    /// Throughput in served agents per simulated second,
+    /// `served_agents / elapsed_s`. `None` when the bucket observed no agent or
+    /// when the run elapsed no time.
+    pub throughput_agents_per_s: Option<f64>,
+    /// Mean trip time in seconds of a served agent. `None` when the bucket
+    /// served none.
+    pub mean_travel_time_s: Option<f64>,
+    /// Total trip time in seconds over the bucket's served agents, `0.0` when it
+    /// served none.
+    pub total_travel_time_s: f64,
+    /// Mean stopped delay in seconds per served agent. `None` when the bucket
+    /// served none.
+    pub mean_stopped_delay_s: Option<f64>,
+    /// Total stopped delay in seconds over the bucket's served agents, `0.0`
+    /// when it served none or none of them stopped.
+    pub total_stopped_delay_s: f64,
+    /// Mean control delay in seconds per served agent. `None` when the bucket
+    /// served none.
+    pub mean_control_delay_s: Option<f64>,
+    /// Total control delay in seconds over the bucket's served agents, `0.0`
+    /// when it served none or none of them waited.
+    pub total_control_delay_s: f64,
+    /// Most standing agents the bucket ever held at a tick end. `None` when the
+    /// bucket observed no agent.
+    pub maximum_queue_length: Option<QueueLength>,
+    /// Longest stopped state the bucket closed. `None` when it closed none.
+    pub maximum_queue_duration: Option<QueueDuration>,
+    /// Mean duration in seconds of the stopped states the bucket closed. `None`
+    /// when it closed none.
+    pub mean_queue_duration_s: Option<f64>,
+}
+
+/// The operational metrics of one run: throughput, delay, and queues.
+///
+/// Fed by the same per-tick call as the interaction metrics and read through
+/// [`InteractionMetrics::operation`], at the run level and per mode and
+/// movement. See the module card for the formulas, units, statuses,
+/// tie-breaks, and disaggregation.
+#[derive(Debug, Default)]
+pub struct OperationMetrics {
+    /// End of the last observed tick, in simulated seconds.
+    elapsed_s: f64,
+    /// Trip state of every agent the pass still observes, ascending by id.
+    trips: BTreeMap<AgentId, AgentTrip>,
+    /// Start of every open stopped state, ascending by agent.
+    open_stops: BTreeMap<AgentId, f64>,
+    /// Start of every open control state, ascending by `(agent, kind)`.
+    open_controls: BTreeMap<(AgentId, ControlTransitionKind), f64>,
+    /// Reused buffer of the agents a despawn closed in the tick being observed.
+    despawning: Vec<AgentId>,
+    /// Reused buffer of the control kinds a despawn left open.
+    closing_controls: Vec<ControlTransitionKind>,
+    /// The run-level bucket.
+    run: Bucket,
+    /// The per-mode buckets, indexed by [`mode_slot`].
+    modes: [Bucket; 2],
+    /// The per-movement buckets that observed an agent, ascending by key.
+    movements: BTreeMap<MovementKey, Bucket>,
+}
+
+impl OperationMetrics {
+    /// End of the last observed tick, in simulated seconds.
+    pub fn elapsed_s(&self) -> f64 {
+        self.elapsed_s
+    }
+
+    /// The operational values over the whole run.
+    pub fn values(&self) -> OperationValues {
+        self.run.values(self.elapsed_s)
+    }
+
+    /// The operational values of one mode, over the run.
+    pub fn mode_values(&self, mode: AgentMode) -> OperationValues {
+        self.modes[mode_slot(mode)].values(self.elapsed_s)
+    }
+
+    /// The operational values of one movement, absent until an agent of that
+    /// movement has been observed.
+    pub fn movement_values(&self, key: MovementKey) -> Option<OperationValues> {
+        self.movements
+            .get(&key)
+            .map(|bucket| bucket.values(self.elapsed_s))
+    }
+
+    /// Every observed movement's operational values, ascending by key.
+    pub fn movements(&self) -> impl Iterator<Item = (MovementKey, OperationValues)> + '_ {
+        self.movements
+            .iter()
+            .map(|(key, bucket)| (*key, bucket.values(self.elapsed_s)))
+    }
+
+    /// Observe one integrated tick: the live agents, then the state records the
+    /// tick produced.
+    ///
+    /// The live agents are read first, so the trip state a tick's records close
+    /// already exists: an agent live at the start of tick `t` was admitted at
+    /// the end of tick `t - 1`, and the agent store is what reveals it.
+    fn observe(&mut self, agents: &AgentStore, tick: u64, step: Seconds, events: &[Event]) {
+        let time_s = SimTime::from_tick(tick, step).seconds();
+        self.elapsed_s = time_s;
+        let spawn_s = SimTime::from_tick(tick.saturating_sub(1), step).seconds();
+        for index in 0..agents.len() {
+            if agents.alive[index] {
+                self.ensure_trip(agents, AgentId::from_index(index), spawn_s);
+            }
+        }
+        for event in events {
+            match *event {
+                Event::Queue { agent, joined } => match joined {
+                    true => self.join_queue(agents, agent, spawn_s, time_s),
+                    false => self.close_stop(agent, tick, time_s),
+                },
+                Event::ControlTransition {
+                    agent,
+                    control,
+                    active,
+                } => match active {
+                    true => {
+                        self.ensure_trip(agents, agent, spawn_s);
+                        self.open_controls.insert((agent, control), time_s);
+                    }
+                    false => {
+                        if let Some(start_s) = self.open_controls.remove(&(agent, control))
+                            && let Some(trip) = self.trips.get_mut(&agent)
+                        {
+                            trip.control_s += time_s - start_s;
+                        }
+                    }
+                },
+                Event::Despawned { agent, .. } => {
+                    // A trip the pass has not seen yet is recorded from the
+                    // store here, so an agent admitted and served between two
+                    // observations still contributes its trip.
+                    self.ensure_trip(agents, agent, spawn_s);
+                    self.despawning.push(agent);
+                }
+                _ => {}
+            }
+        }
+        // A despawn is recorded before the closing records of its own states,
+        // because the tick's stream is ordered by agent then kind, so a trip is
+        // served only once every state of that tick has been read.
+        for position in 0..self.despawning.len() {
+            let agent = self.despawning[position];
+            self.serve(agent, tick, time_s);
+        }
+        self.despawning.clear();
+        // The tick-end queue length of every bucket, which is the state the tick
+        // integrated: a body that was standing at the tick start and is moving
+        // at its end has already left the queue by its own record.
+        self.run.observe_length(tick);
+        for bucket in &mut self.modes {
+            bucket.observe_length(tick);
+        }
+        for bucket in self.movements.values_mut() {
+            bucket.observe_length(tick);
+        }
+    }
+
+    /// The trip state of one agent, recorded on first sight.
+    ///
+    /// An agent the pass has not seen before was admitted at the end of the
+    /// previous tick, so `spawn_s` is its admission time exactly; the same rule
+    /// covers the initial population, which is live at tick zero.
+    fn ensure_trip(&mut self, agents: &AgentStore, agent: AgentId, spawn_s: f64) -> AgentTrip {
+        if let Some(trip) = self.trips.get(&agent) {
+            return *trip;
+        }
+        let index = agent.index();
+        let mode = *agents
+            .mode
+            .get(index)
+            .expect("an observed agent has a store slot");
+        let movement = movement_key(agents, index, mode);
+        let trip = AgentTrip {
+            mode,
+            movement,
+            spawned_s: spawn_s,
+            stopped_s: 0.0,
+            control_s: 0.0,
+        };
+        self.trips.insert(agent, trip);
+        self.run.observed_agents += 1;
+        self.modes[mode_slot(mode)].observed_agents += 1;
+        if let Some(key) = movement {
+            self.movements.entry(key).or_default().observed_agents += 1;
+        }
+        trip
+    }
+
+    /// Open one agent's stopped state.
+    fn join_queue(&mut self, agents: &AgentStore, agent: AgentId, spawn_s: f64, time_s: f64) {
+        let trip = self.ensure_trip(agents, agent, spawn_s);
+        self.open_stops.insert(agent, time_s);
+        self.for_each_bucket(trip, |bucket| bucket.standing += 1);
+    }
+
+    /// Close one agent's stopped state at `time_s`, if it is open, and record
+    /// its duration against every bucket the agent belongs to.
+    fn close_stop(&mut self, agent: AgentId, tick: u64, time_s: f64) {
+        let Some(start_s) = self.open_stops.remove(&agent) else {
+            return;
+        };
+        let Some(mut trip) = self.trips.get(&agent).copied() else {
+            return;
+        };
+        let duration = QueueDuration {
+            agent,
+            seconds: time_s - start_s,
+            tick,
+        };
+        trip.stopped_s += duration.seconds;
+        self.trips.insert(agent, trip);
+        self.for_each_bucket(trip, |bucket| bucket.close_stop(duration));
+    }
+
+    /// Complete one agent's trip and remove its state.
+    ///
+    /// A despawn closes the agent's stream, so a stopped or control state still
+    /// open ends here, as a duration like any other close. The closing records
+    /// the safety pass emits for a despawned agent carry this same tick, so they
+    /// close the state at the same instant and the two never double-count.
+    fn serve(&mut self, agent: AgentId, tick: u64, time_s: f64) {
+        self.close_stop(agent, tick, time_s);
+        let Some(mut trip) = self.trips.remove(&agent) else {
+            return;
+        };
+        self.closing_controls.clear();
+        self.closing_controls.extend(
+            self.open_controls
+                .keys()
+                .filter(|(open_agent, _)| *open_agent == agent)
+                .map(|(_, control)| *control),
+        );
+        for position in 0..self.closing_controls.len() {
+            let control = self.closing_controls[position];
+            if let Some(start_s) = self.open_controls.remove(&(agent, control)) {
+                trip.control_s += time_s - start_s;
+            }
+        }
+        let seconds = time_s - trip.spawned_s;
+        self.for_each_bucket(trip, |bucket| {
+            bucket.served_agents += 1;
+            bucket.travel_time_s += seconds;
+            bucket.stopped_s += trip.stopped_s;
+            bucket.control_s += trip.control_s;
+        });
+    }
+
+    /// Apply one update to every bucket an agent belongs to: the run bucket,
+    /// its mode bucket, and its movement bucket when it has one.
+    fn for_each_bucket(&mut self, trip: AgentTrip, update: impl FnMut(&mut Bucket)) {
+        let mut update = update;
+        update(&mut self.run);
+        update(&mut self.modes[mode_slot(trip.mode)]);
+        if let Some(key) = trip.movement {
+            update(self.movements.entry(key).or_default());
+        }
+    }
+}
+
+/// One observed agent's trip state.
+#[derive(Debug, Clone, Copy)]
+struct AgentTrip {
+    /// The mode bucket the agent belongs to.
+    mode: AgentMode,
+    /// The movement bucket, absent for an agent with no assigned movement.
+    movement: Option<MovementKey>,
+    /// End of the tick that admitted the agent, in simulated seconds.
+    spawned_s: f64,
+    /// Stopped seconds the agent has accumulated.
+    stopped_s: f64,
+    /// Control-waiting seconds the agent has accumulated.
+    control_s: f64,
+}
+
+/// The running operational values of one disaggregation bucket.
+///
+/// Every field is a running total, a tick-end count, or a first-wins maximum,
+/// so the bucket's size does not grow with the run.
+#[derive(Debug, Default, Clone, Copy)]
+struct Bucket {
+    /// Agents observed live in this bucket.
+    observed_agents: u64,
+    /// Agents whose trip completed inside the run.
+    served_agents: u64,
+    /// Total trip seconds over the served agents.
+    travel_time_s: f64,
+    /// Total stopped seconds over the served agents.
+    stopped_s: f64,
+    /// Total control-waiting seconds over the served agents.
+    control_s: f64,
+    /// Agents standing at the current tick end.
+    standing: u64,
+    /// Most agents held at a tick end, first tick wins a tie.
+    maximum_length: Option<QueueLength>,
+    /// Stopped states this bucket closed.
+    closed_stops: u64,
+    /// Total seconds of the closed stopped states.
+    stop_total_s: f64,
+    /// Longest closed stopped state, first closure wins a tie.
+    maximum_duration: Option<QueueDuration>,
+}
+
+impl Bucket {
+    /// Record this bucket's standing count at one tick end.
+    fn observe_length(&mut self, tick: u64) {
+        let length = QueueLength {
+            agents: self.standing,
+            tick,
+        };
+        if self
+            .maximum_length
+            .is_none_or(|current| length.agents > current.agents)
+        {
+            self.maximum_length = Some(length);
+        }
+    }
+
+    /// Record one stopped state that closed, and its duration.
+    fn close_stop(&mut self, duration: QueueDuration) {
+        self.standing -= 1;
+        self.closed_stops += 1;
+        self.stop_total_s += duration.seconds;
+        if self
+            .maximum_duration
+            .is_none_or(|current| duration.seconds > current.seconds)
+        {
+            self.maximum_duration = Some(duration);
+        }
+    }
+
+    /// The bucket's operational values, with each option's status rule.
+    fn values(&self, elapsed_s: f64) -> OperationValues {
+        let mean = |total: f64| -> Option<f64> {
+            (self.served_agents > 0).then(|| total / self.served_agents as f64)
+        };
+        OperationValues {
+            elapsed_s,
+            observed_agents: self.observed_agents,
+            served_agents: self.served_agents,
+            throughput_agents_per_s: (self.observed_agents > 0 && elapsed_s > 0.0)
+                .then(|| self.served_agents as f64 / elapsed_s),
+            mean_travel_time_s: mean(self.travel_time_s),
+            total_travel_time_s: self.travel_time_s,
+            mean_stopped_delay_s: mean(self.stopped_s),
+            total_stopped_delay_s: self.stopped_s,
+            mean_control_delay_s: mean(self.control_s),
+            total_control_delay_s: self.control_s,
+            maximum_queue_length: (self.observed_agents > 0)
+                .then_some(self.maximum_length)
+                .flatten(),
+            maximum_queue_duration: self.maximum_duration,
+            mean_queue_duration_s: (self.closed_stops > 0)
+                .then(|| self.stop_total_s / self.closed_stops as f64),
+        }
+    }
+}
+
+/// Position of a mode in the per-mode bucket table.
+const fn mode_slot(mode: AgentMode) -> usize {
+    match mode {
+        AgentMode::Vehicle => 0,
+        AgentMode::Pedestrian => 1,
+    }
+}
+
+/// The movement key of one agent's store row, absent when the agent has no
+/// assigned movement.
+fn movement_key(agents: &AgentStore, index: usize, mode: AgentMode) -> Option<MovementKey> {
+    match mode {
+        AgentMode::Vehicle => agents.movement[index].map(MovementKey::Vehicle),
+        AgentMode::Pedestrian => agents.pedestrian_route[index].map(MovementKey::Pedestrian),
     }
 }
 
@@ -1327,5 +1851,429 @@ mod tests {
                 exit_s: 2.0,
             }]
         );
+    }
+
+    /// One live agent's store row for the operational fixtures.
+    fn push_agent(
+        store: &mut AgentStore,
+        mode: AgentMode,
+        movement: Option<MovementId>,
+        pedestrian_route: Option<PedestrianRouteId>,
+    ) -> AgentId {
+        store.push(AgentInit {
+            mode,
+            path: PathId::from_index(0),
+            distance_m: 0.0,
+            speed_mps: 0.0,
+            position: DVec2::ZERO,
+            heading_rad: 0.0,
+            body_length_m: 1.0,
+            body_width_m: 1.0,
+            direction: 1.0,
+            movement,
+            profile: None,
+            pedestrian_route,
+            pedestrian_profile: None,
+        })
+    }
+
+    /// One queue join or departure record.
+    const fn queue(agent: AgentId, joined: bool) -> Event {
+        Event::Queue { agent, joined }
+    }
+
+    /// One control-state edge.
+    const fn control(agent: AgentId, kind: ControlTransitionKind, active: bool) -> Event {
+        Event::ControlTransition {
+            agent,
+            control: kind,
+            active,
+        }
+    }
+
+    /// One despawn record.
+    fn despawn(agent: AgentId) -> Event {
+        Event::Despawned {
+            agent,
+            path: PathId::from_index(0),
+            reason: crate::DespawnReason::ExitedPath,
+        }
+    }
+
+    /// Assert two computed values agree to the arithmetic's own resolution.
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() <= 1e-12,
+            "{actual} is not {expected}"
+        );
+    }
+
+    /// The vehicle movement and pedestrian route the operational fixtures use.
+    fn vehicle_movement() -> MovementKey {
+        MovementKey::Vehicle(MovementId::from_index(0))
+    }
+
+    fn pedestrian_route() -> MovementKey {
+        MovementKey::Pedestrian(PedestrianRouteId::from_index(0))
+    }
+
+    /// The operational families over a scripted three-tick run: a vehicle and a
+    /// pedestrian stand together, the vehicle moves off into a signal hold and
+    /// is then served, and the pedestrian's stop is still open at the end.
+    #[test]
+    fn the_operation_pass_reports_throughput_delay_and_queues() {
+        let step = Seconds::from_secs(1.0);
+        let mut store = AgentStore::default();
+        let vehicle = push_agent(
+            &mut store,
+            AgentMode::Vehicle,
+            Some(MovementId::from_index(0)),
+            None,
+        );
+        let walker = push_agent(
+            &mut store,
+            AgentMode::Pedestrian,
+            None,
+            Some(PedestrianRouteId::from_index(0)),
+        );
+        let mut metrics = OperationMetrics::default();
+
+        // Tick 1: both agents are live and were admitted at tick zero; both
+        // come to rest.
+        metrics.observe(
+            &store,
+            1,
+            step,
+            &[queue(vehicle, true), queue(walker, true)],
+        );
+        let run = metrics.values();
+        assert_eq!(run.elapsed_s, 1.0);
+        assert_eq!(run.observed_agents, 2);
+        assert_eq!(run.served_agents, 0);
+        assert_eq!(
+            run.throughput_agents_per_s,
+            Some(0.0),
+            "a rest is not a service, so the rate is a true zero"
+        );
+        assert_eq!(run.mean_travel_time_s, None, "no trip has completed");
+        assert_close(run.total_travel_time_s, 0.0);
+        assert_eq!(
+            run.maximum_queue_length,
+            Some(QueueLength { agents: 2, tick: 1 })
+        );
+        assert_eq!(run.maximum_queue_duration, None, "no stop has closed");
+        assert_eq!(run.mean_queue_duration_s, None);
+
+        // Tick 2: the vehicle moves off and holds at its signal; the pedestrian
+        // keeps standing.
+        metrics.observe(
+            &store,
+            2,
+            step,
+            &[
+                queue(vehicle, false),
+                control(vehicle, ControlTransitionKind::SignalStop, true),
+            ],
+        );
+        let run = metrics.values();
+        assert_eq!(
+            run.maximum_queue_length,
+            Some(QueueLength { agents: 2, tick: 1 }),
+            "a tie keeps the earlier tick"
+        );
+        assert_eq!(
+            run.maximum_queue_duration,
+            Some(QueueDuration {
+                agent: vehicle,
+                seconds: 1.0,
+                tick: 2,
+            })
+        );
+        assert_close(run.mean_queue_duration_s.expect("one closed stop"), 1.0);
+
+        // Tick 3: the signal hold ends and the vehicle is served.
+        metrics.observe(
+            &store,
+            3,
+            step,
+            &[
+                control(vehicle, ControlTransitionKind::SignalStop, false),
+                despawn(vehicle),
+            ],
+        );
+        let run = metrics.values();
+        assert_eq!(run.elapsed_s, 3.0);
+        assert_eq!(run.served_agents, 1);
+        assert_close(
+            run.throughput_agents_per_s
+                .expect("the run observed agents"),
+            1.0 / 3.0,
+        );
+        assert_close(run.mean_travel_time_s.expect("one trip"), 3.0);
+        assert_close(run.total_travel_time_s, 3.0);
+        assert_close(run.mean_stopped_delay_s.expect("one served agent"), 1.0);
+        assert_close(run.total_stopped_delay_s, 1.0);
+        assert_close(run.mean_control_delay_s.expect("one served agent"), 1.0);
+        assert_close(run.total_control_delay_s, 1.0);
+
+        // Disaggregation: the vehicle's trip is booked to its mode and to its
+        // movement, the standing pedestrian's bucket has no trip yet, and each
+        // bucket reports its own queue.
+        let vehicles = metrics.mode_values(AgentMode::Vehicle);
+        assert_eq!(vehicles.observed_agents, 1);
+        assert_eq!(vehicles.served_agents, 1);
+        assert_close(vehicles.mean_travel_time_s.expect("one trip"), 3.0);
+        assert_eq!(
+            vehicles.maximum_queue_length,
+            Some(QueueLength { agents: 1, tick: 1 })
+        );
+        let walkers = metrics.mode_values(AgentMode::Pedestrian);
+        assert_eq!(walkers.observed_agents, 1);
+        assert_eq!(walkers.served_agents, 0);
+        assert_eq!(walkers.throughput_agents_per_s, Some(0.0));
+        assert_eq!(walkers.mean_travel_time_s, None);
+        assert_eq!(
+            walkers.maximum_queue_length,
+            Some(QueueLength { agents: 1, tick: 1 })
+        );
+        assert_eq!(walkers.maximum_queue_duration, None);
+
+        let movement = metrics
+            .movement_values(vehicle_movement())
+            .expect("the vehicle's movement was observed");
+        assert_close(movement.total_stopped_delay_s, 1.0);
+        assert_eq!(movement.served_agents, 1);
+        let route = metrics
+            .movement_values(pedestrian_route())
+            .expect("the pedestrian's route was observed");
+        assert_eq!(route.served_agents, 0);
+        assert_eq!(
+            route.maximum_queue_length,
+            Some(QueueLength { agents: 1, tick: 1 })
+        );
+        assert_eq!(
+            metrics.movement_values(MovementKey::Vehicle(MovementId::from_index(9))),
+            None,
+            "an unobserved movement has no bucket"
+        );
+        assert_eq!(
+            metrics.movements().map(|(key, _)| key).collect::<Vec<_>>(),
+            vec![vehicle_movement(), pedestrian_route()],
+            "the buckets are in ascending key order"
+        );
+    }
+
+    /// A trip is measured from the tick that admitted its agent, which the pass
+    /// reads from the agent store rather than from a spawn record: an agent live
+    /// at the start of tick `t` was admitted at the end of tick `t - 1`.
+    #[test]
+    fn a_trip_is_measured_from_the_admission_the_store_reveals() {
+        let step = Seconds::from_secs(1.0);
+        let mut store = AgentStore::default();
+        let early = push_agent(&mut store, AgentMode::Vehicle, None, None);
+        let mut metrics = OperationMetrics::default();
+        metrics.observe(&store, 1, step, &[]);
+        assert_eq!(metrics.values().observed_agents, 1);
+        // An agent admitted at the end of tick 2 is first observed at tick 3.
+        let late = push_agent(&mut store, AgentMode::Vehicle, None, None);
+        metrics.observe(&store, 3, step, &[]);
+        assert_eq!(metrics.values().observed_agents, 2);
+        // Served at tick 5: five seconds for the early agent, whose admission is
+        // tick zero, and three for the late one, admitted at the end of tick 2.
+        metrics.observe(&store, 5, step, &[despawn(early), despawn(late)]);
+        let run = metrics.values();
+        assert_eq!(run.served_agents, 2);
+        assert_close(run.total_travel_time_s, 5.0 + 3.0);
+        assert_close(run.mean_travel_time_s.expect("two trips"), 4.0);
+    }
+
+    /// A despawn closes the agent's stream, so a stop still open then ends at
+    /// the despawn even when the tick carries no closing record.
+    #[test]
+    fn a_despawn_closes_an_open_stop_state() {
+        let step = Seconds::from_secs(1.0);
+        let mut store = AgentStore::default();
+        let agent = push_agent(
+            &mut store,
+            AgentMode::Vehicle,
+            Some(MovementId::from_index(0)),
+            None,
+        );
+        let mut metrics = OperationMetrics::default();
+        metrics.observe(&store, 1, step, &[queue(agent, true)]);
+        metrics.observe(&store, 2, step, &[despawn(agent)]);
+        let run = metrics.values();
+        assert_eq!(run.served_agents, 1);
+        assert_close(run.mean_stopped_delay_s.expect("one served agent"), 1.0);
+        assert_eq!(
+            run.maximum_queue_duration,
+            Some(QueueDuration {
+                agent,
+                seconds: 1.0,
+                tick: 2,
+            })
+        );
+    }
+
+    /// The tick's stream is ordered agent-then-kind, so an agent's despawn
+    /// record precedes the closing record of its own stop state. The two must
+    /// not count the interval twice, in either order.
+    #[test]
+    fn a_despawn_and_the_closing_record_of_its_own_stop_count_once() {
+        let step = Seconds::from_secs(1.0);
+        let mut store = AgentStore::default();
+        let agent = push_agent(
+            &mut store,
+            AgentMode::Vehicle,
+            Some(MovementId::from_index(0)),
+            None,
+        );
+        for events in [
+            [despawn(agent), queue(agent, false)],
+            [queue(agent, false), despawn(agent)],
+        ] {
+            let mut metrics = OperationMetrics::default();
+            metrics.observe(&store, 1, step, &[queue(agent, true)]);
+            metrics.observe(&store, 2, step, &events);
+            let run = metrics.values();
+            assert_eq!(run.served_agents, 1);
+            assert_close(run.total_stopped_delay_s, 1.0);
+            assert_close(run.total_travel_time_s, 2.0);
+            assert_eq!(
+                run.maximum_queue_length,
+                Some(QueueLength { agents: 1, tick: 1 })
+            );
+        }
+    }
+
+    /// Two stops of equal length closed on different ticks tie, and the first
+    /// closure wins: the earlier tick retains the maximum.
+    #[test]
+    fn an_equal_queue_duration_keeps_the_first_closure() {
+        let step = Seconds::from_secs(1.0);
+        let mut store = AgentStore::default();
+        let first = push_agent(
+            &mut store,
+            AgentMode::Vehicle,
+            Some(MovementId::from_index(0)),
+            None,
+        );
+        let second = push_agent(
+            &mut store,
+            AgentMode::Vehicle,
+            Some(MovementId::from_index(1)),
+            None,
+        );
+        let mut metrics = OperationMetrics::default();
+        metrics.observe(&store, 1, step, &[queue(first, true)]);
+        metrics.observe(&store, 2, step, &[queue(first, false), queue(second, true)]);
+        metrics.observe(&store, 3, step, &[queue(second, false)]);
+        let run = metrics.values();
+        assert_eq!(
+            run.maximum_queue_duration,
+            Some(QueueDuration {
+                agent: first,
+                seconds: 1.0,
+                tick: 2,
+            }),
+            "the first closure keeps the tie"
+        );
+        assert_eq!(
+            run.maximum_queue_length,
+            Some(QueueLength { agents: 1, tick: 1 })
+        );
+        assert_close(run.mean_queue_duration_s.expect("two closed stops"), 1.0);
+    }
+
+    /// An agent admitted and served between two observations is still measured:
+    /// its despawn record books the trip from the previous tick's end, and it
+    /// counts as an observation of its buckets.
+    #[test]
+    fn an_agent_that_never_stood_live_is_still_measured() {
+        let step = Seconds::from_secs(1.0);
+        let mut store = AgentStore::default();
+        let agent = push_agent(
+            &mut store,
+            AgentMode::Vehicle,
+            Some(MovementId::from_index(0)),
+            None,
+        );
+        store.alive[0] = false;
+        let mut metrics = OperationMetrics::default();
+        metrics.observe(&store, 1, step, &[despawn(agent)]);
+        let run = metrics.values();
+        assert_eq!(run.observed_agents, 1);
+        assert_eq!(run.served_agents, 1);
+        assert_close(run.mean_travel_time_s.expect("one trip"), 1.0);
+    }
+
+    /// A bucket that observed nothing reports no value at all, and the rate of
+    /// a run with no elapsed time is not applicable rather than zero.
+    #[test]
+    fn an_unobserved_bucket_reports_no_observation() {
+        let metrics = OperationMetrics::default();
+        let run = metrics.values();
+        assert_eq!(run.elapsed_s, 0.0);
+        assert_eq!(run.observed_agents, 0);
+        assert_eq!(run.served_agents, 0);
+        assert_eq!(run.throughput_agents_per_s, None);
+        assert_eq!(run.mean_travel_time_s, None);
+        assert_eq!(run.mean_stopped_delay_s, None);
+        assert_eq!(run.mean_control_delay_s, None);
+        assert_eq!(run.maximum_queue_length, None);
+        assert_eq!(run.maximum_queue_duration, None);
+        assert_eq!(run.mean_queue_duration_s, None);
+        // The sums of a bucket that served nobody are true zeros, not absences.
+        assert_close(run.total_travel_time_s, 0.0);
+        assert_close(run.total_stopped_delay_s, 0.0);
+        assert_close(run.total_control_delay_s, 0.0);
+        assert_eq!(
+            metrics.mode_values(AgentMode::Pedestrian).observed_agents,
+            0
+        );
+        assert_eq!(
+            metrics
+                .mode_values(AgentMode::Pedestrian)
+                .throughput_agents_per_s,
+            None
+        );
+    }
+
+    /// The mean delay is the closed intervals over the served agents, and the
+    /// throughput is the served count over the elapsed time: the two properties
+    /// the definitions fix, checked against the records that produced them.
+    #[test]
+    fn the_delay_and_throughput_ratios_hold_over_a_scripted_run() {
+        let step = Seconds::from_secs(2.0);
+        let mut store = AgentStore::default();
+        let agents: Vec<AgentId> = (0..3)
+            .map(|_| push_agent(&mut store, AgentMode::Vehicle, None, None))
+            .collect();
+        let mut metrics = OperationMetrics::default();
+        // The first agent stands from the end of tick 1 to the end of tick 2;
+        // the second never stands and the third is still running at the end.
+        metrics.observe(&store, 1, step, &[queue(agents[0], true)]);
+        metrics.observe(&store, 2, step, &[queue(agents[0], false)]);
+        metrics.observe(&store, 3, step, &[despawn(agents[0]), despawn(agents[1])]);
+        let run = metrics.values();
+        assert_eq!(run.elapsed_s, 6.0);
+        assert_eq!(run.observed_agents, 3);
+        assert_eq!(run.served_agents, 2);
+        assert_close(run.total_travel_time_s, 6.0 + 6.0);
+        assert_close(run.total_stopped_delay_s, 2.0);
+        assert_close(run.throughput_agents_per_s.expect("two served"), 2.0 / 6.0);
+        assert_close(
+            run.mean_travel_time_s.expect("two trips"),
+            run.total_travel_time_s / 2.0,
+        );
+        assert_close(
+            run.mean_stopped_delay_s.expect("two served agents"),
+            run.total_stopped_delay_s / 2.0,
+        );
+        assert_close(
+            run.mean_queue_duration_s.expect("one closed stop"),
+            run.maximum_queue_duration.expect("one closed stop").seconds,
+        );
+        assert_close(run.mean_queue_duration_s.expect("one closed stop"), 2.0);
     }
 }

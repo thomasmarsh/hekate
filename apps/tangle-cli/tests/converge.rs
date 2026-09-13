@@ -26,9 +26,10 @@ use tangle_cli::{
     BATCH_MANIFEST_FILE, BatchManifest, BatchRun, BatchSpec, CONVERGENCE_FILE,
     CONVERGENCE_TOLERANCE, CONVERGENCE_VERSION, ConvergenceError, ConvergenceReport,
     ConvergenceVerdict, EventCounts, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE,
-    MetricSensitivity, MetricStatus, MetricValue, MovementMinima, PRESETS, Preset,
-    RunMetricsArtifact, SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference,
-    TOLERANCE_MEASURE, VERDICT_REFINEMENT, converge_batches, fidelity_ticks, read_seed_bank,
+    MetricSensitivity, MetricStatus, MetricValue, MovementMinima, OperationalMetrics,
+    OperationalValues, PRESETS, Preset, RunMetricsArtifact, SamplingPolicy, ScenarioProvenance,
+    SeedBank, SeedBankReference, TOLERANCE_MEASURE, VERDICT_REFINEMENT, converge_batches,
+    fidelity_ticks, read_seed_bank,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -354,6 +355,14 @@ fn write_side(
                 mode_pair_minimum_separation_m: values.mode_pairs.clone(),
                 movement_minima: values.movements.clone(),
                 event_counts: event_counts(values.collisions),
+                operational: OperationalMetrics {
+                    run: OperationalValues::not_observed(),
+                    by_mode: ["vehicle", "pedestrian"]
+                        .into_iter()
+                        .map(|mode| (mode.to_owned(), OperationalValues::not_observed()))
+                        .collect(),
+                    by_movement: BTreeMap::new(),
+                },
             },
         );
         runs.push(BatchRun {
@@ -844,7 +853,7 @@ fn the_report_is_disaggregated_by_mode_and_by_movement() {
 }
 
 /// Every reported metric links to the manifests of every fidelity it reports and
-/// to `metric_definition_version: 1`, in the declared ordering.
+/// to `metric_definition_version: 2`, in the declared ordering.
 #[test]
 fn every_metric_links_to_its_manifests_and_the_definition_version() {
     let scratch = Scratch::new("links");

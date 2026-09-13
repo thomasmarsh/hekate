@@ -2,13 +2,14 @@
 //!
 //! A batch writes one immutable run directory per seed and links them in
 //! `batch.json`; each run directory holds the versioned `metrics.json` that
-//! reports metric definition v1's values for that seed
-//! ([[DEF-004-metric-definition-v1]]). This module turns those files into the
-//! batch-level experiment record, `aggregation.json`: for every metric the runs
-//! report, the across-seed count, mean, spread, and confidence interval,
+//! reports metric definition v2's values for that seed
+//! ([[DEF-005-metric-definition-v2]], which carries
+//! [[DEF-004-metric-definition-v1]] forward). This module turns those files into
+//! the batch-level experiment record, `aggregation.json`: for every metric the
+//! runs report, the across-seed count, mean, spread, and confidence interval,
 //! disaggregated by mode pair (`ModePair`) and by movement (the `MovementId` /
-//! `PedestrianRouteId` union DEF-004 chose), with every aggregated metric linked
-//! to the run manifest(s) it came from and to `metric_definition_version: 1`.
+//! `PedestrianRouteId` union v1 chose), with every aggregated metric linked to
+//! the run manifest(s) it came from and to `metric_definition_version: 2`.
 //!
 //! ## Metric keys and slices
 //!
@@ -95,7 +96,7 @@ use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest};
 use crate::run_dir::MANIFEST_FILE;
 use crate::run_metrics::{
     METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue, MovementMinima,
-    RunMetricsArtifact,
+    OperationalValues, RunMetricsArtifact,
 };
 use crate::trace::sha256_hex;
 
@@ -161,14 +162,20 @@ pub const NORMAL_CRITICAL_975: f64 = 1.959_963_984_540_054;
 /// The metric a mode-pair slice reports.
 pub(crate) const MODE_PAIR_METRIC: &str = "minimum_separation_m";
 
-/// The unit of a time metric, as metric definition v1 fixes it.
+/// The unit of a time metric, as metric definition v2 fixes it.
 const SECONDS: &str = "seconds";
 
-/// The unit of a distance metric, as metric definition v1 fixes it.
+/// The unit of a distance metric, as metric definition v2 fixes it.
 pub(crate) const METRES: &str = "metres";
 
-/// The unit of a countable event metric, as metric definition v1 fixes it.
+/// The unit of a countable event metric, as metric definition v2 fixes it.
 const RECORDS: &str = "records";
+
+/// The unit of a throughput metric, as metric definition v2 fixes it.
+const AGENTS_PER_SECOND: &str = "agents_per_second";
+
+/// The unit of a standing-agent count, as metric definition v2 fixes it.
+const AGENTS: &str = "agents";
 
 /// Failure to aggregate a completed batch.
 #[derive(Debug, thiserror::Error)]
@@ -436,7 +443,7 @@ impl ConfidenceInterval {
 pub struct MetricDistribution {
     /// The metric definition revision these values are reported at.
     pub metric_definition_version: u32,
-    /// The metric's unit, as metric definition v1 fixes it.
+    /// The metric's unit, as metric definition v2 fixes it.
     pub unit: String,
     /// Reported seeds: the count every statistic here uses.
     pub count: usize,
@@ -633,10 +640,15 @@ pub(crate) enum Reading<'a> {
 }
 
 /// The run-level metrics one seed's artifact reports, each with the unit metric
-/// definition v1 fixes for it.
+/// definition v2 fixes for it.
 ///
 /// The metric set is the artifact's own: the three interaction minima, the
-/// total, every counted event family, and every counted variant kind.
+/// total, every counted event family, every counted variant kind, and the
+/// operational families of metric definition v2 — throughput, delay, and queues
+/// — over the run and per mode. The operational movement level is deliberately
+/// not read here: a movement bucket is sparse across seeds, and the aggregation
+/// counts a whole-batch metric that a seed does not report at all as a broken
+/// comparison rather than as an unobserved slice.
 pub(crate) fn run_level_readings(
     artifact: &RunMetricsArtifact,
 ) -> Vec<(String, &'static str, Reading<'_>)> {
@@ -678,7 +690,73 @@ pub(crate) fn run_level_readings(
             ));
         }
     }
+    for (name, unit, value) in operational_readings(&artifact.operational.run) {
+        readings.push((
+            format!("operational.run.{name}"),
+            unit,
+            Reading::Value(value),
+        ));
+    }
+    for (mode, values) in &artifact.operational.by_mode {
+        for (name, unit, value) in operational_readings(values) {
+            readings.push((
+                format!("operational.by_mode.{mode}.{name}"),
+                unit,
+                Reading::Value(value),
+            ));
+        }
+    }
     readings
+}
+
+/// The metrics one operational bucket reports, each with its unit.
+pub(crate) fn operational_readings(
+    values: &OperationalValues,
+) -> [(&'static str, &'static str, &MetricValue); 10] {
+    [
+        (
+            "throughput_agents_per_s",
+            AGENTS_PER_SECOND,
+            &values.throughput_agents_per_s,
+        ),
+        ("mean_travel_time_s", SECONDS, &values.mean_travel_time_s),
+        ("total_travel_time_s", SECONDS, &values.total_travel_time_s),
+        (
+            "mean_stopped_delay_s",
+            SECONDS,
+            &values.mean_stopped_delay_s,
+        ),
+        (
+            "total_stopped_delay_s",
+            SECONDS,
+            &values.total_stopped_delay_s,
+        ),
+        (
+            "mean_control_delay_s",
+            SECONDS,
+            &values.mean_control_delay_s,
+        ),
+        (
+            "total_control_delay_s",
+            SECONDS,
+            &values.total_control_delay_s,
+        ),
+        (
+            "maximum_queue_length_agents",
+            AGENTS,
+            &values.maximum_queue_length_agents,
+        ),
+        (
+            "maximum_queue_duration_s",
+            SECONDS,
+            &values.maximum_queue_duration_s,
+        ),
+        (
+            "mean_queue_duration_s",
+            SECONDS,
+            &values.mean_queue_duration_s,
+        ),
+    ]
 }
 
 /// The three metrics one movement bucket reports, each with its unit.

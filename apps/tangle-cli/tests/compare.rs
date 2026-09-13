@@ -23,9 +23,9 @@ use tangle_cli::{
     BATCH_MANIFEST_FILE, BatchManifest, BatchRun, BatchSpec, COMPARISON_FILE, COMPARISON_VERSION,
     CONFIDENCE_LEVEL, CompareError, ComparedPair, Comparison, EventCounts, MANIFEST_FILE,
     METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue, MovementMinima,
-    PAIRED_DIFFERENCE, PAIRED_INTERVAL_METHOD, PairedDistribution, RunMetricsArtifact,
-    SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, Side, T_CRITICAL_975,
-    compare_batches, read_seed_bank,
+    OperationalMetrics, OperationalValues, PAIRED_DIFFERENCE, PAIRED_INTERVAL_METHOD,
+    PairedDistribution, RunMetricsArtifact, SamplingPolicy, ScenarioProvenance, SeedBank,
+    SeedBankReference, Side, T_CRITICAL_975, compare_batches, read_seed_bank,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -342,6 +342,14 @@ fn write_side(
                 mode_pair_minimum_separation_m: values.mode_pairs.clone(),
                 movement_minima: values.movements.clone(),
                 event_counts: event_counts(values.collisions, deviation.drop_family.as_deref()),
+                operational: OperationalMetrics {
+                    run: OperationalValues::not_observed(),
+                    by_mode: ["vehicle", "pedestrian"]
+                        .into_iter()
+                        .map(|mode| (mode.to_owned(), OperationalValues::not_observed()))
+                        .collect(),
+                    by_movement: BTreeMap::new(),
+                },
             },
         );
         runs.push(BatchRun {
@@ -579,7 +587,10 @@ fn hand_computed_paired_mean_difference_and_interval() {
 
     // The paired statistic over 1-0.5, 2-1, 3-2.5, 4-4.
     let separation = &comparison.metrics["minimum_separation_m"];
-    assert_eq!(separation.metric_definition_version, 1);
+    assert_eq!(
+        separation.metric_definition_version,
+        METRIC_DEFINITION_VERSION
+    );
     assert_eq!(separation.unit, "metres");
     assert_eq!(separation.count, 4);
     assert_eq!(separation.paired_seeds, vec![0, 1, 2, 3]);
@@ -937,7 +948,7 @@ fn unpaired_values_are_counted_not_zeroed() {
 }
 
 /// Every comparison links to both run manifests and to
-/// `metric_definition_version: 1`, and its statuses account for every pair.
+/// `metric_definition_version: 2`, and its statuses account for every pair.
 #[test]
 fn every_comparison_links_to_both_manifests_and_the_definition_version() {
     let scratch = Scratch::new("links");
@@ -957,7 +968,14 @@ fn every_comparison_links_to_both_manifests_and_the_definition_version() {
             "'{key}' reports another definition revision"
         );
         assert!(
-            ["seconds", "metres", "records"].contains(&distribution.unit.as_str()),
+            [
+                "seconds",
+                "metres",
+                "records",
+                "agents_per_second",
+                "agents"
+            ]
+            .contains(&distribution.unit.as_str()),
             "'{key}' reports the unit {}",
             distribution.unit
         );
@@ -1400,16 +1418,16 @@ fn a_run_that_disagrees_with_its_batch_is_refused() {
 
     // A metrics artifact from another definition revision.
     let mut metrics = original_metrics.clone();
-    metrics["metric_definition_version"] = serde_json::json!(2);
+    metrics["metric_definition_version"] = serde_json::json!(METRIC_DEFINITION_VERSION + 1);
     write_json(&metrics_path, &metrics);
     assert!(matches!(
         compare_batches(&a_root, &b_root, &bank_path),
         Err(CompareError::DefinitionVersion {
             side: Side::B,
             seed: 1,
-            version: 2,
+            version,
             ..
-        })
+        }) if version == METRIC_DEFINITION_VERSION + 1
     ));
 
     // A metrics artifact that claims a reported value without one.

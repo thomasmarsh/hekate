@@ -62,7 +62,8 @@ pub use run_dir::{
 };
 pub use run_metrics::{
     EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue,
-    MovementMinima, RunMetrics, RunMetricsArtifact, RunMetricsRecorder,
+    MovementMinima, OperationalMetrics, OperationalValues, RunMetrics, RunMetricsArtifact,
+    RunMetricsRecorder,
 };
 pub use seed_bank::{
     LoadedSeedBank, SEED_BANK_VERSION, SeedBank, SeedBankError, SeedBankReference, read_seed_bank,

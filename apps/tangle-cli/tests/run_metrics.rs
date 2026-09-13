@@ -24,12 +24,14 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     EVENT_STREAM_FILE, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
-    MetricValue, RunDirectoryRequest, RunMetrics, RunMetricsArtifact, SUMMARY_FILE, SamplingPolicy,
-    ScenarioProvenance, canonical_run_captured, load_scenario_hashed, write_run_directory,
+    MetricValue, OperationalValues, RunDirectoryRequest, RunMetrics, RunMetricsArtifact,
+    SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, canonical_run_captured, load_scenario_hashed,
+    write_run_directory,
 };
 use tangle_model::CompiledScenario;
 use tangle_sim::{
-    AgentId, AgentMode, Event, MetricMinimum, ModePair, PostEncroachment, RunConfig, Simulation,
+    AgentId, AgentMode, Event, MetricMinimum, ModePair, MovementKey, OperationValues,
+    PostEncroachment, RunConfig, Simulation,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -40,6 +42,10 @@ const WALKING: &str = "scenarios/walking/walking_guide_v1.json5";
 /// Long enough that the mixed benchmark records a reported time to collision,
 /// a cross-mode pair, and several movement buckets; still under a second.
 const MIXED_TICKS: u64 = 600;
+/// Long enough that the mixed benchmark also serves agents, which the
+/// operational families need: its shortest route takes about 33 simulated
+/// seconds, so 30 seconds of run serves none.
+const MIXED_OPERATIONAL_TICKS: u64 = 3000;
 const GOLDEN_TICKS: u64 = 250;
 /// Fast ticks for the CLI/batch wiring tests.
 const WIRING_TICKS: &str = "60";
@@ -267,15 +273,131 @@ fn reference(relative: &str, seed: u64, ticks: u64) -> Reference {
 /// The movement-key spelling metric definition v1 fixes: `MovementId` for
 /// vehicles and `PedestrianRouteId` for pedestrians, tagged.
 fn reference_movement_key(sim: &Simulation, agent: AgentId) -> Option<String> {
-    match sim.agent_mode(agent)? {
-        AgentMode::Vehicle => sim
-            .agent_route(agent)
-            .and_then(|movement| sim.scenario().movement(movement))
-            .map(|movement| format!("movement:{}", movement.name())),
+    let key = match sim.agent_mode(agent)? {
+        AgentMode::Vehicle => sim.agent_route(agent).map(MovementKey::Vehicle),
         AgentMode::Pedestrian => sim
             .agent_pedestrian_route(agent)
-            .and_then(|route| sim.scenario().pedestrian_route(route))
+            .map(MovementKey::Pedestrian),
+    };
+    reference_operational_key(sim, key?)
+}
+
+/// The same spelling for one movement identity on its own, which is what an
+/// operational bucket is keyed by.
+fn reference_operational_key(sim: &Simulation, key: MovementKey) -> Option<String> {
+    match key {
+        MovementKey::Vehicle(movement) => sim
+            .scenario()
+            .movement(movement)
+            .map(|movement| format!("movement:{}", movement.name())),
+        MovementKey::Pedestrian(route) => sim
+            .scenario()
+            .pedestrian_route(route)
             .map(|route| format!("pedestrian_route:{}", route.name())),
+    }
+}
+
+/// The operational metric of one artifact bucket, by field name, so a test can
+/// walk the block without a second spelling of each metric.
+fn operational_field<'a>(values: &'a OperationalValues, metric: &str) -> &'a MetricValue {
+    match metric {
+        "throughput_agents_per_s" => &values.throughput_agents_per_s,
+        "mean_travel_time_s" => &values.mean_travel_time_s,
+        "total_travel_time_s" => &values.total_travel_time_s,
+        "mean_stopped_delay_s" => &values.mean_stopped_delay_s,
+        "total_stopped_delay_s" => &values.total_stopped_delay_s,
+        "mean_control_delay_s" => &values.mean_control_delay_s,
+        "total_control_delay_s" => &values.total_control_delay_s,
+        "maximum_queue_length_agents" => &values.maximum_queue_length_agents,
+        "maximum_queue_duration_s" => &values.maximum_queue_duration_s,
+        "mean_queue_duration_s" => &values.mean_queue_duration_s,
+        other => panic!("'{other}' is not an operational metric"),
+    }
+}
+
+/// The status and value metric definition v2 fixes for one absent metric: the
+/// predicate that would define a rate or a length is the bucket's own
+/// observation, so an observed bucket with no value is not applicable, while a
+/// total, mean, or duration that has no value has no observation behind it.
+fn expected_status(value: Option<f64>, applicable: bool) -> (MetricStatus, Option<f64>) {
+    match value {
+        Some(value) => (MetricStatus::Reported, Some(value)),
+        None if applicable => (MetricStatus::NotApplicable, None),
+        None => (MetricStatus::NotObserved, None),
+    }
+}
+
+/// Every operational metric of one bucket with the status and value the v2
+/// definition fixes, restated from the kernel's own observation.
+fn expected_operational_values(
+    values: &OperationValues,
+) -> Vec<(&'static str, (MetricStatus, Option<f64>))> {
+    let unobserved = values.observed_agents == 0;
+    let served = values.served_agents > 0;
+    vec![
+        (
+            "throughput_agents_per_s",
+            expected_status(values.throughput_agents_per_s, !unobserved),
+        ),
+        (
+            "mean_travel_time_s",
+            expected_status(values.mean_travel_time_s, false),
+        ),
+        (
+            "total_travel_time_s",
+            expected_status(served.then_some(values.total_travel_time_s), false),
+        ),
+        (
+            "mean_stopped_delay_s",
+            expected_status(values.mean_stopped_delay_s, false),
+        ),
+        (
+            "total_stopped_delay_s",
+            expected_status(served.then_some(values.total_stopped_delay_s), false),
+        ),
+        (
+            "mean_control_delay_s",
+            expected_status(values.mean_control_delay_s, false),
+        ),
+        (
+            "total_control_delay_s",
+            expected_status(served.then_some(values.total_control_delay_s), false),
+        ),
+        (
+            "maximum_queue_length_agents",
+            expected_status(
+                values
+                    .maximum_queue_length
+                    .map(|length| length.agents as f64),
+                !unobserved,
+            ),
+        ),
+        (
+            "maximum_queue_duration_s",
+            expected_status(
+                values
+                    .maximum_queue_duration
+                    .map(|duration| duration.seconds),
+                false,
+            ),
+        ),
+        (
+            "mean_queue_duration_s",
+            expected_status(values.mean_queue_duration_s, false),
+        ),
+    ]
+}
+
+/// Assert one artifact metric carries the status and value the definition
+/// fixes.
+fn assert_operational(metric: &str, actual: &MetricValue, expected: (MetricStatus, Option<f64>)) {
+    assert_eq!(actual.status, expected.0, "'{metric}' reports a status");
+    match expected.1 {
+        Some(value) => assert_close(actual.value, value),
+        None => assert!(
+            actual.value.is_none(),
+            "'{metric}' must carry no value when it has none"
+        ),
     }
 }
 
@@ -362,6 +484,145 @@ fn assert_reported(actual: &MetricValue, expected: MetricMinimum) {
         Some(expected.mode_pair.label())
     );
     assert_eq!(actual.tick, Some(expected.tick));
+}
+
+#[test]
+fn metrics_json_reports_the_operational_families() {
+    let scratch = Scratch::new("operational");
+    let run_dir = scratch.path("run");
+
+    write_run(&run_dir, MIXED, 0, MIXED_OPERATIONAL_TICKS);
+    let artifact = read_artifact(&run_dir);
+
+    // An independent run of the same scenario and seed, read through the same
+    // accessors the writer reads.
+    let (scenario, _) = load(MIXED);
+    let config = RunConfig::new(0);
+    let mut sim = Simulation::new(scenario, config).expect("simulation builds");
+    let mut despawns = 0usize;
+    for _ in 0..MIXED_OPERATIONAL_TICKS {
+        let output = sim.step();
+        despawns += output
+            .events()
+            .iter()
+            .filter(|event| matches!(event, Event::Despawned { .. }))
+            .count();
+    }
+    let operation = sim.interaction_metrics().operation();
+    let expected = operation.values();
+    let elapsed_s = MIXED_OPERATIONAL_TICKS as f64 * config.step().as_secs();
+
+    // The mixed benchmark must actually serve an agent inside the run, or the
+    // values below would be trivially absent and prove nothing.
+    assert!(
+        expected.served_agents > 0,
+        "the mixed benchmark served no agent in {MIXED_TICKS} ticks"
+    );
+
+    // The run-level block carries exactly the status and value the definition
+    // fixes for each metric, and an aggregate carries no pair or tick
+    // provenance.
+    let run = &artifact.operational.run;
+    for (metric, expected) in expected_operational_values(&expected) {
+        assert_operational(
+            &format!("operational.run.{metric}"),
+            operational_field(run, metric),
+            expected,
+        );
+    }
+    assert!(run.mean_travel_time_s.agent.is_none());
+    assert!(run.mean_travel_time_s.tick.is_none());
+    assert!(run.total_travel_time_s.other.is_none());
+
+    // The two statistics that select one record carry it: the tick that held
+    // the standing count, and the agent and tick of the longest stop.
+    let length = expected
+        .maximum_queue_length
+        .expect("the mixed benchmark stands somewhere in the run");
+    assert_eq!(run.maximum_queue_length_agents.tick, Some(length.tick));
+    assert_close(run.maximum_queue_length_agents.value, length.agents as f64);
+    let duration = expected
+        .maximum_queue_duration
+        .expect("the mixed benchmark closes a stop");
+    assert_eq!(
+        run.maximum_queue_duration_s.agent,
+        Some(duration.agent.get())
+    );
+    assert_eq!(run.maximum_queue_duration_s.tick, Some(duration.tick));
+
+    // The throughput is a property of the run and not of the observer alone:
+    // the served count is exactly the stream's despawn records, and the rate is
+    // that count over the run's elapsed time.
+    assert_eq!(expected.served_agents as usize, despawns);
+    assert_close(
+        run.throughput_agents_per_s.value,
+        despawns as f64 / elapsed_s,
+    );
+    assert_close(
+        run.mean_travel_time_s.value,
+        expected.total_travel_time_s / expected.served_agents as f64,
+    );
+
+    // The mode block reports both modes, each with its own bucket.
+    assert_eq!(
+        artifact.operational.by_mode.keys().collect::<Vec<_>>(),
+        vec!["pedestrian", "vehicle"]
+    );
+    for (mode, values) in [AgentMode::Vehicle, AgentMode::Pedestrian]
+        .into_iter()
+        .map(|mode| (mode.label(), operation.mode_values(mode)))
+    {
+        for (metric, expected) in expected_operational_values(&values) {
+            assert_operational(
+                &format!("operational.by_mode.{mode}.{metric}"),
+                operational_field(&artifact.operational.by_mode[mode], metric),
+                expected,
+            );
+        }
+    }
+
+    // The movement block is keyed by the same movement spelling the v1 buckets
+    // use, and holds the bucket the kernel observed for that movement.
+    let mut observed: Vec<(String, OperationValues)> = operation
+        .movements()
+        .map(|(key, values)| {
+            (
+                reference_operational_key(&sim, key)
+                    .expect("an observed movement is a compiled one"),
+                values,
+            )
+        })
+        .collect();
+    observed.sort_by(|left, right| left.0.cmp(&right.0));
+    assert!(!observed.is_empty(), "the mixed benchmark runs movements");
+    assert_eq!(
+        artifact
+            .operational
+            .by_movement
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        observed
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>()
+    );
+    for (key, values) in &observed {
+        let bucket = &artifact.operational.by_movement[key];
+        for (metric, expected) in expected_operational_values(values) {
+            assert_operational(
+                &format!("operational.by_movement.{key}.{metric}"),
+                operational_field(bucket, metric),
+                expected,
+            );
+        }
+    }
+
+    // The artifact round-trips through JSON with the operational block intact.
+    let json = std::fs::read_to_string(run_dir.join(METRICS_FILE)).expect("metrics is written");
+    assert!(json.contains("\"operational\""));
+    let decoded: RunMetricsArtifact = serde_json::from_str(&json).expect("metrics is JSON");
+    assert_eq!(decoded, artifact);
 }
 
 #[test]

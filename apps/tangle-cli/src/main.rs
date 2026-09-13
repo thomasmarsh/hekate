@@ -248,7 +248,7 @@ const AGGREGATE_LONG_ABOUT: &str = "\
 Aggregate a completed batch into one machine-readable aggregation.json: for every
 metric the batch's runs report, the across-seed count, mean, spread, and two-sided
 95% Student-t confidence interval, disaggregated by mode pair and by movement,
-with every number linked to its run manifest and to metric_definition_version 1.
+with every number linked to its run manifest and to metric_definition_version 2.
 
 Usage:
   tangle-cli aggregate <BATCH_ROOT> [--output <PATH>]
@@ -280,7 +280,7 @@ comparison proves both sides used that bank in that one seed order, pairs the
 runs by seed, and for every reported metric computes the per-seed difference
 d_i = A(seed_i) - B(seed_i) with its mean and a paired two-sided 95% Student-t
 confidence interval, disaggregated by mode pair and by movement and linked to
-both run manifests and to metric_definition_version 1.
+both run manifests and to metric_definition_version 2.
 
 Usage:
   tangle-cli compare --a <BATCH_ROOT> --b <BATCH_ROOT> --seed-bank <FILE> [--output <PATH>]

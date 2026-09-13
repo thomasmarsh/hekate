@@ -23,8 +23,9 @@ use tangle_cli::{
     BatchManifest, BatchRequest, BatchRun, BatchSpec, CONFIDENCE_LEVEL, EventCounts,
     LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MANIFEST_FILE,
     METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus, MetricValue,
-    MovementMinima, NORMAL_CRITICAL_975, RunMetricsArtifact, SamplingPolicy, ScenarioProvenance,
-    T_CRITICAL_975, aggregate_batch, load_scenario_hashed, run_batch,
+    MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues, RunMetricsArtifact,
+    SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch, load_scenario_hashed,
+    run_batch,
 };
 use tangle_sim::RunConfig;
 
@@ -275,6 +276,14 @@ fn write_synthetic_batch(root: &Path, seeds: &[(u64, SyntheticSeed)]) {
                 mode_pair_minimum_separation_m: values.mode_pairs.clone(),
                 movement_minima: values.movements.clone(),
                 event_counts: event_counts(values.collisions),
+                operational: OperationalMetrics {
+                    run: OperationalValues::not_observed(),
+                    by_mode: ["vehicle", "pedestrian"]
+                        .into_iter()
+                        .map(|mode| (mode.to_owned(), OperationalValues::not_observed()))
+                        .collect(),
+                    by_movement: BTreeMap::new(),
+                },
             },
         );
         runs.push(BatchRun {
@@ -340,6 +349,24 @@ fn assert_interval(interval: &tangle_cli::ConfidenceInterval, values: &[f64]) {
 /// The run-level metric keys a run artifact reports, spelled independently of
 /// the aggregation: the three interaction minima, the total, every family, and
 /// every variant kind.
+/// The operational metrics metric definition v2 reports for one bucket, by
+/// artifact field name. Restated here so the aggregation's metric set is pinned
+/// independently of the writer that produced it.
+const OPERATIONAL_FIELDS: [&str; 10] = [
+    "maximum_queue_duration_s",
+    "maximum_queue_length_agents",
+    "mean_control_delay_s",
+    "mean_queue_duration_s",
+    "mean_stopped_delay_s",
+    "mean_travel_time_s",
+    "throughput_agents_per_s",
+    "total_control_delay_s",
+    "total_stopped_delay_s",
+    "total_travel_time_s",
+];
+
+/// The metric keys one seed's artifact contributes to the aggregation, restated
+/// from the artifact rather than from the writer.
 fn expected_metric_keys(artifact: &RunMetricsArtifact) -> Vec<String> {
     let mut keys = vec![
         "minimum_post_encroachment_s".to_owned(),
@@ -359,6 +386,23 @@ fn expected_metric_keys(artifact: &RunMetricsArtifact) -> Vec<String> {
             kinds
                 .keys()
                 .map(|kind| format!("event_counts.by_family_kind.{family}.{kind}")),
+        );
+    }
+    keys.extend(
+        OPERATIONAL_FIELDS
+            .iter()
+            .map(|field| format!("operational.run.{field}")),
+    );
+    assert_eq!(
+        artifact.operational.by_mode.keys().collect::<Vec<_>>(),
+        vec!["pedestrian", "vehicle"],
+        "every artifact reports both mode buckets"
+    );
+    for mode in ["pedestrian", "vehicle"] {
+        keys.extend(
+            OPERATIONAL_FIELDS
+                .iter()
+                .map(|field| format!("operational.by_mode.{mode}.{field}")),
         );
     }
     keys.sort();
@@ -1130,15 +1174,15 @@ fn a_run_that_disagrees_with_the_batch_is_refused() {
     let path = revision.join("seed-0").join(METRICS_FILE);
     let mut artifact: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("readable")).expect("JSON");
-    artifact["metric_definition_version"] = serde_json::Value::from(2);
+    artifact["metric_definition_version"] = serde_json::Value::from(METRIC_DEFINITION_VERSION + 1);
     write_json(&path, &artifact);
     assert!(matches!(
         aggregate_batch(&revision),
         Err(AggregateError::DefinitionVersion {
-            version: 2,
+            version,
             expected: METRIC_DEFINITION_VERSION,
             ..
-        })
+        }) if version == METRIC_DEFINITION_VERSION + 1
     ));
 
     // A run manifest that changed after the batch recorded it.

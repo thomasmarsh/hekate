@@ -17,7 +17,7 @@
 //! method), disaggregated by mode pair (`ModePair`) and by movement — the
 //! `MovementId` / `PedestrianRouteId` union [[DEF-004-metric-definition-v1]]
 //! chose — exactly as the aggregation keys the same slices. Every number links
-//! to both run manifests and to `metric_definition_version: 1`, and the artifact
+//! to both run manifests and to `metric_definition_version: 2`, and the artifact
 //! writes `comparison.json` without touching any run artifact.
 //!
 //! ## Why the paired interval is narrower
@@ -459,7 +459,7 @@ pub struct UnpairedSeed {
 pub struct PairedDistribution {
     /// The metric definition revision these values are reported at.
     pub metric_definition_version: u32,
-    /// The metric's unit, as metric definition v1 fixes it.
+    /// The metric's unit, as metric definition v2 fixes it.
     pub unit: String,
     /// Paired seeds: the count every statistic here uses.
     pub count: usize,

@@ -64,7 +64,8 @@ pub use event::{
 };
 pub use index::{BroadPhase, SweptBroadPhase};
 pub use metrics::{
-    INTERACTION_RANGE_M, InteractionMetrics, MetricMinimum, ModePair, PostEncroachment,
+    INTERACTION_RANGE_M, InteractionMetrics, MetricMinimum, ModePair, MovementKey,
+    OperationMetrics, OperationValues, PostEncroachment, QueueDuration, QueueLength,
     RegionOccupancy, SEPARATION_RESOLUTION_M, TTC_HORIZON_S, TTC_TIME_TOLERANCE_S,
     tick_minimum_clearance_m, time_to_collision,
 };

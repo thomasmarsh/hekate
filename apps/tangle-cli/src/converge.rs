@@ -56,7 +56,7 @@
 //! comparison's own [`PairedDistribution`]: the paired mean difference, its
 //! interval, the paired seeds, the seeds the step excludes with both fidelities'
 //! statuses, and both fidelities' `manifest_sha256` lists. Every record
-//! therefore carries `metric_definition_version: 1` and resolves to the run
+//! therefore carries `metric_definition_version: 2` and resolves to the run
 //! manifest at each fidelity, and each fidelity's batch manifest, run
 //! directories, and artifact hashes are recorded once in
 //! [`Convergence::fidelities`].
@@ -245,7 +245,7 @@ pub struct RefinementStep {
 pub struct MetricSensitivity {
     /// The metric definition revision every number here is reported at.
     pub metric_definition_version: u32,
-    /// The metric's unit, as metric definition v1 fixes it.
+    /// The metric's unit, as metric definition v2 fixes it.
     pub unit: String,
     /// The declared fidelity order: Fast, Standard, Fine.
     pub fidelities: Vec<FidelityValue>,
