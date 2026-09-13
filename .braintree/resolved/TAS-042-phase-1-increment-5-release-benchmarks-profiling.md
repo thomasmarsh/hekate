@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T02:51:00Z
+updated: 2026-09-13T03:20:00Z
 summary: Slice E of Phase 1 Increment 5 records release-mode end-to-end benchmarks, the always-on interaction-metrics cost by ablation and by sampled profile, and the swept-TOI state (corrected: the swept cast is on the tick path only as the safety monitor's contact confirmation, which no behavioral consumer uses) as the increment baseline before any optimization.
-next: Verify the five gates on the final tree and resolve the node with per-criterion evidence.
 ---
 
 # Outcome
@@ -181,3 +180,88 @@ exists only inside a temporary `git archive HEAD` copy: the script asserts the
 repository's `crates/` is clean before and after, and the ablated build reports
 the same event count and event-stream hash as the committed build in every
 window (`perf/tick-phases.json`, `integrity`).
+
+# Resolution
+
+Resolved on the tree of commit `4f48e9e` (the slice landing) with the parent's
+frontier already advanced past this child. Every `# Done when` bullet, with its
+evidence:
+
+1. **A reproducible release-mode benchmark harness writes a machine-readable
+   artifact with the numbers, the machine, and the method.** —
+   `scripts/bench-release.sh` builds the release profile and runs
+   `apps/tangle-cli/tests/release_benchmark.rs`, an ignored test, which writes
+   `perf/release-bench.json`: six scenarios (`walking_guide_v1`,
+   `car_following_v1`, `red_light_compliance_v1`, `pedestrian_crossing_v1`,
+   `four_leg_signal_v1`, `mixed_interaction_v1`), one simulated hour (72 000
+   Standard steps) each, with simulated seconds per wall second (0.13–3 333),
+   agent steps per second (76 599–258 081), canonical trace bytes per simulated
+   hour (1 321–2 169 350), and run-directory bytes per simulated hour
+   (5 743–2 113 807), each with every timed pass, the minimum, the median, the
+   `method` block, and the `machine` block (macOS 13.7.8, i5-7600K, x86_64,
+   rustc/cargo 1.98.1). Nothing asserts these numbers: the harness's only
+   assertions are structural, so the five gates never run it.
+2. **The interaction-metrics pass cost is measured and recorded as the
+   increment baseline, with the method.** — `scripts/measure-tick-phases.sh`
+   writes `perf/tick-phases.json` from an A/B ablation at three windows
+   (µs/tick, median pass): 23.95 total / 5.97 rest / 17.98 pass (75.1 %, 3.01:1)
+   at 2 500 ticks; 47.89 / 14.69 / 33.19 (69.3 %, 2.26:1) at 72 000 ticks;
+   61.77 / 28.54 / 33.24 (53.8 %, 1.16:1) at 300 000 ticks. Increment 4's ~22 µs
+   pass against ~7 µs rest is confirmed in shape (3.0:1 here against 3.1:1) and
+   corrected in absolute terms (about 20 % lower on this host), and the share is
+   shown to be window-dependent because the rest of the tick grows faster as
+   slots accumulate. The method, its limitation (removing the calls lets the
+   compiler re-codegen the rest of the loop), and its integrity checks are in
+   the artifact: the repository's `crates/` was clean before and after, and both
+   builds reported identical event counts and event-stream hashes. The sampled
+   profile independently agrees at the same window: 51.3 % against 53.8 %.
+3. **The swept-TOI state is recorded as the baseline.** — Recorded above in
+   `# Result` and in `perf/README.md`: the swept cast is on the tick path exactly
+   once, as the safety monitor's per-tick contact confirmation in
+   `safety::scan_pair` (`crates/tangle-sim/src/safety.rs:281`) gated behind the
+   near-miss Lipschitz certificate (`safety.rs:273`); no behavioral consumer
+   depends on a swept cast, and `time_of_impact` is otherwise called only from
+   fixtures and tests. The premise this node was handed — "no tick consumer uses
+   a cast, so it is not on the tick path" — is wrong and was corrected here and
+   in the node's `# Outcome` under the coordinator's approval; nothing further
+   was wired in.
+4. **Profiler capture(s) exist with a documented reproducible procedure, or a
+   fallback plus an explicit statement of what could not be captured.** —
+   `scripts/capture-profile.sh` is the procedure; it attaches macOS `sample`
+   (1 ms, 8 s, one second into a 300 000-tick release run) and writes
+   `perf/profiles/mixed_interaction_v1-release.sample.txt` (raw capture, 771
+   lines), `perf/profiles/mixed_interaction_v1-release.summary.txt` (the
+   tick-phase table folded by `scripts/profile-symbols.py`), and
+   `perf/profiles/mixed_interaction_v1-release.run.txt` (the sampled run's trace
+   hash). Of 5 741 tick samples the metrics pass is 2 944 (51.3 %) and the
+   largest leaf frame is `BroadPhase::candidates_in_aabb` at 33 % of the tick,
+   which corrects the profiling candidate Increment 4 deferred: the pass's
+   dominant cost is the candidate query, not the TTC bisection. `perf/README.md`
+   states explicitly what could **not** be captured: no `samply`,
+   `cargo instruments`, or `perf` on this host, so no flamegraph and no
+   hardware-counter data; and no debug info or forced frame pointers in the
+   release profile, so no inlined frames or line numbers.
+5. **No optimization or behavior change landed; canonical trace, goldens, and
+   Phase 1 baseline unchanged; `EVENT_VERSION` stays 2.** — The slice's commits
+   change no file under `crates/`, no golden, and no checked-in baseline:
+   `baselines/phase1/` and `tests/golden/` are byte-identical, `EVENT_VERSION` is
+   untouched at 2, and no dependency was added (`Cargo.toml`/`Cargo.lock`
+   unchanged). The only kernel edit in this slice exists inside a temporary copy
+   of `HEAD` and is proven behavior-neutral by the identical event count and
+   event-stream hash recorded in `perf/tick-phases.json`.
+6. **The five gates pass on the final tree.** — Rerun after the parent frontier
+   advanced (`caf4f25`) and green on this resolution tree:
+   `cargo test --workspace --all-features` → every `test result: ok`, zero
+   failures, one ignored (the release harness);
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings` →
+   `Finished` with no diagnostics; `cargo fmt --all --check` → clean;
+   `./scripts/check-dependency-direction.sh` → `dependency direction OK`;
+   `braintree check` → `graph check: passed (74 nodes)`.
+
+Nothing was deferred, and no residual is carried by this node: the measured
+numbers are evidence about one host at one time, and the follow-on decisions
+(whether the pass should be switchable, which candidate to optimize first) are
+the increment's and not this slice's. `context_rev` stays 1: the corrected
+swept-TOI sentence changes what a consumer of this recording should believe, not
+the interface or invariants this node exposes, as the coordinator confirmed when
+authorizing the correction.
