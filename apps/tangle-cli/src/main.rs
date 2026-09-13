@@ -4,9 +4,11 @@
 //! ticks, and writes the canonical trace. The trace hash printed to stderr is
 //! the value a golden test or manifest compares. When `--run-dir` is given it
 //! also writes the immutable per-run directory holding `manifest.json`,
-//! `summary.json`, and the gzip-compressed canonical event stream; a completed
-//! run directory is never rewritten, so that destination fails rather than
-//! mutating finished artifacts.
+//! `summary.json`, the gzip-compressed canonical event stream, and the Parquet
+//! sampled trajectories; a completed run directory is never rewritten, so that
+//! destination fails rather than mutating finished artifacts. The trajectories
+//! are sampled at the stride and cap the manifest declares, and
+//! `--full-trajectories` opts into keeping every tick instead.
 //!
 //! `validate` loads the same source through the same loader but stops there:
 //! it reports whether the schema and the semantic invariants hold, exits
@@ -24,8 +26,9 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
-    CaptureRequest, RunDirectoryRequest, ScenarioProvenance, canonical_run, capture,
-    load_scenario_hashed, render_validation_failure, validate_scenario, write_run_directory,
+    CaptureRequest, RunDirectoryRequest, SamplingPolicy, ScenarioProvenance, canonical_run,
+    canonical_run_sampled, capture, load_scenario_hashed, render_validation_failure,
+    validate_scenario, write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -107,10 +110,19 @@ struct RunArgs {
     hash_file: Option<PathBuf>,
 
     /// Also write an immutable run directory here, holding manifest.json,
-    /// summary.json, and the gzip-compressed canonical event stream. The
+    /// summary.json, the gzip-compressed canonical event stream, and the
+    /// sampled trajectories the declared policy retains as Parquet. The
     /// directory must not hold a completed run, which is never rewritten.
     #[arg(long)]
     run_dir: Option<PathBuf>,
+
+    /// Sample nothing: keep every tick's trajectory in the run directory.
+    ///
+    /// Full trajectories are opt-in and are never truncated; without this flag
+    /// the run directory holds the bounded sample the default policy declares.
+    /// Requires `--run-dir`.
+    #[arg(long, requires = "run_dir")]
+    full_trajectories: bool,
 }
 
 fn main() -> ExitCode {
@@ -135,9 +147,19 @@ fn run(args: RunArgs) -> ExitCode {
     };
 
     let config = RunConfig::new(args.seed);
-    let (trace, summary) = match canonical_run(scenario, config, args.ticks) {
-        Ok(run) => run,
-        Err(error) => return fail(error),
+    let sampling = sampling_policy(&args);
+    // Without a run directory nothing consumes the trajectories, so the run
+    // takes the plain path and pays no sampling cost.
+    let (trace, summary, trajectories) = if args.run_dir.is_some() {
+        match canonical_run_sampled(scenario, config, args.ticks, &sampling.trajectories) {
+            Ok(sampled) => sampled,
+            Err(error) => return fail(error),
+        }
+    } else {
+        match canonical_run(scenario, config, args.ticks) {
+            Ok((trace, summary)) => (trace, summary, Vec::new()),
+            Err(error) => return fail(error),
+        }
     };
 
     // The run directory is written before the trace output: a completed run
@@ -150,7 +172,9 @@ fn run(args: RunArgs) -> ExitCode {
                 scenario: &provenance,
                 seed: args.seed,
                 step_s: config.step().as_secs(),
+                sampling,
                 trace: &trace,
+                trajectories: &trajectories,
                 summary: &summary,
             },
         )
@@ -180,6 +204,18 @@ fn run(args: RunArgs) -> ExitCode {
 
     eprintln!("trace hash: {}", trace.hash());
     ExitCode::SUCCESS
+}
+
+/// The sampling policy this `run` invocation declares and applies.
+///
+/// The applied policy is what the manifest records, so a consumer reading only
+/// the run directory can tell a bounded sample from a full trajectory.
+fn sampling_policy(args: &RunArgs) -> SamplingPolicy {
+    if args.full_trajectories {
+        SamplingPolicy::full_trajectories()
+    } else {
+        SamplingPolicy::default()
+    }
 }
 
 /// Arguments for `validate`.

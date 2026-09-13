@@ -4,13 +4,15 @@
 //! here so tests and future tooling can load a scenario, check it, and produce
 //! the same canonical trace without spawning a process.
 //!
-//! This crate is an application: it reads scenario files from disk. The kernel
-//! crates remain filesystem-free, and this crate depends on them rather than
-//! the other way around.
+//! This crate is an application: it reads scenario files from disk and it owns
+//! the run-directory output layer, including the Parquet trajectory artifact.
+//! The kernel crates remain filesystem-free and free of those dependencies, and
+//! this crate depends on them rather than the other way around.
 
 mod baseline;
 mod run_dir;
 mod trace;
+mod trajectories;
 mod validate;
 
 use std::path::{Path, PathBuf};
@@ -29,7 +31,11 @@ pub use run_dir::{
     SAMPLING_POLICY_VERSION, SUMMARY_FILE, SamplingPolicy, TrajectoryRetention, TrajectorySampling,
     write_run_directory,
 };
-pub use trace::{Trace, TraceRecorder, canonical_run, canonical_trace};
+pub use trace::{Trace, TraceRecorder, canonical_run, canonical_run_sampled, canonical_trace};
+pub use trajectories::{
+    TRAJECTORY_FILE, TRAJECTORY_FORMAT, TrajectoryArtifact, TrajectoryError, TrajectoryRecorder,
+    TrajectorySample, read_trajectories, write_trajectories,
+};
 pub use validate::{ValidationSummary, render_validation_failure, validate_scenario};
 
 /// Failure to load and compile a scenario file.

@@ -10,7 +10,10 @@
 //!   manifest by its SHA-256;
 //! - `events.jsonl.gz` carries the canonical JSON Lines event stream,
 //!   gzip-compressed. It is the canonical trace's exact bytes, so the trace
-//!   golden and the trace hash golden pin this artifact too.
+//!   golden and the trace hash golden pin this artifact too;
+//! - `trajectories.parquet` carries the selectively sampled agent trajectories
+//!   the declared sampling policy retains, with the manifest's descriptor
+//!   naming the file, its row count, and its SHA-256.
 //!
 //! The directory is immutable once complete. `manifest.json` is written last
 //! and is the completion marker, so its presence means every artifact it names
@@ -23,10 +26,11 @@
 //! `mtime` zero, unknown operating system) and the manifest carries no
 //! capture timestamp.
 //!
-//! Full per-tick trajectories are opt-in and are not written here. The declared
-//! [`SamplingPolicy`] is what bounds the directory's size: the sparse typed
-//! event stream keeps every event, and trajectory sampling is `off`, so no
-//! per-step agent state exists to grow with agents x ticks.
+//! The declared [`SamplingPolicy`] is what bounds the directory's size: the
+//! sparse typed event stream keeps every event, while the high-volume per-step
+//! trajectory state is sampled at a declared stride and capped at a declared
+//! row count, so the artifact cannot grow with agents x ticks. Full per-tick
+//! trajectories are opt-in through a policy that keeps every tick.
 
 use std::fs;
 use std::io::{self, Write};
@@ -40,6 +44,9 @@ use tangle_sim::{EVENT_VERSION, RunSummary as KernelRunSummary};
 
 use crate::baseline::{PRESETS, ScenarioProvenance};
 use crate::trace::{Trace, sha256_hex};
+use crate::trajectories::{
+    TrajectoryArtifact, TrajectoryError, TrajectorySample, write_trajectories,
+};
 
 /// Version of the run manifest format.
 pub const RUN_MANIFEST_VERSION: u32 = 1;
@@ -62,17 +69,17 @@ pub const EVENT_STREAM_FILE: &str = "events.jsonl.gz";
 /// Compression [`EVENT_STREAM_FILE`] uses.
 pub const EVENT_STREAM_COMPRESSION: &str = "gzip";
 
-/// Trajectory samples per `stride_ticks` steps the declared policy keeps.
+/// Steps between the trajectory samples the default policy keeps.
 ///
 /// Ten steps is 0.5 s at the Standard 50 ms step, which samples a trajectory
 /// finely enough to plot while staying two orders of magnitude below the
 /// per-step stream.
 pub const DEFAULT_TRAJECTORY_STRIDE_TICKS: u64 = 10;
 
-/// Hard ceiling on trajectory samples in one run directory.
+/// Most trajectory rows the default policy keeps in one run directory.
 ///
-/// The stride bounds ordinary runs; the ceiling is the backstop that keeps a
-/// long run's trajectory output bounded as well.
+/// The stride bounds an ordinary run; the cap is the backstop that keeps a very
+/// long run's trajectory artifact bounded as well.
 pub const DEFAULT_MAX_TRAJECTORY_SAMPLES: u64 = 100_000;
 
 /// Fidelity label for a step that is not one of the Phase 1 presets.
@@ -108,6 +115,9 @@ pub enum RunDirectoryError {
         #[source]
         source: io::Error,
     },
+    /// The sampled-trajectory artifact could not be written.
+    #[error(transparent)]
+    Trajectory(#[from] TrajectoryError),
 }
 
 /// Which sparse typed events the event stream keeps.
@@ -119,32 +129,100 @@ pub enum EventRetention {
     All,
 }
 
-/// Whether full per-step trajectory state is written.
+/// How much per-step trajectory state is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TrajectoryRetention {
-    /// No trajectory state is written; the caller must opt in.
-    #[default]
+    /// No trajectory artifact is written at all.
     Off,
+    /// The bounded sample the policy's stride and cap retain.
+    #[default]
+    Sampled,
+    /// Every tick, with no cap: full trajectories, which a caller opts into.
+    Full,
 }
 
-/// How full trajectories would be sampled when a caller opts in.
+/// How per-step trajectory state is sampled.
+///
+/// A trajectory sample is one agent observed at one tick, which is one row of
+/// the run directory's Parquet artifact. The cap therefore bounds the
+/// artifact's row count and, with it, its size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrajectorySampling {
-    /// Whether trajectory state is written at all.
+    /// Whether trajectory state is written at all, and how fully.
     pub retention: TrajectoryRetention,
-    /// Steps between trajectory samples: one sample every `stride_ticks` steps.
+    /// Steps between sampled ticks: a tick is sampled when it is a multiple of
+    /// `stride_ticks`. A declared stride of zero is read as one step.
     pub stride_ticks: u64,
-    /// Most trajectory samples one run directory may hold.
+    /// Most rows one run directory's trajectory artifact may hold, in canonical
+    /// order. Rows past the cap are dropped rather than written; a full
+    /// trajectory declares `u64::MAX`, so its cap cannot bind.
     pub max_samples: u64,
+}
+
+impl Default for TrajectorySampling {
+    fn default() -> Self {
+        Self {
+            retention: TrajectoryRetention::default(),
+            stride_ticks: DEFAULT_TRAJECTORY_STRIDE_TICKS,
+            max_samples: DEFAULT_MAX_TRAJECTORY_SAMPLES,
+        }
+    }
+}
+
+impl TrajectorySampling {
+    /// The policy that writes no trajectory artifact.
+    pub const fn off() -> Self {
+        Self {
+            retention: TrajectoryRetention::Off,
+            stride_ticks: DEFAULT_TRAJECTORY_STRIDE_TICKS,
+            max_samples: DEFAULT_MAX_TRAJECTORY_SAMPLES,
+        }
+    }
+
+    /// The opt-in policy that keeps every tick, with no cap.
+    ///
+    /// The stride is one step and the cap is `u64::MAX`, so the declared policy
+    /// is the policy applied: a full artifact is never truncated.
+    pub const fn full() -> Self {
+        Self {
+            retention: TrajectoryRetention::Full,
+            stride_ticks: 1,
+            max_samples: u64::MAX,
+        }
+    }
+
+    /// Whether this policy writes a trajectory artifact at all.
+    pub const fn writes_artifact(self) -> bool {
+        !matches!(self.retention, TrajectoryRetention::Off)
+    }
+
+    /// Whether the completed step `tick` is sampled.
+    pub const fn samples_tick(self, tick: u64) -> bool {
+        if !self.writes_artifact() {
+            return false;
+        }
+        let stride = if self.stride_ticks == 0 {
+            1
+        } else {
+            self.stride_ticks
+        };
+        tick.is_multiple_of(stride)
+    }
+
+    /// Whether a row set of `rows` rows may still grow under the declared cap.
+    pub const fn below_cap(self, rows: u64) -> bool {
+        rows < self.max_samples
+    }
 }
 
 /// The sampling policy a run manifest declares.
 ///
 /// Sparse state transitions and safety events are always event records, so the
 /// typed event stream is never sampled; only the high-volume per-step
-/// trajectory state is subject to sampling, and it is off unless a caller opts
-/// in. That declaration is what bounds a run directory's output size.
+/// trajectory state is sampled, at a declared stride and cap that bound a run
+/// directory's output size. The policy a manifest records is the policy the run
+/// applied, so a consumer can tell a bounded sample from a full trajectory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SamplingPolicy {
     /// Policy format version.
@@ -155,17 +233,29 @@ pub struct SamplingPolicy {
     pub trajectories: TrajectorySampling,
 }
 
-/// The policy every run directory declares: every event, no trajectories.
+/// The policy every run directory declares: every event, a bounded trajectory
+/// sample.
 impl Default for SamplingPolicy {
     fn default() -> Self {
         Self {
             policy_version: SAMPLING_POLICY_VERSION,
             events: EventRetention::default(),
-            trajectories: TrajectorySampling {
-                retention: TrajectoryRetention::default(),
-                stride_ticks: DEFAULT_TRAJECTORY_STRIDE_TICKS,
-                max_samples: DEFAULT_MAX_TRAJECTORY_SAMPLES,
-            },
+            trajectories: TrajectorySampling::default(),
+        }
+    }
+}
+
+impl SamplingPolicy {
+    /// The declared policy for a run that keeps full per-tick trajectories.
+    ///
+    /// Full trajectories are opt-in: the default samples a bounded subset of
+    /// ticks, and only a policy that keeps every tick writes an unreduced
+    /// trajectory artifact.
+    pub const fn full_trajectories() -> Self {
+        Self {
+            policy_version: SAMPLING_POLICY_VERSION,
+            events: EventRetention::All,
+            trajectories: TrajectorySampling::full(),
         }
     }
 }
@@ -209,10 +299,14 @@ pub struct RunManifest {
     /// The workspace stamps no source revision into a build, so the producing
     /// binary's crate version is the available build revision.
     pub build_revision: String,
-    /// Declared sampling policy that bounds the directory's output size.
+    /// Sampling policy the run applied, which bounds the directory's output
+    /// size.
     pub sampling: SamplingPolicy,
     /// The compressed event stream this manifest describes.
     pub stream: EventStream,
+    /// The sampled-trajectory artifact this manifest describes, absent when the
+    /// applied policy retains no trajectory state.
+    pub trajectories: Option<TrajectoryArtifact>,
 }
 
 /// `summary.json`: the run's aggregate output.
@@ -244,8 +338,12 @@ pub struct RunDirectoryRequest<'a> {
     pub seed: u64,
     /// Fixed step in seconds the run used.
     pub step_s: f64,
+    /// Sampling policy the run applied, recorded as applied in the manifest.
+    pub sampling: SamplingPolicy,
     /// The completed run's canonical trace.
     pub trace: &'a Trace,
+    /// The trajectory rows the applied policy kept, in canonical order.
+    pub trajectories: &'a [TrajectorySample],
     /// The kernel's summary of the completed run.
     pub summary: &'a KernelRunSummary,
 }
@@ -255,26 +353,31 @@ pub struct RunDirectoryRequest<'a> {
 /// The directory is created when missing and must be empty: a completed run
 /// (`manifest.json` present) is never rewritten and unknown pre-existing
 /// content is never clobbered, so both fail with a [`RunDirectoryError`] and
-/// leave the target untouched. Inside a fresh directory the event stream and
-/// the summary are written first and `manifest.json` last, so a directory only
-/// reads as completed once every artifact the manifest names is present.
+/// leave the target untouched. Inside a fresh directory the artifacts the
+/// manifest describes are written first and `manifest.json` last, so a
+/// directory only reads as completed once every artifact the manifest names is
+/// present.
 pub fn write_run_directory(
     directory: &Path,
     request: RunDirectoryRequest<'_>,
 ) -> Result<(), RunDirectoryError> {
     ensure_writable(directory)?;
-
-    let manifest = RunManifest::new(&request);
-    let manifest_json = to_pretty_json(&manifest);
-    let summary = RunSummary::new(&manifest_json, request.summary);
-    let summary_json = to_pretty_json(&summary);
-    let stream = gzip(request.trace.bytes());
-
     fs::create_dir_all(directory).map_err(|source| RunDirectoryError::Io {
         path: directory.to_path_buf(),
         action: "create",
         source,
     })?;
+
+    let trajectory = match request.sampling.trajectories.writes_artifact() {
+        true => Some(write_trajectories(directory, request.trajectories)?),
+        false => None,
+    };
+    let manifest = RunManifest::new(&request, trajectory);
+    let manifest_json = to_pretty_json(&manifest);
+    let summary = RunSummary::new(&manifest_json, request.summary);
+    let summary_json = to_pretty_json(&summary);
+    let stream = gzip(request.trace.bytes());
+
     write_file(&directory.join(EVENT_STREAM_FILE), &stream)?;
     write_file(&directory.join(SUMMARY_FILE), summary_json.as_bytes())?;
     write_file(&directory.join(MANIFEST_FILE), manifest_json.as_bytes())?;
@@ -282,8 +385,8 @@ pub fn write_run_directory(
 }
 
 impl RunManifest {
-    /// The manifest for a completed run.
-    fn new(request: &RunDirectoryRequest<'_>) -> Self {
+    /// The manifest for a completed run, describing the artifacts on disk.
+    fn new(request: &RunDirectoryRequest<'_>, trajectories: Option<TrajectoryArtifact>) -> Self {
         Self {
             manifest_version: RUN_MANIFEST_VERSION,
             scenario: request.scenario.clone(),
@@ -294,7 +397,7 @@ impl RunManifest {
             event_version: EVENT_VERSION,
             model_version: MODEL_VERSION.to_owned(),
             build_revision: env!("CARGO_PKG_VERSION").to_owned(),
-            sampling: SamplingPolicy::default(),
+            sampling: request.sampling,
             stream: EventStream {
                 path: EVENT_STREAM_FILE.to_owned(),
                 compression: EVENT_STREAM_COMPRESSION.to_owned(),
@@ -302,6 +405,7 @@ impl RunManifest {
                 uncompressed_bytes: request.trace.bytes().len(),
                 uncompressed_sha256: request.trace.hash().to_owned(),
             },
+            trajectories,
         }
     }
 }
@@ -413,14 +517,14 @@ mod tests {
         assert_eq!(fidelity(0.03), FIDELITY_CUSTOM);
     }
 
-    /// The declared policy keeps every event and writes no trajectory state, so
-    /// the directory cannot grow with agents x ticks.
+    /// The declared policy keeps every event and a bounded trajectory sample,
+    /// so the directory cannot grow with agents x ticks.
     #[test]
-    fn the_declared_policy_retains_every_event_and_no_trajectory_state() {
+    fn the_declared_policy_keeps_every_event_and_a_bounded_sample() {
         let policy = SamplingPolicy::default();
         assert_eq!(policy.policy_version, SAMPLING_POLICY_VERSION);
         assert_eq!(policy.events, EventRetention::All);
-        assert_eq!(policy.trajectories.retention, TrajectoryRetention::Off);
+        assert_eq!(policy.trajectories.retention, TrajectoryRetention::Sampled);
         assert_eq!(
             policy.trajectories.stride_ticks,
             DEFAULT_TRAJECTORY_STRIDE_TICKS
@@ -429,8 +533,54 @@ mod tests {
             policy.trajectories.max_samples,
             DEFAULT_MAX_TRAJECTORY_SAMPLES
         );
+        assert!(policy.trajectories.writes_artifact());
         assert!(policy.trajectories.stride_ticks >= 1);
         assert!(policy.trajectories.max_samples >= 1);
+        assert!(
+            policy
+                .trajectories
+                .samples_tick(DEFAULT_TRAJECTORY_STRIDE_TICKS)
+        );
+        assert!(!policy.trajectories.samples_tick(1));
+        assert!(
+            policy
+                .trajectories
+                .below_cap(DEFAULT_MAX_TRAJECTORY_SAMPLES - 1)
+        );
+        assert!(
+            !policy
+                .trajectories
+                .below_cap(DEFAULT_MAX_TRAJECTORY_SAMPLES)
+        );
+    }
+
+    /// Full trajectories are the opt-in policy, and the policy they declare is
+    /// the policy applied: every tick, no cap.
+    #[test]
+    fn the_full_policy_keeps_every_tick_with_no_cap() {
+        let policy = SamplingPolicy::full_trajectories();
+        assert_eq!(policy.events, EventRetention::All);
+        assert_eq!(policy.trajectories.retention, TrajectoryRetention::Full);
+        assert_eq!(policy.trajectories.stride_ticks, 1);
+        assert_eq!(policy.trajectories.max_samples, u64::MAX);
+        assert!(policy.trajectories.samples_tick(1));
+        assert!(policy.trajectories.samples_tick(250));
+        assert!(policy.trajectories.below_cap(u64::MAX - 1));
+    }
+
+    /// A policy that writes no trajectories samples nothing, whatever its
+    /// stride says; a declared stride of zero is read as one step.
+    #[test]
+    fn a_policy_samples_exactly_the_ticks_it_keeps() {
+        let off = TrajectorySampling::off();
+        assert!(!off.writes_artifact());
+        assert!(!off.samples_tick(10));
+        let zero_stride = TrajectorySampling {
+            stride_ticks: 0,
+            ..TrajectorySampling::default()
+        };
+        assert!(zero_stride.samples_tick(1));
+        assert!(zero_stride.samples_tick(2));
     }
 
     #[test]

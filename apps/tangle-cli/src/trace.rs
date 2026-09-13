@@ -23,6 +23,9 @@ use tangle_sim::{
     StepOutput,
 };
 
+use crate::run_dir::TrajectorySampling;
+use crate::trajectories::{TrajectoryRecorder, TrajectorySample};
+
 /// A canonical trace plus the hash of its exact bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trace {
@@ -133,16 +136,35 @@ pub fn canonical_run(
     config: RunConfig,
     ticks: u64,
 ) -> Result<(Trace, RunSummary), InitError> {
+    canonical_run_sampled(scenario, config, ticks, &TrajectorySampling::off())
+        .map(|(trace, summary, _)| (trace, summary))
+}
+
+/// Run a compiled scenario for exactly `ticks` fixed steps, also capturing the
+/// trajectory rows `sampling` retains.
+///
+/// The trace, the summary, and the recorded bytes are the ones [`canonical_run`]
+/// produces: both entry points drive the same loop, so asking a run for sampled
+/// trajectories cannot change the canonical trace or its hash. Sampling only
+/// decides which rows the caller receives, and the declared policy bounds them.
+pub fn canonical_run_sampled(
+    scenario: CompiledScenario,
+    config: RunConfig,
+    ticks: u64,
+    sampling: &TrajectorySampling,
+) -> Result<(Trace, RunSummary, Vec<TrajectorySample>), InitError> {
     let mut sim = Simulation::new(scenario, config)?;
     let mut recorder = TraceRecorder::new(&sim, &config, ticks);
+    let mut trajectories = TrajectoryRecorder::new(*sampling);
 
     for _ in 0..ticks {
         recorder.record(&sim.step());
+        trajectories.observe(&sim);
     }
 
     let summary = sim.finish();
     let trace = recorder.finish(summary.clone());
-    Ok((trace, summary))
+    Ok((trace, summary, trajectories.finish()))
 }
 
 fn write_line<T: Serialize>(bytes: &mut Vec<u8>, record: &T) {
