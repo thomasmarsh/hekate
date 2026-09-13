@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-13T03:05:35Z
+updated: 2026-09-13T03:19:00Z
 summary: Slice G of Phase 1 Increment 5 closes the independent slice-F review findings: the P1 comparison.json unpaired-ordering defect, the DEF-004 summary.json version requirement, the unbacked perf within-pass split, and the two P3 notes.
-next: Fix the P1 `unpaired` ordering in compare.rs with a regression test, then close G2-G5 and rerun the five gates.
+next: Resolve TAS-043 once the five gates pass on the final tree.
 ---
 
 # Outcome
@@ -78,4 +78,49 @@ goldens, baselines, scenarios, and schemas untouched; `.braintree/` tracked).
 
 # Result
 
-Pending.
+Claimed at `content_hash 6eda867b791d2283a5ee50b000dba72d2943d8116f11c5f6ff4df3aa3a85139c`
+(the bare digest `braintree hash TAS-043` printed) with
+`braintree claim TAS-043 worker --base-hash <hash> --lease-seconds 14400`, and
+released with that same base hash before handoff.
+
+Write set as handed: `apps/tangle-cli/src/{batch,compare,lib,main,run_dir}.rs`,
+`apps/tangle-cli/tests/{batch,compare,run_directory,run_metrics}.rs`,
+`scripts/profile-symbols.py`,
+`perf/profiles/mixed_interaction_v1-release.summary.txt`, `perf/README.md`, and
+this node. No created path and no path outside the write set; the node's only
+move is its own `proposed/` -> `active/` status transition. No kernel change and
+no dependency change: `crates/` is untouched and `Cargo.toml`/`Cargo.lock` are
+unchanged. `DEF-004` was not edited — F2 took the additive `summary.json` field,
+so the settled definition holds as written and its follow-up needed no
+re-scoping.
+
+Disposition: F1-F5 closed, F6 recorded as an accepted limitation. Per-finding
+evidence (file:line and test name) is in `# Resolution`.
+
+Preservation: the change touches no golden, baseline, scenario, or schema —
+`git status --short` lists only the write set above — and `EVENT_VERSION` stays
+2. `comparison.json` for a bucket present at seed 0 is unchanged (the sort is a
+no-op on an already ascending list), and `summary.json` grows only by the added
+field.
+
+Gates on the final tree:
+
+- `cargo test --workspace --all-features` — passed, no failure in any target.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` —
+  passed, no warning.
+- `cargo fmt --all --check` — passed.
+- `./scripts/check-dependency-direction.sh` — passed (`dependency direction OK`).
+- `braintree check` — passed (75 nodes).
+
+Both regression tests were shown to fail against the pre-fix behaviour before
+being kept: F1's test reported
+`[(1, NotObserved, Reported), (0, NotObserved, NotObserved)]` with the sort
+removed, and F5's test reported `BatchError::ForeignContent` for the seed
+directory with the staging-file rule removed.
+
+F6 accepted limitation: `metrics.json` records event counts by mode and by
+movement (`EventCounts::by_family_mode`, `by_family_movement`) and the
+aggregation reads only `total`, `by_family`, and `by_family_kind`
+(`apps/tangle-cli/src/aggregate.rs:655`-`:679`), so mode- and
+movement-scoped event-family counts are not aggregated across seeds. Closing it
+is a metric-surface change beyond this review closeout.
