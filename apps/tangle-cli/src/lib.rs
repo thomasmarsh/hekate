@@ -14,6 +14,7 @@ mod baseline;
 mod batch;
 mod compare;
 mod converge;
+mod experiment;
 mod replay;
 mod run_dir;
 mod run_metrics;
@@ -52,6 +53,12 @@ pub use converge::{
     ConvergenceVerdict, FidelityBatch, FidelityValue, MetricSensitivity, MetricTolerance,
     MovementSensitivity, RefinementStep, TOLERANCE_MEASURE, TOLERANCE_REFERENCE, TOLERANCE_RULE,
     Tolerance, VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
+};
+pub use experiment::{
+    EXPERIMENT_VERSION, ExperimentError, ExperimentReference, ExperimentReport, ExperimentSpec,
+    ExperimentVariant, REPORT_FILE, REPORT_VERSION, RUN_SLICE, ReportDistribution, ReportFidelity,
+    ReportLinks, ReportMetric, ReportPaired, ReportRun, ReportSection, ReportSlice, ReportVariant,
+    SECTION_ORDER, SLICE_ORDER, SliceKind, run_experiment,
 };
 pub use replay::{ReplayError, replay_run_directory};
 pub use run_dir::{

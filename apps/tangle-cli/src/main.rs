@@ -59,6 +59,15 @@
 //! batches through the batch machinery's resume path, so a completed run
 //! directory is never rewritten.
 //!
+//! `experiment` runs the checked-in experiment spec end to end: both variants
+//! into their own immutable run directories from the spec's seed bank at the
+//! spec's fidelity, then one `comparison_report.json` reporting throughput,
+//! delay, queues, violations, collisions, near misses, time to collision,
+//! post-encroachment time, minimum separation, and the remaining counted event
+//! families by mode and by movement, with both variants' across-seed
+//! distributions, the paired difference, and the run table every number
+//! resolves to.
+//!
 //! `replay` reproduces a completed run directory from its manifest: it re-loads
 //! the recorded scenario source, checks the recorded content hash, and re-runs
 //! the kernel with the recorded seed, step, and tick count, emitting the
@@ -78,11 +87,11 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use tangle_cli::{
     AGGREGATION_FILE, BATCH_MANIFEST_FILE, BatchRequest, COMPARISON_FILE, CONVERGENCE_FILE,
-    CONVERGENCE_TOLERANCE, CaptureRequest, PRESETS, RunDirectoryRequest, SamplingPolicy,
-    ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch, canonical_run,
-    canonical_run_captured, capture, compare_batches, converge_batches, fidelity_ticks,
-    load_scenario_hashed, read_seed_bank, render_validation_failure, replay_run_directory,
-    run_batch, validate_scenario, write_run_directory,
+    CONVERGENCE_TOLERANCE, CaptureRequest, PRESETS, REPORT_FILE, RunDirectoryRequest,
+    SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, aggregate_batch,
+    canonical_run, canonical_run_captured, capture, compare_batches, converge_batches,
+    fidelity_ticks, load_scenario_hashed, read_seed_bank, render_validation_failure,
+    replay_run_directory, run_batch, run_experiment, validate_scenario, write_run_directory,
 };
 use tangle_sim::RunConfig;
 
@@ -129,6 +138,9 @@ enum Command {
     /// Run one scenario at the Fast, Standard, and Fine fidelities over one seed bank.
     #[command(long_about = CONVERGE_LONG_ABOUT)]
     Converge(ConvergeArgs),
+    /// Run a checked-in experiment's variants and write the comparison report.
+    #[command(long_about = EXPERIMENT_LONG_ABOUT)]
+    Experiment(ExperimentArgs),
     /// Reproduce a completed run directory's canonical event stream.
     #[command(long_about = REPLAY_LONG_ABOUT)]
     Replay(ReplayArgs),
@@ -473,6 +485,7 @@ fn main() -> ExitCode {
         Command::Aggregate(args) => aggregate(args),
         Command::Compare(args) => compare(args),
         Command::Converge(args) => converge(args),
+        Command::Experiment(args) => experiment(args),
         Command::Replay(args) => replay(args),
         Command::Validate(args) => validate(args),
         Command::Baseline(args) => baseline(args),
@@ -910,6 +923,102 @@ fn converge(args: ConvergeArgs) -> ExitCode {
         args.output.display(),
         report.metrics.len(),
         report.fidelities.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// The `experiment` contract shown by `--help`: inputs, output, exits.
+const EXPERIMENT_LONG_ABOUT: &str = "\
+Run one checked-in experiment: both variants into their own immutable run
+directories from the spec's seed bank at the spec's fidelity, then one
+comparison_report.json reporting throughput, delay, queues, violations,
+collisions, near misses, time to collision, post-encroachment time, minimum
+separation, and the remaining counted event families by mode and by movement,
+with both variants' across-seed distributions, the paired difference, and the
+run table every number resolves to.
+
+Usage:
+  tangle-cli experiment <SPEC> --run-root <DIR> [--jobs <N>] [--output <PATH>]
+
+Inputs:
+  <SPEC>       Path to a JSON5-free experiment spec: an experiment_version 1
+               document naming two variants, the seed bank both run, and the
+               fidelity, step, ticks, duration, and sampling policy every run
+               applies. Its scenario and bank paths are relative to the working
+               directory, so run it from the repository root.
+  --run-root   Directory holding one batch root per variant, each the batch.json
+               and seed-<n> run directories `batch` writes. A completed run
+               directory is never rewritten, so the command resumes.
+  --jobs       Whole runs to execute at once; every run stays single-threaded.
+               A parallel batch produces the same per-run trace hashes as a
+               serial one.
+  --output     Destination for the report; `-` writes it to stdout. Defaults to
+               comparison_report.json in the current directory.
+
+Output:
+  comparison_report.json names the experiment spec and its content hash, the run
+policy and seed bank, the two sides, the manifest link rule, each variant's
+batch link and seed table, and one record per metric per slice, grouped into the
+gate sections the metric belongs to. A record holds both variants' across-seed
+distributions and the paired difference side_a - side_b, and states
+metric_definition_version 2. A not-applicable or not-observed value is a status
+and a seed list, never a fabricated zero.
+
+Exit codes:
+  0  both variants ran, were aggregated and paired, and the report was written
+  1  the spec is unreadable, declares fewer than two variants, repeats one, or
+     disagrees with its own run policy, a scenario or the seed bank cannot be
+     read, a run fails, the two variants did not run one bank in one order, or
+     an artifact cannot be written
+  2  command-line usage error";
+
+/// Arguments for `experiment`.
+#[derive(Args)]
+struct ExperimentArgs {
+    /// Path to the experiment spec JSON.
+    spec: PathBuf,
+
+    /// Root holding one batch root per variant, named by the variant.
+    #[arg(long)]
+    run_root: PathBuf,
+
+    /// Whole runs to execute at once; every run stays single-threaded.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+    jobs: u64,
+
+    /// Destination for the report; `-` writes it to stdout.
+    #[arg(long, default_value = REPORT_FILE)]
+    output: PathBuf,
+}
+
+/// Run the checked-in experiment's variants and write the comparison report.
+///
+/// The runs go through `run_batch` and the report through `run_experiment`, so a
+/// completed run directory is never rewritten and the report reads the artifacts
+/// actually on disk.
+fn experiment(args: ExperimentArgs) -> ExitCode {
+    let report = match run_experiment(&args.spec, &args.run_root, args.jobs) {
+        Ok(report) => report,
+        Err(error) => return fail(error),
+    };
+
+    if let Err(error) = write_json(&args.output, &report) {
+        return fail(format_args!(
+            "cannot write comparison report to '{}': {error}",
+            args.output.display()
+        ));
+    }
+
+    eprintln!(
+        "comparison report: {} ({} vs {}, {} sections over {} seeds)",
+        args.output.display(),
+        report.side_a,
+        report.side_b,
+        report.sections.len(),
+        report
+            .variants
+            .first()
+            .map_or(0, |variant| variant.runs.len())
     );
     ExitCode::SUCCESS
 }
