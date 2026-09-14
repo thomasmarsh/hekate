@@ -1,6 +1,6 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:03:29Z
+updated: 2026-09-14T13:21:25Z
 summary: TAS-095 bundles four multi-hour outcomes under one Done when, so each dispatch exceeded the...
 braintree_revision: 0.6.0+g169bad5
 ---
@@ -70,3 +70,30 @@ Improvement: prefer a whole-word slug boundary with a short stable suffix, or
 accept an explicit `--slug` in the brief whenever the derived slug would be
 clipped mid-word, so the graph's stable basenames stay readable and easy to
 reproduce in wikilinks.
+
+## Finding 5 — the skill has no operational model for node load size or opt-in reconnaissance
+
+Attempted: as coordinator, sized Phase 2 Increment 2 leaves for fresh workers.
+Each leaf body was small, but the real cost of a session was loading the context
+around it: a 6,300-line `sim.rs`, a 1,500-line contract, and resolved-sibling
+modules. Workers handed an exact seam landed green slices; the workers that had
+to locate their own seam timed out at 30 minutes (Finding 1).
+Friction: the skill's rule "a node owns one durable outcome, not a session" is
+correct but not operational. A durable outcome can still require far more context
+than one agent can load in a session, and the skill provides no relation for a
+node to *index* opt-in context nodes: every session re-pays the same orientation
+cost because there is no sanctioned place to record and link shared
+reconnaissance. `braintree check` neither measures nor warns on node body size,
+so "small and fully loaded" is unenforced, and there is no scoping recipe that
+turns a bundled `# Done when` into right-sized children.
+Improvement: (1) define an explicit, non-pinned reference relation from a work
+node to context (`THO` reconnaissance) nodes, so shared orientation is opt-in
+rather than restated, and have `braintree node` report those references; (2) add
+a size check or `braintree size NODE` that warns when a node body exceeds a
+loadable bound; (3) document a scoping recipe — split a `# Done when` that bundles
+independent deliverables, hand a worker one verifiable slice plus its exact seam
+(`path (Symbol)`), and defer a newly discovered outcome into a direct child rather
+than widening the slice; (4) provide an orientation packet such as `braintree node
+NODE --with-references` that loads the node, its route, and its linked
+reconnaissance in one command, since the fixed per-session orientation cost is
+the dominant term for a fast model.

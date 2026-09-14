@@ -29,18 +29,52 @@ session, not the session to the node.
 
 - Before writing code, read the frontier node's `# Done when` and state the slice
   you will deliver and what explicitly stays out of scope. If that slice would
-  exceed roughly one focused session, or touch more than a few subsystems, stop
-  and confirm the split with the user before starting.
+  exceed roughly one focused session, or touch more than a few subsystems, split
+  it into child nodes before starting; only a split that adds an outcome the
+  request did not ask for needs the user's agreement.
 - If a node's `# Done when` cannot be met in one session, do not expand the
   session to meet it. Deliver the smallest coherent slice that clears its blocker
   or completes one deliverable, record the exact remaining scope and evidence in
   the node, and leave the node `proposed`/`active` with a `next` naming the first
   remaining action. A session that unblocks a node has not completed it.
 - Do not reinterpret a request as larger than asked. A node that bundles several
-  independent deliverables is several sessions; split it into child nodes only
-  with the user's agreement, never silently.
+  independent deliverables is several nodes; split it and record each child in
+  the graph rather than expanding the session silently.
 - Do not add deliverables, new nodes, or plan documents because the node "really
   needs" them. Record them as ledger scope, not as this session's work.
+
+## Small, fully-loaded nodes and shared reconnaissance (mandatory)
+
+A node is the unit of *loading*, so a node an agent must load to work should be
+small enough to read completely in one pass. Keep the outcome, `# Done when`, and
+pointers in the node; never paste reconnaissance, large code excerpts, or session
+history into it. Deep detail belongs in linked nodes that the reader loads only
+when a pointer requires it.
+
+- **Share reconnaissance instead of relitigating it.** Orientation is the largest
+  fixed cost of a session. Once a session has paid it, record the durable
+  findings — code seams and symbols, prior-session evidence, decision context —
+  as `THO` nodes routed to the appropriate hub, and have the working nodes link
+  them. Link reconnaissance with a plain wikilink (opt-in context), not a
+  `Depends on` pin, which stays reserved for context-bearing dependencies. A
+  node that needs the context loads the linked node on demand; it does not
+  restate it.
+- **Decompose freely, to any depth.** Braintree is a graph: a child, its child,
+  and its child are all ordinary nodes. There is no mandated taxonomy depth and
+  no required two-level shape. Break a problem into as many nodes as it has
+  independently resumable outcomes, and chase the `next` route down the tree
+  depth-first to the current leaf rather than planning breadth-first.
+- **Size slices up front, not by clock.** Roughly ten minutes of agent work is a
+  guideline, not a rule. The binding constraint is that a slice delivers one
+  verifiable change and leaves every node truthful. When a frontier node's
+  `# Done when` plainly bundles independent deliverables, split it before
+  dispatching rather than discovering that mid-run.
+- **Defer instead of expanding.** When execution reveals a larger-than-expected
+  scope, the working agent creates the smallest direct child that owns the newly
+  discovered, independently resumable outcome (recording its outcome, route,
+  and `next`) and leaves its own node `active` with a `next`; it does not widen
+  the slice to meet the node. Growing a slice to finish a node is the failure
+  this section exists to prevent.
 
 ## Record Braintree friction (mandatory)
 
