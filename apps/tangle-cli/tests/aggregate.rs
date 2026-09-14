@@ -21,11 +21,12 @@ use sha2::{Digest, Sha256};
 use tangle_cli::{
     AGGREGATION_FILE, AGGREGATION_VERSION, AggregateError, Aggregation, BATCH_MANIFEST_FILE,
     BatchManifest, BatchRequest, BatchRun, BatchSpec, CONFIDENCE_LEVEL, ClosePassMetrics,
-    EVENT_FAMILY_LABELS, EventCounts, LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS,
-    MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus,
-    MetricValue, MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues,
-    RunMetricsArtifact, SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch,
-    load_scenario_provenance, run_batch,
+    ClosePassMinimum, ClosePassValues, EVENT_FAMILY_LABELS, EventCounts,
+    LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MANIFEST_FILE,
+    METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus, MetricValue,
+    MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues, RunMetricsArtifact,
+    SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch, load_scenario_provenance,
+    run_batch,
 };
 use tangle_sim::RunConfig;
 
@@ -274,6 +275,8 @@ struct SyntheticSeed {
     event_families_by_movement: BTreeMap<String, BTreeMap<String, u64>>,
     /// The operational values of each movement key the run carried.
     operational_by_movement: BTreeMap<String, OperationalValues>,
+    /// The overtaking and close-pass families of every bucket the run reports.
+    close_pass: ClosePassMetrics,
 }
 
 impl Default for SyntheticSeed {
@@ -292,8 +295,64 @@ impl Default for SyntheticSeed {
             event_families_by_mode: BTreeMap::new(),
             event_families_by_movement: BTreeMap::new(),
             operational_by_movement: BTreeMap::new(),
+            close_pass: ClosePassMetrics::not_observed(),
         }
     }
+}
+
+/// One bucket's close-pass families: the overtaking counts, the closed
+/// observations, the least clearance, and the violations the test supplies,
+/// with no bands.
+fn close_pass_bucket(
+    overtaking: [u64; 4],
+    close_passes: u64,
+    minimum: ClosePassMinimum,
+    violations: u64,
+) -> ClosePassValues {
+    ClosePassValues {
+        overtake_attempts: reported(overtaking[0] as f64),
+        overtake_commits: reported(overtaking[1] as f64),
+        overtake_completions: reported(overtaking[2] as f64),
+        overtake_aborts: reported(overtaking[3] as f64),
+        close_passes: reported(close_passes as f64),
+        close_pass_minimum_clearance_m: minimum,
+        clearance_band_durations_s: BTreeMap::new(),
+        close_pass_violations: reported(violations as f64),
+    }
+}
+
+/// A reported close-pass minimum, with the pair, time, and relative speed the
+/// artifact records beside it.
+fn minimum_reported(value: f64) -> ClosePassMinimum {
+    ClosePassMinimum {
+        status: MetricStatus::Reported,
+        value: Some(value),
+        agent: Some(0),
+        other: Some(1),
+        mode_pair: Some("vehicle_vehicle".to_owned()),
+        time_s: Some(12.0),
+        relative_speed_mps: Some(4.0),
+    }
+}
+
+/// A close-pass minimum with no value and an explicit applicability.
+fn minimum_absent(status: MetricStatus) -> ClosePassMinimum {
+    ClosePassMinimum {
+        status,
+        value: None,
+        agent: None,
+        other: None,
+        mode_pair: None,
+        time_s: None,
+        relative_speed_mps: None,
+    }
+}
+
+/// The close-pass families of one bucket as a band-carrying value: the given
+/// bucket with its declared clearance bands set.
+fn with_bands(mut values: ClosePassValues, bands: &[(u32, MetricValue)]) -> ClosePassValues {
+    values.clearance_band_durations_s = bands.iter().cloned().collect();
+    values
 }
 
 /// Write a batch root whose seeds report `seeds`, in the order given.
@@ -337,7 +396,7 @@ fn write_synthetic_batch(root: &Path, seeds: &[(u64, SyntheticSeed)]) {
                         .collect(),
                     by_movement: values.operational_by_movement.clone(),
                 },
-                close_pass: ClosePassMetrics::not_observed(),
+                close_pass: values.close_pass.clone(),
             },
         );
         runs.push(BatchRun {
@@ -448,6 +507,31 @@ fn expected_metric_keys(artifact: &RunMetricsArtifact) -> Vec<String> {
         OPERATIONAL_FIELDS
             .iter()
             .map(|field| format!("operational.run.{field}")),
+    );
+    // The run bucket's close-pass families, restated from metric definition v3
+    // rather than from the aggregation: the four overtaking counts, the two
+    // close-pass counts, and the least clearance, plus one key per declared
+    // clearance band.
+    keys.extend(
+        [
+            "overtake_attempts",
+            "overtake_commits",
+            "overtake_completions",
+            "overtake_aborts",
+            "close_passes",
+            "close_pass_minimum_clearance_m",
+            "close_pass_violations",
+        ]
+        .into_iter()
+        .map(|family| format!("close_pass.run.{family}")),
+    );
+    keys.extend(
+        artifact
+            .close_pass
+            .run
+            .clearance_band_durations_s
+            .keys()
+            .map(|band| format!("close_pass.run.clearance_band_durations_s.{band}")),
     );
     assert_eq!(
         artifact.operational.by_mode.keys().collect::<Vec<_>>(),
@@ -1056,6 +1140,244 @@ fn the_event_slices_disaggregate_the_counted_families_by_mode_and_movement() {
     }
 }
 
+/// The close-pass families of metric definition v3 aggregate over the run and
+/// per mode pair, per movement, and per facility, each with its unit and its
+/// explicit applicability, in cells of their own; the batch refuses nothing.
+#[test]
+fn the_close_pass_families_aggregate_over_the_run_and_every_dimension() {
+    let scratch = Scratch::new("close-pass");
+    let root = scratch.path("batch");
+    let bucket = "movement:through|movement:through";
+
+    // Seed 0 recorded a closed pass on the shared road: one overtake from attempt
+    // to completion, two closed observations whose least clearance is 0.4 m, a
+    // violation, and a duration inside the declared `bicycle_close` band.
+    let recorded = with_bands(
+        close_pass_bucket([1, 1, 1, 0], 2, minimum_reported(0.4), 1),
+        &[(7, reported(1.2)), (9, absent(MetricStatus::NotApplicable))],
+    );
+    let mut recorded_block = ClosePassMetrics::not_observed();
+    recorded_block.run = recorded.clone();
+    recorded_block
+        .by_mode_pair
+        .insert("vehicle_vehicle".to_owned(), recorded.clone());
+    recorded_block.by_mode_pair.insert(
+        "pedestrian_pedestrian".to_owned(),
+        close_pass_bucket([0; 4], 0, minimum_absent(MetricStatus::NotApplicable), 0),
+    );
+    recorded_block.by_movement = BTreeMap::from([(bucket.to_owned(), recorded.clone())]);
+    recorded_block.by_facility = BTreeMap::from([
+        ("facility:road".to_owned(), recorded),
+        (
+            "facility:centered".to_owned(),
+            close_pass_bucket([0; 4], 0, minimum_absent(MetricStatus::NotApplicable), 0),
+        ),
+    ]);
+
+    // Seed 1 completed the same run without closing an observation: every
+    // countable family is the observed `0` v3 fixes, the least clearance is not
+    // observed because that bucket could host a pass and recorded none, and the
+    // same declared bands are reported with their own applicabilities.
+    let quiet = with_bands(
+        close_pass_bucket([0; 4], 0, minimum_absent(MetricStatus::NotObserved), 0),
+        &[
+            (7, absent(MetricStatus::NotObserved)),
+            (9, absent(MetricStatus::NotObserved)),
+        ],
+    );
+    let mut quiet_block = ClosePassMetrics::not_observed();
+    quiet_block.run = quiet.clone();
+    quiet_block
+        .by_mode_pair
+        .insert("vehicle_vehicle".to_owned(), quiet.clone());
+    // The applicability is a property of the scenario, not of the run: the pair
+    // whose templates declare no passing tactic reports the same not-applicable
+    // bucket in both seeds.
+    quiet_block.by_mode_pair.insert(
+        "pedestrian_pedestrian".to_owned(),
+        close_pass_bucket([0; 4], 0, minimum_absent(MetricStatus::NotApplicable), 0),
+    );
+    quiet_block.by_facility = BTreeMap::from([
+        ("facility:road".to_owned(), quiet),
+        (
+            "facility:centered".to_owned(),
+            close_pass_bucket([0; 4], 0, minimum_absent(MetricStatus::NotApplicable), 0),
+        ),
+    ]);
+
+    write_synthetic_batch(
+        &root,
+        &[
+            (
+                0,
+                SyntheticSeed {
+                    close_pass: recorded_block,
+                    ..SyntheticSeed::default()
+                },
+            ),
+            (
+                1,
+                SyntheticSeed {
+                    close_pass: quiet_block,
+                    ..SyntheticSeed::default()
+                },
+            ),
+        ],
+    );
+
+    let aggregation =
+        aggregate_batch(&root).expect("a batch whose runs recorded a closed pass aggregates");
+
+    // The run bucket: the families are whole-batch metrics under the artifact
+    // block they are read from, each in its own unit.
+    assert_eq!(
+        aggregation.metrics["close_pass.run.close_passes"].unit,
+        "observations"
+    );
+    assert_eq!(
+        aggregation.metrics["close_pass.run.overtake_attempts"].unit,
+        "records"
+    );
+    assert_eq!(
+        aggregation.metrics["close_pass.run.close_pass_minimum_clearance_m"].unit,
+        "metres"
+    );
+    assert_eq!(
+        aggregation.metrics["close_pass.run.clearance_band_durations_s.7"].unit,
+        "seconds"
+    );
+
+    // A countable family is an observed zero in the run that recorded none, so
+    // both seeds report it and the mean is over both.
+    let close_passes = &aggregation.metrics["close_pass.run.close_passes"];
+    assert_eq!(close_passes.count, 2);
+    assert_close(close_passes.mean.expect("a mean"), 1.0);
+    assert_eq!(close_passes.reported_seeds, vec![0, 1]);
+    assert_close(
+        aggregation.metrics["close_pass.run.overtake_completions"]
+            .mean
+            .expect("a mean"),
+        0.5,
+    );
+    assert_close(
+        aggregation.metrics["close_pass.run.close_pass_violations"]
+            .mean
+            .expect("a mean"),
+        0.5,
+    );
+
+    // A value family keeps the run bucket's applicability: the least clearance was
+    // reported by one seed and is not observed in the other, never a zero.
+    let minimum = &aggregation.metrics["close_pass.run.close_pass_minimum_clearance_m"];
+    assert_eq!(minimum.count, 1);
+    assert_close(minimum.mean.expect("a mean"), 0.4);
+    assert_eq!(minimum.reported_seeds, vec![0]);
+    assert_eq!(minimum.not_observed_seeds, vec![1]);
+    assert!(minimum.not_applicable_seeds.is_empty());
+
+    // Each declared band is its own cell in its own unit, and a band the bucket's
+    // mode gate excludes is not applicable rather than a zero duration.
+    let band = &aggregation.metrics["close_pass.run.clearance_band_durations_s.7"];
+    assert_eq!(band.count, 1);
+    assert_close(band.mean.expect("a mean"), 1.2);
+    assert_eq!(band.not_observed_seeds, vec![1]);
+    let excluded = &aggregation.metrics["close_pass.run.clearance_band_durations_s.9"];
+    assert_eq!(excluded.count, 0);
+    assert_eq!(excluded.not_applicable_seeds, vec![0]);
+    assert_eq!(excluded.not_observed_seeds, vec![1]);
+
+    // The mode-pair cells: the pair that recorded the pass reports it, the pair
+    // that cannot host one is not applicable, and the pair that could host one
+    // and recorded none is not observed — three different statements.
+    let pair = |label: &str, key: &str| &aggregation.close_pass_mode_pair_slices[label][key];
+    assert_eq!(pair("vehicle_vehicle", "close_passes").unit, "observations");
+    assert_close(
+        pair("vehicle_vehicle", "close_passes")
+            .mean
+            .expect("a mean"),
+        1.0,
+    );
+    assert_close(
+        pair("vehicle_vehicle", "close_pass_minimum_clearance_m")
+            .mean
+            .expect("a mean"),
+        0.4,
+    );
+    assert_eq!(
+        pair("pedestrian_pedestrian", "close_pass_minimum_clearance_m").not_applicable_seeds,
+        vec![0, 1]
+    );
+    assert_eq!(
+        pair("vehicle_pedestrian", "close_pass_minimum_clearance_m").not_observed_seeds,
+        vec![0, 1]
+    );
+    assert!(
+        pair("vehicle_pedestrian", "close_pass_minimum_clearance_m")
+            .not_applicable_seeds
+            .is_empty()
+    );
+    // A countable family of a pair that recorded no pass is still an observed
+    // zero, reported by both seeds.
+    assert_eq!(pair("pedestrian_pedestrian", "close_passes").count, 2);
+    assert_close(
+        pair("pedestrian_pedestrian", "close_passes")
+            .mean
+            .expect("a mean"),
+        0.0,
+    );
+
+    // The facility cells: the road that hosted the pass, and the centered
+    // facility that cannot host one.
+    let road = &aggregation.close_pass_facility_slices["facility:road"];
+    assert_eq!(road["close_passes"].unit, "observations");
+    assert_close(road["close_passes"].mean.expect("a mean"), 1.0);
+    assert_eq!(
+        aggregation.close_pass_facility_slices["facility:centered"]
+            ["close_pass_minimum_clearance_m"]
+            .not_applicable_seeds,
+        vec![0, 1]
+    );
+
+    // The movement bucket is sparse: seed 1's run named none, so it made no
+    // observation of that bucket rather than recording a zero family.
+    let movement = &aggregation.close_pass_movement_slices[bucket];
+    assert_eq!(movement["close_passes"].count, 1);
+    assert_close(movement["close_passes"].mean.expect("a mean"), 2.0);
+    assert_eq!(movement["close_passes"].not_observed_seeds, vec![1]);
+
+    // No existing cell widened: the mode-pair and movement cells still hold
+    // exactly the interaction metrics they held before the close-pass families.
+    for slice in aggregation.mode_pair_slices.values() {
+        assert_eq!(
+            slice.keys().collect::<Vec<_>>(),
+            vec!["minimum_separation_m"]
+        );
+    }
+    for slice in aggregation.movement_slices.values() {
+        assert_eq!(
+            slice.metrics.keys().collect::<Vec<_>>(),
+            vec![
+                "minimum_post_encroachment_s",
+                "minimum_separation_m",
+                "minimum_ttc_s"
+            ]
+        );
+    }
+
+    // Every close-pass cell accounts for every seed exactly once, whichever
+    // status that seed reported.
+    for slice in aggregation
+        .close_pass_mode_pair_slices
+        .values()
+        .chain(aggregation.close_pass_movement_slices.values())
+        .chain(aggregation.close_pass_facility_slices.values())
+    {
+        for (key, distribution) in slice {
+            assert_statuses_account_for_every_seed(key, distribution, 2);
+        }
+    }
+}
+
 #[test]
 fn every_aggregated_metric_links_to_its_manifests_and_definition_version() {
     let scratch = Scratch::new("links");
@@ -1138,6 +1460,24 @@ fn every_aggregated_metric_links_to_its_manifests_and_definition_version() {
                 .agent_movement_slices
                 .values()
                 .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            aggregation
+                .close_pass_mode_pair_slices
+                .values()
+                .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            aggregation
+                .close_pass_movement_slices
+                .values()
+                .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            aggregation
+                .close_pass_facility_slices
+                .values()
+                .flat_map(|slice| slice.values()),
         );
     let mut checked = 0;
     for distribution in distributions {
@@ -1217,6 +1557,14 @@ fn a_real_batch_aggregates_its_mode_and_movement_slices() {
     );
     assert!(ttc.mean.expect("a mean") > 0.0);
     assert!(ttc.not_observed_seeds.is_empty());
+
+    // The close-pass families of a real artifact are aggregated like any other:
+    // the benchmark closes no observation, and an absent count is the observed
+    // zero metric definition v3 fixes rather than an absent value.
+    let close_passes = &aggregation.metrics["close_pass.run.close_passes"];
+    assert_eq!(close_passes.unit, "observations");
+    assert_eq!(close_passes.count, 3);
+    assert_eq!(close_passes.mean, Some(0.0));
 
     // The mode slice: all three mode pairs, each reporting the separation
     // minimum, each accounting for every seed.
@@ -1410,6 +1758,9 @@ fn the_output_ordering_is_deterministic() {
     ascending(first.mode_event_slices.keys().collect());
     ascending(first.movement_slices.keys().collect());
     ascending(first.agent_movement_slices.keys().collect());
+    ascending(first.close_pass_mode_pair_slices.keys().collect());
+    ascending(first.close_pass_movement_slices.keys().collect());
+    ascending(first.close_pass_facility_slices.keys().collect());
     for slice in first.mode_pair_slices.values() {
         ascending(slice.keys().collect());
     }
@@ -1420,6 +1771,14 @@ fn the_output_ordering_is_deterministic() {
         ascending(slice.metrics.keys().collect());
     }
     for slice in first.agent_movement_slices.values() {
+        ascending(slice.keys().collect());
+    }
+    for slice in first
+        .close_pass_mode_pair_slices
+        .values()
+        .chain(first.close_pass_movement_slices.values())
+        .chain(first.close_pass_facility_slices.values())
+    {
         ascending(slice.keys().collect());
     }
     for distribution in first
@@ -1446,6 +1805,24 @@ fn the_output_ordering_is_deterministic() {
         .chain(
             first
                 .agent_movement_slices
+                .values()
+                .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            first
+                .close_pass_mode_pair_slices
+                .values()
+                .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            first
+                .close_pass_movement_slices
+                .values()
+                .flat_map(|slice| slice.values()),
+        )
+        .chain(
+            first
+                .close_pass_facility_slices
                 .values()
                 .flat_map(|slice| slice.values()),
         )

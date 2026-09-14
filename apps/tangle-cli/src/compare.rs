@@ -82,6 +82,17 @@
 //! the run recorded none of them, because the run artifact's own `by_family` set
 //! already reports an absent family as a count of zero.
 //!
+//! The close-pass families of metric definition v3 pair in cells of their own,
+//! exactly as the aggregation carries them: the run bucket as the
+//! `close_pass.run.<family>` metrics and
+//! [`Comparison::close_pass_mode_pair_slices`],
+//! [`Comparison::close_pass_movement_slices`], and
+//! [`Comparison::close_pass_facility_slices`] for the mode-pair, movement, and
+//! facility dimensions. No existing cell widens, and each cell keeps its unit
+//! and its explicit applicability: a pair with a not-applicable side — a bucket
+//! that cannot host a pass — is counted unpaired rather than read as a zero
+//! difference.
+//!
 //! ## Determinism and immutability
 //!
 //! Every collection is ordered: the pairs follow the bank's order, the metric
@@ -101,13 +112,14 @@ use serde::{Deserialize, Serialize};
 use crate::aggregate::{
     CONFIDENCE_LEVEL, ConfidenceInterval, LARGEST_TABULATED_DEGREES_OF_FREEDOM,
     LEAST_INTERVAL_SEEDS, METRES, MODE_PAIR_METRIC, NORMAL_CRITICAL_975, Reading, Spread,
-    agent_movement_event_readings, mode_event_readings, movement_readings, operational_readings,
-    recorded_movement_keys, run_level_readings, sample_mean, sample_variance,
+    agent_movement_event_readings, close_pass_readings, mode_event_readings, movement_readings,
+    operational_readings, recorded_movement_keys, run_level_readings, sample_mean, sample_variance,
 };
 use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest, BatchRun};
 use crate::run_dir::MANIFEST_FILE;
 use crate::run_metrics::{
-    METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue, RunMetricsArtifact,
+    ClosePassValues, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue,
+    RunMetricsArtifact,
 };
 use crate::seed_bank::{SeedBankError, SeedBankReference, read_seed_bank};
 use crate::trace::sha256_hex;
@@ -527,6 +539,16 @@ pub struct Comparison {
     /// operational metrics of one agent's own movement plus
     /// `event_counts.<family>` for every counted family.
     pub agent_movement_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The close-pass mode-pair slices, keyed by `ModePair` label, each holding
+    /// the overtaking and close-pass families of metric definition v3 for that
+    /// pair.
+    pub close_pass_mode_pair_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The close-pass movement slices, keyed by the artifact's own pairwise
+    /// movement key, each holding the same families for that bucket.
+    pub close_pass_movement_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The close-pass facility slices, keyed by `facility:<name>`, each holding
+    /// the same families for that facility.
+    pub close_pass_facility_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
 }
 
 /// Compare two batches run from one common-random-number seed bank.
@@ -575,6 +597,9 @@ pub fn compare_batches(
     let mut mode_events: BTreeMap<String, SlicePairing> = BTreeMap::new();
     let mut movements: BTreeMap<String, MovementPairing> = BTreeMap::new();
     let mut agent_movements: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut close_pass_mode_pairs: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut close_pass_movements: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut close_pass_facilities: BTreeMap<String, SlicePairing> = BTreeMap::new();
     let mut metric_set: Option<BTreeSet<String>> = None;
 
     for seed in &seeds {
@@ -749,6 +774,35 @@ pub fn compare_batches(
             );
         }
 
+        // The close-pass buckets of the three disaggregation dimensions, paired
+        // like every other slice.
+        for (accumulators, a_side, b_side) in [
+            (
+                &mut close_pass_mode_pairs,
+                &a_readings.close_pass_mode_pairs,
+                &b_readings.close_pass_mode_pairs,
+            ),
+            (
+                &mut close_pass_movements,
+                &a_readings.close_pass_movements,
+                &b_readings.close_pass_movements,
+            ),
+            (
+                &mut close_pass_facilities,
+                &a_readings.close_pass_facilities,
+                &b_readings.close_pass_facilities,
+            ),
+        ] {
+            pair_close_pass_buckets(
+                accumulators,
+                *seed,
+                a_side,
+                b_side,
+                &a_run.link.manifest_sha256,
+                &b_run.link.manifest_sha256,
+            );
+        }
+
         compared_seeds.push(ComparedPair {
             seed: *seed,
             a: a_run.link,
@@ -795,6 +849,9 @@ pub fn compare_batches(
             })
             .collect(),
         agent_movement_slices: finish_slice_pairings(agent_movements, &seeds),
+        close_pass_mode_pair_slices: finish_slice_pairings(close_pass_mode_pairs, &seeds),
+        close_pass_movement_slices: finish_slice_pairings(close_pass_movements, &seeds),
+        close_pass_facility_slices: finish_slice_pairings(close_pass_facilities, &seeds),
     })
 }
 
@@ -1040,8 +1097,19 @@ struct SeedSide<'a> {
 impl SeedSide<'_> {
     /// Read one artifact metric value with its reporting status.
     fn reading(&self, metric: &str, value: &MetricValue) -> Result<PairReading, CompareError> {
-        match value.status {
-            MetricStatus::Reported => match value.value {
+        self.status(metric, value.status, value.value)
+    }
+
+    /// Read one status-bearing value, apart from the shape the artifact
+    /// published it in.
+    fn status(
+        &self,
+        metric: &str,
+        status: MetricStatus,
+        value: Option<f64>,
+    ) -> Result<PairReading, CompareError> {
+        match status {
+            MetricStatus::Reported => match value {
                 Some(value) => Ok(PairReading::Reported(value)),
                 None => Err(CompareError::ReportedWithoutValue {
                     path: self.path.to_path_buf(),
@@ -1053,6 +1121,20 @@ impl SeedSide<'_> {
             MetricStatus::NotApplicable => Ok(PairReading::NotApplicable),
             MetricStatus::NotObserved => Ok(PairReading::NotObserved),
         }
+    }
+}
+
+/// One side's reading of one artifact value, whatever shape it carries.
+fn pair_reading(
+    side: SeedSide<'_>,
+    metric: &str,
+    reading: Reading<'_>,
+) -> Result<PairReading, CompareError> {
+    match reading {
+        Reading::Value(value) => side.reading(metric, value),
+        Reading::Minimum(minimum) => side.status(metric, minimum.status, minimum.value),
+        // An always-reported count is a value: zero events is an observation.
+        Reading::Count(count) => Ok(PairReading::Reported(count as f64)),
     }
 }
 
@@ -1102,6 +1184,29 @@ struct SeedReadings {
     movements: BTreeMap<String, Movements>,
     /// The agent movement slices, keyed by one movement key.
     agent_movements: BTreeMap<String, SliceReadings>,
+    /// The close-pass mode-pair buckets, keyed by `ModePair` label.
+    close_pass_mode_pairs: BTreeMap<String, SliceReadings>,
+    /// The close-pass movement buckets, keyed by the pairwise movement key.
+    close_pass_movements: BTreeMap<String, SliceReadings>,
+    /// The close-pass facility buckets, keyed by `facility:<name>`.
+    close_pass_facilities: BTreeMap<String, SliceReadings>,
+}
+
+/// One side's close-pass buckets of one dimension, each with the families the
+/// bucket reports and their units.
+fn close_pass_slice_readings(
+    side: SeedSide<'_>,
+    values: &BTreeMap<String, ClosePassValues>,
+) -> Result<BTreeMap<String, SliceReadings>, CompareError> {
+    let mut slices = BTreeMap::new();
+    for (bucket, values) in values {
+        let mut readings: BTreeMap<String, (&'static str, PairReading)> = BTreeMap::new();
+        for (key, unit, reading) in close_pass_readings(values) {
+            readings.insert(key.clone(), (unit, pair_reading(side, &key, reading)?));
+        }
+        slices.insert(bucket.clone(), SliceReadings::of(readings));
+    }
+    Ok(slices)
 }
 
 /// Read one artifact's metrics into the comparison's reading shape.
@@ -1111,12 +1216,7 @@ fn read_readings(
 ) -> Result<SeedReadings, CompareError> {
     let mut metrics = BTreeMap::new();
     for (key, unit, reading) in run_level_readings(artifact) {
-        let reading = match reading {
-            Reading::Value(value) => side.reading(&key, value)?,
-            // An always-reported count is a value: zero events is an observation.
-            Reading::Count(count) => PairReading::Reported(count as f64),
-        };
-        metrics.insert(key, (unit, reading));
+        metrics.insert(key.clone(), (unit, pair_reading(side, &key, reading)?));
     }
 
     let mut mode_pairs = BTreeMap::new();
@@ -1180,7 +1280,45 @@ fn read_readings(
         mode_events,
         movements,
         agent_movements,
+        close_pass_mode_pairs: close_pass_slice_readings(side, &artifact.close_pass.by_mode_pair)?,
+        close_pass_movements: close_pass_slice_readings(side, &artifact.close_pass.by_movement)?,
+        close_pass_facilities: close_pass_slice_readings(side, &artifact.close_pass.by_facility)?,
     })
+}
+
+/// Pair every close-pass bucket of one dimension for one seed.
+///
+/// The buckets are a slice like any other: a bucket one side does not carry at
+/// this seed is no observation on that side, and the bucket's family set is the
+/// one the side that carries it reports.
+fn pair_close_pass_buckets(
+    accumulators: &mut BTreeMap<String, SlicePairing>,
+    seed: u64,
+    a: &BTreeMap<String, SliceReadings>,
+    b: &BTreeMap<String, SliceReadings>,
+    a_manifest: &str,
+    b_manifest: &str,
+) {
+    let buckets: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    for bucket in buckets {
+        let a_slice = a.get(bucket);
+        let b_slice = b.get(bucket);
+        let source = a_slice
+            .or(b_slice)
+            .expect("a close-pass bucket belongs to at least one side");
+        let pairing = accumulators
+            .entry(bucket.clone())
+            .or_insert_with(|| SlicePairing::of(source));
+        pair_slice_metrics(
+            &mut pairing.metrics,
+            &pairing.units,
+            seed,
+            a_slice,
+            b_slice,
+            a_manifest,
+            b_manifest,
+        );
+    }
 }
 
 /// Fix the comparison's metric set on the first run read and refuse any run that

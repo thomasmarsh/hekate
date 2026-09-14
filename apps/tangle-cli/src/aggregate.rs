@@ -37,6 +37,18 @@
 //!   key of the agent that produced the record, not a pair of keys — and holds
 //!   that movement's operational values plus its counted event families.
 //!
+//! The close-pass families of metric definition v3 have cells of their own, so
+//! no existing cell widens: the run bucket is a whole-batch metric under
+//! `close_pass.run.<family>`, and
+//! [`Aggregation::close_pass_mode_pair_slices`],
+//! [`Aggregation::close_pass_movement_slices`], and
+//! [`Aggregation::close_pass_facility_slices`] hold the same families for the
+//! mode-pair, movement, and facility dimensions metric definition v3
+//! disaggregates them by. Each cell reports the bucket's own unit and its
+//! explicit applicability: a countable family is the observed `0` of a bucket
+//! that recorded none, and a value family keeps `not_applicable` (the bucket
+//! cannot host a pass) distinct from `not_observed` (it could and did not).
+//!
 //! The operational families per mode are already whole-batch metrics
 //! (`operational.by_mode.<mode>.<metric>`), so the mode slice carries exactly
 //! what the whole-batch map cannot: the event counts. The operational movement
@@ -116,8 +128,8 @@ use serde::{Deserialize, Serialize};
 use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest};
 use crate::run_dir::MANIFEST_FILE;
 use crate::run_metrics::{
-    EVENT_FAMILY_LABELS, EventCounts, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
-    MetricValue, MovementMinima, OperationalValues, RunMetricsArtifact,
+    ClosePassMinimum, ClosePassValues, EVENT_FAMILY_LABELS, EventCounts, METRIC_DEFINITION_VERSION,
+    METRICS_FILE, MetricStatus, MetricValue, MovementMinima, OperationalValues, RunMetricsArtifact,
 };
 use crate::trace::sha256_hex;
 
@@ -192,8 +204,21 @@ pub(crate) const METRES: &str = "metres";
 /// The countable event families' unit, as metric definition v2 fixes it.
 pub(crate) const RECORDS: &str = "records";
 
+/// The unit of a close-pass count, as metric definition v3 fixes it: the
+/// countable close-pass families count closed observations.
+pub(crate) const OBSERVATIONS: &str = "observations";
+
 /// The metric-key prefix a slice's counted event family carries.
 pub(crate) const EVENT_COUNT_PREFIX: &str = "event_counts.";
+
+/// The metric-key prefix the run-level close-pass families carry: the artifact
+/// block they are read from, exactly as an operational run metric is keyed
+/// `operational.run.<name>`.
+pub(crate) const CLOSE_PASS_RUN_PREFIX: &str = "close_pass.run.";
+
+/// The metric-key prefix one declared clearance band's duration series carries
+/// inside its bucket, keyed by the band's stable `ClearanceBandId`.
+pub(crate) const CLEARANCE_BAND_PREFIX: &str = "clearance_band_durations_s.";
 
 /// The unit of a throughput metric, as metric definition v2 fixes it.
 const AGENTS_PER_SECOND: &str = "agents_per_second";
@@ -525,6 +550,16 @@ pub struct Aggregation {
     /// operational metrics of one agent's own movement plus
     /// `event_counts.<family>` for every counted family.
     pub agent_movement_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The close-pass mode-pair slices, keyed by `ModePair` label, each holding
+    /// the overtaking and close-pass families of metric definition v3 for that
+    /// pair.
+    pub close_pass_mode_pair_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The close-pass movement slices, keyed by the artifact's own pairwise
+    /// movement key, each holding the same families for that bucket.
+    pub close_pass_movement_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The close-pass facility slices, keyed by `facility:<name>`, each holding
+    /// the same families for that facility.
+    pub close_pass_facility_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
 }
 
 /// Aggregate a completed batch: read its manifest and every seed's metrics, and
@@ -668,6 +703,10 @@ pub(crate) fn sample_variance(values: &[f64], mean: Option<f64>) -> Option<f64> 
 pub(crate) enum Reading<'a> {
     /// A metric value with its reporting status.
     Value(&'a MetricValue),
+    /// A status-bearing close-pass value that is not a [`MetricValue`]: the
+    /// bucket's least clearance carries its pair, its time, and its relative
+    /// speed beside the status rather than a tick.
+    Minimum(&'a ClosePassMinimum),
     /// An always-reported count.
     Count(u64),
 }
@@ -676,14 +715,16 @@ pub(crate) enum Reading<'a> {
 /// definition v2 fixes for it.
 ///
 /// The metric set is the artifact's own: the three interaction minima, the
-/// total, every counted event family, every counted variant kind, and the
+/// total, every counted event family, every counted variant kind, the
 /// operational families of metric definition v2 — throughput, delay, and queues
-/// — over the run and per mode. The operational movement level is deliberately
-/// not read here: a movement bucket is sparse across seeds, and the aggregation
-/// counts a whole-batch metric that a seed does not report at all as a broken
-/// comparison rather than as an unobserved slice. That level is carried by
+/// — over the run and per mode, and the close-pass families of metric definition
+/// v3 over the run. The operational movement level is deliberately not read
+/// here: a movement bucket is sparse across seeds, and the aggregation counts a
+/// whole-batch metric that a seed does not report at all as a broken comparison
+/// rather than as an unobserved slice. That level is carried by
 /// [`Aggregation::agent_movement_slices`] instead, and the event families per
-/// mode by [`Aggregation::mode_event_slices`].
+/// mode by [`Aggregation::mode_event_slices`]; the close-pass dimensions that
+/// are sparse the same way are carried by the three close-pass slice maps.
 pub(crate) fn run_level_readings(
     artifact: &RunMetricsArtifact,
 ) -> Vec<(String, &'static str, Reading<'_>)> {
@@ -724,6 +765,12 @@ pub(crate) fn run_level_readings(
                 Reading::Count(*count),
             ));
         }
+    }
+    // The run-level close-pass families, under the artifact block they are read
+    // from; a family the run recorded nothing for is the observed `0` v3 fixes,
+    // and the value families keep the run bucket's applicability.
+    for (name, unit, reading) in close_pass_readings(&artifact.close_pass.run) {
+        readings.push((format!("{CLOSE_PASS_RUN_PREFIX}{name}"), unit, reading));
     }
     for (name, unit, value) in operational_readings(&artifact.operational.run) {
         readings.push((
@@ -792,6 +839,67 @@ pub(crate) fn operational_readings(
             &values.mean_queue_duration_s,
         ),
     ]
+}
+
+/// The overtaking and close-pass families one bucket reports, each with its unit
+/// and the reading a consumer aggregates.
+///
+/// The four overtaking counts and two of the close-pass families are countable,
+/// so a bucket that recorded none reports the observed `0` metric definition v3
+/// fixes rather than an absent value; the least clearance and each declared
+/// band's duration series carry the bucket's explicit applicability.
+///
+/// The family names are the artifact's own field names, and a band's key is its
+/// stable `ClearanceBandId` under [`CLEARANCE_BAND_PREFIX`], so a band is never
+/// merged with another.
+pub(crate) fn close_pass_readings(
+    values: &ClosePassValues,
+) -> Vec<(String, &'static str, Reading<'_>)> {
+    let mut readings = vec![
+        (
+            "overtake_attempts".to_owned(),
+            RECORDS,
+            Reading::Value(&values.overtake_attempts),
+        ),
+        (
+            "overtake_commits".to_owned(),
+            RECORDS,
+            Reading::Value(&values.overtake_commits),
+        ),
+        (
+            "overtake_completions".to_owned(),
+            RECORDS,
+            Reading::Value(&values.overtake_completions),
+        ),
+        (
+            "overtake_aborts".to_owned(),
+            RECORDS,
+            Reading::Value(&values.overtake_aborts),
+        ),
+        (
+            "close_passes".to_owned(),
+            OBSERVATIONS,
+            Reading::Value(&values.close_passes),
+        ),
+        (
+            "close_pass_minimum_clearance_m".to_owned(),
+            METRES,
+            Reading::Minimum(&values.close_pass_minimum_clearance_m),
+        ),
+        (
+            "close_pass_violations".to_owned(),
+            OBSERVATIONS,
+            Reading::Value(&values.close_pass_violations),
+        ),
+    ];
+    for (band, duration) in &values.clearance_band_durations_s {
+        readings.push((
+            format!("{CLEARANCE_BAND_PREFIX}{band}"),
+            SECONDS,
+            Reading::Value(duration),
+        ));
+    }
+    readings
 }
 
 /// The three metrics one movement bucket reports, each with its unit.
@@ -892,6 +1000,27 @@ impl Accumulator {
         }
     }
 
+    /// Record one seed's reading, whatever shape the artifact published it in.
+    fn record(
+        &mut self,
+        seed: u64,
+        manifest: &str,
+        metric: &str,
+        reading: Reading<'_>,
+        path: &Path,
+    ) -> Result<(), AggregateError> {
+        match reading {
+            Reading::Value(value) => self.reading(seed, manifest, metric, value, path),
+            Reading::Minimum(minimum) => {
+                self.status(seed, manifest, metric, minimum.status, minimum.value, path)
+            }
+            Reading::Count(count) => {
+                self.count(seed, manifest, count);
+                Ok(())
+            }
+        }
+    }
+
     /// Record one seed's reading of a status-bearing metric value.
     fn reading(
         &mut self,
@@ -901,8 +1030,26 @@ impl Accumulator {
         value: &MetricValue,
         path: &Path,
     ) -> Result<(), AggregateError> {
-        match value.status {
-            MetricStatus::Reported => match value.value {
+        self.status(seed, manifest, metric, value.status, value.value, path)
+    }
+
+    /// Record one seed's reading of a status-bearing value, apart from the shape
+    /// the artifact published it in.
+    ///
+    /// A value reported without one is refused: a metric that claims a value and
+    /// carries none is a broken artifact, and reading it as an absence would
+    /// turn a writer defect into a statistic.
+    fn status(
+        &mut self,
+        seed: u64,
+        manifest: &str,
+        metric: &str,
+        status: MetricStatus,
+        value: Option<f64>,
+        path: &Path,
+    ) -> Result<(), AggregateError> {
+        match status {
+            MetricStatus::Reported => match value {
                 Some(value) => {
                     self.reported.push((seed, value, manifest.to_owned()));
                     Ok(())
@@ -1012,6 +1159,32 @@ struct Accumulation {
     movements: BTreeMap<String, MovementAccumulation>,
     /// The agent movement slices, keyed by one movement key.
     agent_movements: BTreeMap<String, SliceAccumulation>,
+    /// The close-pass mode-pair slices, keyed by `ModePair` label.
+    close_pass_mode_pairs: BTreeMap<String, SliceAccumulation>,
+    /// The close-pass pair movement slices, keyed by the artifact's own pairwise
+    /// movement key.
+    close_pass_movements: BTreeMap<String, SliceAccumulation>,
+    /// The close-pass facility slices, keyed by `facility:<name>`.
+    close_pass_facilities: BTreeMap<String, SliceAccumulation>,
+}
+
+/// Read one close-pass bucket into its slice's accumulators.
+fn accumulate_close_pass_slice(
+    slices: &mut BTreeMap<String, SliceAccumulation>,
+    bucket: &str,
+    values: &ClosePassValues,
+    seed: u64,
+    manifest: &str,
+    path: &Path,
+) -> Result<(), AggregateError> {
+    let slice = slices.entry(bucket.to_owned()).or_default();
+    for (key, unit, reading) in close_pass_readings(values) {
+        slice
+            .entry(key.clone())
+            .or_insert_with(|| Accumulator::new(unit))
+            .record(seed, manifest, &key, reading, path)?;
+    }
+    Ok(())
 }
 
 impl Accumulation {
@@ -1024,14 +1197,10 @@ impl Accumulation {
         path: &Path,
     ) -> Result<(), AggregateError> {
         for (key, unit, reading) in run_level_readings(artifact) {
-            let accumulator = self
-                .metrics
+            self.metrics
                 .entry(key.clone())
-                .or_insert_with(|| Accumulator::new(unit));
-            match reading {
-                Reading::Value(value) => accumulator.reading(seed, manifest, &key, value, path)?,
-                Reading::Count(count) => accumulator.count(seed, manifest, count),
-            }
+                .or_insert_with(|| Accumulator::new(unit))
+                .record(seed, manifest, &key, reading, path)?;
         }
 
         for (label, value) in &artifact.mode_pair_minimum_separation_m {
@@ -1070,6 +1239,42 @@ impl Accumulation {
                     .or_insert_with(|| Accumulator::new(unit));
                 accumulator.reading(seed, manifest, name, value, path)?;
             }
+        }
+
+        // The close-pass families: over the run, per mode pair, per pairwise
+        // movement bucket, and per facility. The run bucket, the three mode
+        // pairs, and every compiled facility exist in each artifact with their
+        // explicit applicability, and a movement bucket exists once a run
+        // attributes a counted record to it, so that dimension is sparse.
+        for (label, values) in &artifact.close_pass.by_mode_pair {
+            accumulate_close_pass_slice(
+                &mut self.close_pass_mode_pairs,
+                label,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
+        }
+        for (bucket, values) in &artifact.close_pass.by_movement {
+            accumulate_close_pass_slice(
+                &mut self.close_pass_movements,
+                bucket,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
+        }
+        for (bucket, values) in &artifact.close_pass.by_facility {
+            accumulate_close_pass_slice(
+                &mut self.close_pass_facilities,
+                bucket,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
         }
 
         // One agent movement's own slice: its operational values and its counted
@@ -1172,6 +1377,9 @@ impl Accumulation {
             mode_event_slices,
             movement_slices,
             agent_movement_slices: finish_slices(self.agent_movements, seeds),
+            close_pass_mode_pair_slices: finish_slices(self.close_pass_mode_pairs, seeds),
+            close_pass_movement_slices: finish_slices(self.close_pass_movements, seeds),
+            close_pass_facility_slices: finish_slices(self.close_pass_facilities, seeds),
         })
     }
 }
