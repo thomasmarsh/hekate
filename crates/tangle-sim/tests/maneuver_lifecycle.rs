@@ -200,6 +200,7 @@ fn a_requested_maneuver_prepares_then_commits_with_one_record_per_edge() {
             LateralManeuverRequest {
                 target_offset_m: TARGET_OFFSET_M,
                 passed_body: passed,
+                target_facility: None,
             },
         ),
         "a rider with route state and a compiled policy can request a maneuver"
@@ -263,6 +264,7 @@ fn the_same_claimant_wins_whichever_order_the_requests_arrive_in() {
                 LateralManeuverRequest {
                     target_offset_m: TARGET_OFFSET_M,
                     passed_body: passed,
+                    target_facility: None,
                 },
             ));
         }
@@ -310,6 +312,7 @@ fn an_aborted_claimant_returns_to_following_at_its_own_offset() {
             LateralManeuverRequest {
                 target_offset_m: TARGET_OFFSET_M,
                 passed_body: passed,
+                target_facility: None,
             },
         ));
     }
@@ -359,6 +362,7 @@ fn a_version_one_run_refuses_a_maneuver_request_and_records_nothing() {
             LateralManeuverRequest {
                 target_offset_m: TARGET_OFFSET_M,
                 passed_body: AgentId::from_index(1),
+                target_facility: None,
             },
         ),
         "a legacy path follower has no route state to maneuver with"
@@ -385,6 +389,7 @@ fn the_request_seam_refuses_an_unusable_target() {
             LateralManeuverRequest {
                 target_offset_m: TARGET_OFFSET_M,
                 passed_body: rider,
+                target_facility: None,
             },
         ),
         "an agent cannot pass itself"
@@ -395,6 +400,7 @@ fn the_request_seam_refuses_an_unusable_target() {
             LateralManeuverRequest {
                 target_offset_m: TARGET_OFFSET_M,
                 passed_body: riders[1],
+                target_facility: None,
             },
         ),
         "a slot that is not a live agent has no route state to maneuver with"

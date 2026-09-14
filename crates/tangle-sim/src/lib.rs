@@ -89,13 +89,13 @@ pub use query::{
 };
 pub use safety::{NEAR_MISS_THRESHOLD_M, QUEUE_STOP_SPEED_MPS};
 pub use signal::PedestrianSignalColor;
-pub use sim::{InitError, RunSummary, Simulation, StepOutput};
+pub use sim::{CONNECTOR_CONTINUITY_TOLERANCE_M, InitError, RunSummary, Simulation, StepOutput};
 pub use snapshot::{
     AgentSample, BodySegmentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail,
 };
 pub use stage::{
-    LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge, ManeuverReason, ManeuverState,
-    ManeuverTransition, PassSide, SETTLE_TOLERANCE_M,
+    FacilityTransitionRecord, LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge,
+    ManeuverReason, ManeuverState, ManeuverTransition, PassSide, SETTLE_TOLERANCE_M, TransitionKind,
 };
 pub use steering::{
     BoundedSteering, LATERAL_APPROACH_S, LateralCorridor, MIN_SPEED_FOR_LATERAL_BOUND_MPS,

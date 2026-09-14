@@ -37,10 +37,11 @@
 
 use glam::DVec2;
 use tangle_model::{
-    AgentFamily, CommitPolicySource, CompiledMovement, CompiledPath, CompiledPedestrianRoute,
-    CompiledReferencePath, CompiledScenario, CrossingId, DemandId, ModeTemplateId, MovementId,
-    PassingSide, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PermissionEffect,
-    PortalId, RuleKind, SignalColor, SignalId, TacticalCapability,
+    AdjacencySide, AgentFamily, CommitPolicySource, CompiledMovement, CompiledPath,
+    CompiledPedestrianRoute, CompiledReferencePath, CompiledScenario, CrossingId, DemandId,
+    FacilityId, LateralTransition, ModeTemplateId, MovementDirection, MovementId, PassingSide,
+    PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PermissionEffect, PortalId, RuleKind,
+    SignalColor, SignalId, TacticalCapability, TraversalTransitions,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
@@ -72,11 +73,11 @@ use crate::safety::SafetyMonitor;
 use crate::signal::{self, PedestrianSignalColor, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail};
 use crate::stage::{
-    AbortCondition, CorridorClaim, LateralManeuverRequest, ManeuverAbortReason, ManeuverCorridor,
-    ManeuverEdge, ManeuverReason, ManeuverState, ManeuverTransition, MotionCommand, MotionControl,
-    Observation, PassSide, PedestrianObservation, PhysicalAdvance, RelevantWorldQuery,
-    SETTLE_TOLERANCE_M, Tactic, TacticReason, TacticTarget, TacticalChoice, VehicleObservation,
-    arbitrate_claims,
+    AbortCondition, CorridorClaim, FacilityTransitionRecord, LateralManeuverRequest,
+    ManeuverAbortReason, ManeuverCorridor, ManeuverEdge, ManeuverReason, ManeuverState,
+    ManeuverTransition, MotionCommand, MotionControl, Observation, PassSide, PedestrianObservation,
+    PhysicalAdvance, RelevantWorldQuery, SETTLE_TOLERANCE_M, Tactic, TacticReason, TacticTarget,
+    TacticalChoice, TransitionKind, VehicleObservation, arbitrate_claims,
 };
 use crate::steering::{
     BoundedSteering, CORRIDOR_TOLERANCE_M, LateralCorridor, SteeringLimits, SteeringRequest,
@@ -110,6 +111,19 @@ const MIN_CROSSING_QUERY_MARGIN_M: f64 = 0.5;
 /// positive margin also keeps the front-bumper gap strictly positive at rest,
 /// so a stopped vehicle keeps yielding instead of creeping across the entry.
 const YIELD_STOP_MARGIN_M: f64 = 0.5;
+
+/// Tolerance in metres within which a body centre counts as having reached the
+/// compiled connector coincidence.
+///
+/// `docs/schema-v2-contract.md` *Transition targets and the geometric handoff*
+/// fixes the connector handoff at the compiled connector coincidence within
+/// `CONNECTOR_CONTINUITY_TOLERANCE_M`, and `tangle_model`'s compiler validates
+/// that a connector's leaving end and entering end coincide within `1e-6 m`.
+/// The kernel reads the same tolerance, so a body that reaches or passes the
+/// leaving end within it hands off rather than despawns: a fixed step can carry
+/// a body past the exact coincidence by `v * dt`, so the predicate is
+/// "reached", not "exactly equal".
+pub const CONNECTOR_CONTINUITY_TOLERANCE_M: f64 = 1e-6;
 
 /// Failure to build a [`Simulation`] from a compiled scenario and run config.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -145,6 +159,7 @@ pub struct StepOutput<'a> {
     time: SimTime,
     events: &'a [Event],
     transitions: &'a [ManeuverTransition],
+    facility_transitions: &'a [FacilityTransitionRecord],
 }
 
 impl StepOutput<'_> {
@@ -166,6 +181,16 @@ impl StepOutput<'_> {
     /// one public event per transition; no event is emitted here.
     pub fn transitions(&self) -> &[ManeuverTransition] {
         self.transitions
+    }
+
+    /// The facility handoffs the step performed, in ascending agent id order.
+    ///
+    /// Each record is the contract's `FacilityTransition` fact, produced once
+    /// at the handoff step; `permitted: false` is the forbidden-boundary fact.
+    /// A later increment emits one public event per record; no event is emitted
+    /// here.
+    pub fn facility_transitions(&self) -> &[FacilityTransitionRecord] {
+        self.facility_transitions
     }
 
     /// Whether the step emitted no events.
@@ -274,6 +299,11 @@ pub struct Simulation {
     /// exposed on [`StepOutput`] for the later event surface to emit; no public
     /// event is produced here.
     transitions: Vec<ManeuverTransition>,
+    /// The facility handoffs this step performed, in ascending agent id order.
+    /// Cleared at the start of every tick, like [`Self::transitions`], and
+    /// exposed on [`StepOutput`] for the later event surface to emit; no public
+    /// event is produced here.
+    facility_transitions: Vec<FacilityTransitionRecord>,
     population_announced: bool,
     spawned_total: u64,
     despawned_total: u64,
@@ -415,6 +445,7 @@ impl Simulation {
             candidates: Vec::new(),
             events: Vec::new(),
             transitions: Vec::new(),
+            facility_transitions: Vec::new(),
             population_announced: false,
             spawned_total,
             despawned_total: 0,
@@ -439,6 +470,7 @@ impl Simulation {
             time: self.time(),
             events: &self.events,
             transitions: &self.transitions,
+            facility_transitions: &self.facility_transitions,
         }
     }
 
@@ -790,6 +822,9 @@ impl Simulation {
     fn advance_one_tick(&mut self) {
         self.tick += 1;
         let dt = self.config.step().as_secs();
+        // Facility handoffs are the step's own facts, produced during physical
+        // advance; like the maneuver transitions they are recomputed each tick.
+        self.facility_transitions.clear();
 
         // Fixed-time phases advance with the authoritative clock, so the color
         // governing this interval is a function of simulation time only.
@@ -996,6 +1031,7 @@ impl Simulation {
                     state: RouteState {
                         maneuver: ManeuverState::Preparing,
                         target_offset_m: Some(request.target_offset_m),
+                        target_facility: request.target_facility,
                         passed_body: Some(request.passed_body),
                         corridor: Some(corridor),
                         predicted_min_clearance_m: Some(predicted_clearance_m),
@@ -1020,6 +1056,19 @@ impl Simulation {
                     index,
                     state: RouteState {
                         intent: None,
+                        ..state
+                    },
+                    transition: None,
+                }),
+                // The cross-facility crossing is forbidden by the destination's
+                // own policy: the intent is discarded and the inspectable reason
+                // is recorded, exactly as the contract's "prevented when
+                // avoidable" clause requires.
+                Attempt::BoundaryForbidden => plans.push(ManeuverPlan {
+                    index,
+                    state: RouteState {
+                        intent: None,
+                        maneuver_reason: Some(ManeuverReason::BoundaryForbidden),
                         ..state
                     },
                     transition: None,
@@ -1336,6 +1385,10 @@ impl Simulation {
                     Some(LateralManeuverRequest {
                         target_offset_m,
                         passed_body,
+                        // The kernel's own tactic selects a within-facility pass
+                        // or overtake; a cross-facility change of lane is a
+                        // tactical leaf's request.
+                        target_facility: None,
                     }),
                 ),
                 ManeuverDecision::Rejected(reason) => (reason, None),
@@ -1646,6 +1699,14 @@ impl Simulation {
         if passed >= self.agents.len() || !self.agents.alive[passed] {
             return Attempt::TargetLost;
         }
+        // A request that names a destination facility is a cross-facility change
+        // of lane; it crosses the compiled adjacency's shared boundary rather
+        // than displacing within one band.
+        if let Some(target_facility) = request.target_facility
+            && target_facility != state.facility
+        {
+            return self.attempt_facility_transition(index, state, request, target_facility);
+        }
         let Some(prediction) = self.predict_maneuver(index, request.target_offset_m, batch) else {
             return Attempt::Infeasible;
         };
@@ -1692,6 +1753,102 @@ impl Simulation {
         }
     }
 
+    /// Fix a cross-facility change of lane's target and candidate corridor, or
+    /// report why it is not admissible this step.
+    ///
+    /// The compiled adjacency names the destination traversal and the crossing
+    /// side, and the destination traversal's own policy answers whether the
+    /// continuation direction is permitted — a destination it does not permit is
+    /// the contract's preventable forbidden-boundary crossing. The crossing bound
+    /// is a runtime input: `CompiledFacilityAdjacency` carries no band separation
+    /// or offset (the gap TAS-090 recorded), so the outbound motion is bounded at
+    /// the shared boundary and the destination target is validated against the
+    /// destination facility's own usable interval. The world pose stays the truth
+    /// at the handoff, where progress is the projection of the unchanged pose
+    /// onto the destination reference.
+    fn attempt_facility_transition(
+        &self,
+        index: usize,
+        state: &RouteState,
+        request: &LateralManeuverRequest,
+        target_facility: FacilityId,
+    ) -> Attempt {
+        let direction = self.agents.direction[index];
+        let Some(transition) = lateral_transition(
+            self.scenario
+                .transitions(state.facility, movement_direction(direction)),
+            target_facility,
+        ) else {
+            // No compiled adjacency joins the current band to the target, so
+            // there is no crossing to attempt.
+            return Attempt::Infeasible;
+        };
+        let destination_traversal = transition.target();
+        if !self.traversal_permits(
+            state.mode_template,
+            destination_traversal.facility(),
+            destination_traversal.direction(),
+            None,
+        ) {
+            return Attempt::BoundaryForbidden;
+        }
+        let Some(source) = self.scenario.facility(state.facility) else {
+            return Attempt::Infeasible;
+        };
+        let Some(destination) = self.scenario.facility(destination_traversal.facility()) else {
+            return Attempt::Infeasible;
+        };
+        let Some(target_clearance_m) = state.target_clearance_m else {
+            return Attempt::Infeasible;
+        };
+        let Some(geometry) = self.route_geometry(index) else {
+            return Attempt::Infeasible;
+        };
+        let envelope = self.agents.body_width_m[index];
+        // The destination target must lie inside the destination band's own
+        // usable interval; a band that cannot hold it offers no corridor.
+        let interval = destination.usable_lateral_interval(envelope, target_clearance_m);
+        if interval.d_max() < 0.0
+            || request.target_offset_m < interval.d_min() - CORRIDOR_TOLERANCE_M
+            || request.target_offset_m > interval.d_max() + CORRIDOR_TOLERANCE_M
+        {
+            return Attempt::Infeasible;
+        }
+        let side = travel_pass_side(transition.side());
+        // The claimed corridor spans the passed obstacle's footprint and the
+        // source band's usable interval extended to just past the shared
+        // boundary on the crossing side, in the facility's own frame.
+        let passed = request.passed_body.index();
+        let passed_s_m = geometry.project(self.agents.position[passed]).s();
+        let half_self_m = self.agents.body_length_m[index] * 0.5;
+        let half_passed_m = self.agents.body_length_m[passed] * 0.5;
+        let crossing_bound =
+            side.sign() * direction * (source.width_m() * 0.5 + target_clearance_m);
+        let source_interval = source.usable_lateral_interval(envelope, target_clearance_m);
+        let mut d_min_m = source_interval.d_min();
+        let mut d_max_m = source_interval.d_max();
+        if crossing_bound > 0.0 {
+            d_max_m = d_max_m.max(crossing_bound);
+        } else {
+            d_min_m = d_min_m.min(crossing_bound);
+        }
+        // The predicted clearance is the destination band edge's clearance at
+        // the destination target, a geometric fact of the destination band the
+        // compiler does expose (unlike the cross-band offset).
+        let predicted_clearance_m =
+            destination.width_m() * 0.5 - request.target_offset_m.abs() - envelope * 0.5;
+        Attempt::Admissible {
+            corridor: ManeuverCorridor {
+                facility: state.facility,
+                s_min_m: passed_s_m - half_passed_m - half_self_m - target_clearance_m,
+                s_max_m: passed_s_m + half_passed_m + half_self_m + target_clearance_m,
+                d_min_m,
+                d_max_m,
+            },
+            predicted_clearance_m,
+        }
+    }
+
     /// The planned update for one committed agent: the completion edge when the
     /// passed obstacle is cleared, the documented brake/hold/abort response when
     /// predicted clearance is lost, or no change at all.
@@ -1716,6 +1873,44 @@ impl Simulation {
                 batch.now,
             );
         };
+        // A cross-facility outbound leg has no within-facility prediction to
+        // read: the destination band's offset from the source is not compiled
+        // (the TAS-090 gap), so the commitment-loss response is limited to the
+        // completion edge while the crossing is in flight. The handoff itself
+        // carries the crossing, and once the agent owns the destination the
+        // ordinary predictor decides every later hazard again.
+        if state.entering_facility
+            || state
+                .target_facility
+                .is_some_and(|target| target != state.facility)
+        {
+            if self.passed_body_cleared(index, passed, target_clearance_m) {
+                return ManeuverPlan {
+                    index,
+                    state: RouteState {
+                        maneuver: ManeuverState::Returning,
+                        state_since: Some(batch.now),
+                        braking: false,
+                        hold_since: None,
+                        settled_since: None,
+                        ..state
+                    },
+                    transition: Some(ManeuverTransition {
+                        agent: AgentId::from_index(index),
+                        from: ManeuverState::Committed,
+                        to: ManeuverState::Returning,
+                        edge: ManeuverEdge::Completed,
+                        reason: None,
+                        time: batch.now,
+                    }),
+                };
+            }
+            return ManeuverPlan {
+                index,
+                state,
+                transition: None,
+            };
+        }
         let Some(prediction) = self.predict_maneuver(index, target_offset_m, batch) else {
             return self.abort_plan(
                 index,
@@ -2731,22 +2926,298 @@ impl Simulation {
             .map(|reference| reference.geometry())
     }
 
+    /// Whether `mode` may travel `direction` on `facility`, which is the legal
+    /// question behind [`FacilityTransitionRecord::permitted`]: a destination
+    /// traversal the applicable rule does not permit is the contract's forbidden
+    /// boundary crossing.
+    fn traversal_permits(
+        &self,
+        mode: ModeTemplateId,
+        facility: FacilityId,
+        direction: MovementDirection,
+        movement: Option<MovementId>,
+    ) -> bool {
+        self.scenario
+            .traversal_policy(mode, facility, movement)
+            .is_some_and(|policy| policy.permits(direction))
+    }
+
+    /// The contract's connector handoff, performed when the agent has reached
+    /// the leaving end of its traversal.
+    ///
+    /// The transition target is the connector that leaves the agent's current
+    /// `(facility, direction)` traversal at its coincidence
+    /// ([`CONNECTOR_CONTINUITY_TOLERANCE_M`]); when several leave, the first in
+    /// authored order is taken, which is the compiled order the contract keeps.
+    /// The handoff updates route and facility ownership in one step while the
+    /// world pose is unchanged: no despawn, no re-spawn, and no snap to the
+    /// destination reference, because the destination progress is the projection
+    /// of that same pose onto the destination reference. Returns `false` when the
+    /// agent carries no route state, no connector continues its traversal, or the
+    /// destination offers no reference, so the ordinary path exit still applies.
+    fn handoff_connector(&mut self, index: usize) -> bool {
+        let Some(state) = self.agents.route_state[index] else {
+            return false;
+        };
+        let from_direction = movement_direction(self.agents.direction[index]);
+        let Some(connector) = self
+            .scenario
+            .transitions(state.facility, from_direction)
+            .and_then(|transitions| transitions.longitudinal().first().copied())
+            .and_then(|id| self.scenario.facility_connector(id))
+        else {
+            return false;
+        };
+        let to = connector.to();
+        if to.facility() == state.facility {
+            return false;
+        }
+        let Some(destination) = self.scenario.facility(to.facility()) else {
+            return false;
+        };
+        let Some(reference) = destination.reference() else {
+            return false;
+        };
+        let Some(path) = destination.reference_path() else {
+            return false;
+        };
+        let to_direction = to.direction();
+        let travel_sign = travel_sign(to_direction);
+        let position = self.agents.position[index];
+        let coordinate = reference.geometry().project(position);
+        let permitted =
+            self.traversal_permits(state.mode_template, to.facility(), to_direction, None);
+        let side = connector_crossing_side(
+            travel_heading(self.agents.direction[index], self.agents.heading_rad[index]),
+            travel_heading(travel_sign, reference.geometry().heading_at(coordinate.s())),
+        );
+
+        self.agents.path[index] = path;
+        self.agents.distance_m[index] = coordinate.s();
+        self.agents.direction[index] = travel_sign;
+        self.agents.heading_rad[index] = reference.geometry().heading_at(coordinate.s());
+        // The route was a movement on the source path; the destination is a
+        // facility traversal, so the movement route is left behind rather than
+        // carried onto a path it does not describe.
+        self.agents.movement[index] = None;
+        let mut next = state;
+        next.facility = to.facility();
+        next.s_m = coordinate.s();
+        next.d_m = coordinate.d() * travel_sign;
+        self.agents.route_state[index] = Some(next);
+
+        self.facility_transitions.push(FacilityTransitionRecord {
+            agent: AgentId::from_index(index),
+            from_facility: state.facility,
+            to_facility: to.facility(),
+            from_direction,
+            to_direction,
+            via: TransitionKind::Connector,
+            side,
+            s_m: state.s_m,
+            d_m: state.d_m,
+            permitted,
+        });
+        true
+    }
+
+    /// Perform the contract's lateral handoff when a committed cross-facility
+    /// change of lane's body centre has crossed the shared boundary between the
+    /// two bands.
+    ///
+    /// The compiled adjacency names the destination traversal and the crossing
+    /// side; the side is in the agent's own travel frame, so the crossing is the
+    /// body centre reaching the source band's half-width on that side. The
+    /// handoff moves route and facility ownership in one step while the world
+    /// pose is unchanged — the destination progress is the projection of that
+    /// same pose onto the destination reference, so there is no despawn, no
+    /// re-spawn, and no snap — and the maneuver continues on the destination with
+    /// its target and return offset re-expressed in the destination's own frame.
+    /// Returns `false` when no committed cross-facility maneuver is crossing.
+    fn handoff_lateral(&mut self, index: usize) -> bool {
+        let Some(state) = self.agents.route_state[index] else {
+            return false;
+        };
+        if state.maneuver != ManeuverState::Committed {
+            return false;
+        }
+        let Some(target_facility) = state.target_facility else {
+            return false;
+        };
+        if target_facility == state.facility {
+            return false;
+        }
+        let from_direction = movement_direction(self.agents.direction[index]);
+        let Some(transition) = lateral_transition(
+            self.scenario.transitions(state.facility, from_direction),
+            target_facility,
+        ) else {
+            return false;
+        };
+        let Some(source) = self.scenario.facility(state.facility) else {
+            return false;
+        };
+        let side = travel_pass_side(transition.side());
+        if side.sign() * state.d_m < source.width_m() * 0.5 - CONNECTOR_CONTINUITY_TOLERANCE_M {
+            return false;
+        }
+        let destination_traversal = transition.target();
+        let Some(destination) = self.scenario.facility(destination_traversal.facility()) else {
+            return false;
+        };
+        let Some(reference) = destination.reference() else {
+            return false;
+        };
+        let Some(path) = destination.reference_path() else {
+            return false;
+        };
+        let permitted = self.traversal_permits(
+            state.mode_template,
+            destination_traversal.facility(),
+            destination_traversal.direction(),
+            None,
+        );
+        let to_direction = destination_traversal.direction();
+        let to_sign = travel_sign(to_direction);
+        let coordinate = reference.geometry().project(self.agents.position[index]);
+
+        self.agents.path[index] = path;
+        self.agents.distance_m[index] = coordinate.s();
+        self.agents.direction[index] = to_sign;
+        self.agents.heading_rad[index] = reference.geometry().heading_at(coordinate.s());
+        self.agents.movement[index] = None;
+        let mut next = state;
+        next.facility = destination_traversal.facility();
+        next.s_m = coordinate.s();
+        next.d_m = coordinate.d() * to_sign;
+        // The maneuver continues on the destination; its target is now in the
+        // destination's own frame, and the return leg settles at that target
+        // rather than at the source offset the destination frame cannot name.
+        next.target_facility = None;
+        next.pre_maneuver_offset_m = state.target_offset_m.unwrap_or(next.d_m);
+        self.agents.route_state[index] = Some(next);
+
+        // The maneuver continues on the destination; its target is now in the
+        // destination's own frame, and the return leg settles at that target
+        // rather than at the source offset the destination frame cannot name.
+        next.target_facility = None;
+        next.pre_maneuver_offset_m = state.target_offset_m.unwrap_or(next.d_m);
+        next.entering_facility = true;
+        self.agents.route_state[index] = Some(next);
+
+        self.facility_transitions.push(FacilityTransitionRecord {
+            agent: AgentId::from_index(index),
+            from_facility: state.facility,
+            to_facility: destination_traversal.facility(),
+            from_direction,
+            to_direction,
+            via: TransitionKind::Lateral,
+            side,
+            s_m: state.s_m,
+            d_m: state.d_m,
+            permitted,
+        });
+        true
+    }
+
+    /// Clear the entry-transient flag once a laterally transitioned agent's body
+    /// centre is inside the destination band's compiled usable interval, so the
+    /// ordinary corridor and predictor govern again.
+    fn settle_facility_entry(&mut self, index: usize) {
+        let Some(mut state) = self.agents.route_state[index] else {
+            return;
+        };
+        if !state.entering_facility {
+            return;
+        }
+        let inside = state.bounded_steering.is_none_or(|steering| {
+            let offset = state.d_m * self.agents.direction[index];
+            offset >= steering.corridor.d_min - CORRIDOR_TOLERANCE_M
+                && offset <= steering.corridor.d_max + CORRIDOR_TOLERANCE_M
+        });
+        if inside {
+            state.entering_facility = false;
+            self.agents.route_state[index] = Some(state);
+        }
+    }
+
     /// An agent's lateral steering target for this step, when its maneuver
     /// displaces it.
     ///
     /// The target is the tactical stage's request; this leaf only integrates it
     /// under the compiled limits and never selects it. A `committed` maneuver
-    /// steers toward its fixed target, a `returning` or `aborted` one steers back
-    /// to the offset the agent held before the attempt, and a `preparing` or
-    /// `following` agent displaces nothing at all: a preparing maneuver has fixed
-    /// a target but has not been granted a corridor for it.
+    /// steers toward its fixed target — except on the outbound leg of a
+    /// cross-facility change of lane, where it steers just past the shared
+    /// boundary — a `returning` or `aborted` one steers back to the offset the
+    /// agent held before the attempt, and a `preparing` or `following` agent
+    /// displaces nothing at all: a preparing maneuver has fixed a target but has
+    /// not been granted a corridor for it.
     fn lateral_request(&self, index: usize) -> Option<f64> {
         let state = self.agents.route_state.get(index).copied().flatten()?;
         match state.maneuver {
-            ManeuverState::Committed => state.target_offset_m,
+            ManeuverState::Committed => self.committed_lateral_target(index, &state),
             ManeuverState::Returning | ManeuverState::Aborted => Some(state.pre_maneuver_offset_m),
             ManeuverState::Following | ManeuverState::Preparing => None,
         }
+    }
+
+    /// The target offset a committed maneuver steers toward: the compiled
+    /// shared boundary's runtime-derived crossing bound on the outbound leg of a
+    /// cross-facility change of lane, or the fixed destination target otherwise.
+    fn committed_lateral_target(&self, index: usize, state: &RouteState) -> Option<f64> {
+        if let Some(target_facility) = state.target_facility
+            && target_facility != state.facility
+        {
+            let source = self.scenario.facility(state.facility)?;
+            let clearance = state.target_clearance_m?;
+            let transition = lateral_transition(
+                self.scenario
+                    .transitions(state.facility, movement_direction(self.agents.direction[index])),
+                target_facility,
+            )?;
+            let side = travel_pass_side(transition.side());
+            return Some(side.sign() * (source.width_m() * 0.5 + clearance));
+        }
+        state.target_offset_m
+    }
+
+    /// The compiled bounded-steering envelope of an agent this step, widened on
+    /// the crossing side while it is on the outbound leg of a cross-facility
+    /// change of lane, so the bounded step may cross the shared boundary.
+    fn steering_envelope(&self, index: usize) -> Option<BoundedSteering> {
+        let state = self.agents.route_state.get(index).copied().flatten()?;
+        let mut steering = state.bounded_steering?;
+        if state.maneuver == ManeuverState::Committed
+            && let Some(target_facility) = state.target_facility
+            && target_facility != state.facility
+            && let Some(source) = self.scenario.facility(state.facility)
+            && let Some(clearance) = state.target_clearance_m
+            && let Some(transition) = lateral_transition(
+                self.scenario
+                    .transitions(state.facility, movement_direction(self.agents.direction[index])),
+                target_facility,
+            )
+        {
+            let side = travel_pass_side(transition.side());
+            let bound = side.sign() * self.agents.direction[index] * (source.width_m() * 0.5 + clearance);
+            if bound > 0.0 {
+                steering.corridor.d_max = steering.corridor.d_max.max(bound);
+            } else {
+                steering.corridor.d_min = steering.corridor.d_min.min(bound);
+            }
+        }
+        // While the body centre is still inside the just-entered band's shared
+        // boundary, the entry leg's corridor is widened to where the body is, so
+        // the bounded step may move it into the destination's usable interval.
+        if state.entering_facility {
+            let entry = state.d_m * self.agents.direction[index];
+            if entry > 0.0 {
+                steering.corridor.d_max = steering.corridor.d_max.max(entry);
+            } else {
+                steering.corridor.d_min = steering.corridor.d_min.min(entry);
+            }
+        }
+        Some(steering)
     }
 }
 
@@ -2798,6 +3269,11 @@ enum Attempt {
     /// The candidate corridor is not feasible right now. The intent is kept and
     /// retried at the next decision, which is how a maneuver waits for a gap.
     Infeasible,
+    /// A cross-facility change of lane would enter a traversal the applicable
+    /// rule does not permit. The intent is discarded and the inspectable reason
+    /// is the contract's `boundary_forbidden`: the preventable half of a
+    /// forbidden-boundary crossing.
+    BoundaryForbidden,
 }
 
 /// One candidate's view of the visible slower leader ahead it might pass or
@@ -2872,6 +3348,56 @@ fn reference_heading(direction: f64, travel_rad: f64) -> f64 {
     } else {
         travel_rad
     }
+}
+
+/// The compiled traversal direction an agent's travel sign names.
+fn movement_direction(sign: f64) -> MovementDirection {
+    if sign < 0.0 {
+        MovementDirection::Reverse
+    } else {
+        MovementDirection::Forward
+    }
+}
+
+/// The longitudinal travel sign a compiled traversal direction names.
+fn travel_sign(direction: MovementDirection) -> f64 {
+    if direction == MovementDirection::Reverse {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+/// The side of a connector crossing in the agent's own travel frame: the side
+/// the destination travel heading turns toward, with an exact straight
+/// continuation resolving to `left` so the record is always deterministic.
+fn connector_crossing_side(incoming_rad: f64, destination_rad: f64) -> PassSide {
+    if wrap_pi(destination_rad - incoming_rad) < 0.0 {
+        PassSide::Right
+    } else {
+        PassSide::Left
+    }
+}
+
+/// The resolved travel-frame side of a compiled adjacency side.
+fn travel_pass_side(side: AdjacencySide) -> PassSide {
+    match side {
+        AdjacencySide::Left => PassSide::Left,
+        AdjacencySide::Right => PassSide::Right,
+    }
+}
+
+/// The compiled lateral transition of a traversal that reaches
+/// `target_facility`, or `None` when no adjacency joins the two bands.
+fn lateral_transition(
+    transitions: Option<&TraversalTransitions>,
+    target_facility: FacilityId,
+) -> Option<LateralTransition> {
+    transitions?
+        .lateral()
+        .iter()
+        .copied()
+        .find(|transition| transition.target().facility() == target_facility)
 }
 
 /// Wrap an angle in radians to `(-pi, pi]`, so a heading stays canonical however
@@ -3153,8 +3679,7 @@ impl MotionControl for Simulation {
                 // check and those caps constrain the same proposed world step; a
                 // step that would leave the corridor holds instead of clipping.
                 if let Some(target_offset_m) = self.lateral_request(index)
-                    && let Some(steering) =
-                        self.agents.route_state[index].and_then(|state| state.bounded_steering)
+                    && let Some(steering) = self.steering_envelope(index)
                     && let Some(geometry) = self.route_geometry(index)
                 {
                     let request = SteeringRequest {
@@ -3261,6 +3786,13 @@ impl PhysicalAdvance for Simulation {
                         travelled >= length
                     };
                     if exited {
+                        // A compiled connector continues the route: the agent
+                        // hands off through the coincidence instead of leaving
+                        // the world. The handoff is only reached when it carries
+                        // route state and a connector leaves its traversal.
+                        if self.handoff_connector(index) {
+                            return;
+                        }
                         self.agents.alive[index] = false;
                         self.despawned_total += 1;
                         self.events.push(Event::Despawned {
@@ -3298,8 +3830,19 @@ impl PhysicalAdvance for Simulation {
                         self.agents.distance_m[index] = state.s_m;
                     }
 
+                    // A committed change of lane crosses the shared band boundary
+                    // mid-step: the handoff moves ownership to the destination
+                    // band without moving the pose, before any route-end check.
+                    if self.handoff_lateral(index) {
+                        return;
+                    }
+                    self.settle_facility_entry(index);
+
                     let s_m = self.agents.distance_m[index];
                     if s_m <= 0.0 || s_m >= length {
+                        if self.handoff_connector(index) {
+                            return;
+                        }
                         self.agents.alive[index] = false;
                         self.despawned_total += 1;
                         self.events.push(Event::Despawned {
@@ -4943,6 +5486,7 @@ mod tests {
             LateralManeuverRequest {
                 target_offset_m: MANEUVER_TARGET_M,
                 passed_body,
+                target_facility: None,
             },
         )
     }
@@ -5402,6 +5946,26 @@ mod tests {
         assert!(
             walking.step().transitions().is_empty(),
             "a version-1 run records no maneuver transition"
+        );
+    }
+
+    /// The handoff helpers name each compiled direction and side once: a travel
+    /// sign maps to one `MovementDirection`, a crossing side follows the turn the
+    /// destination heading makes, and a straight continuation resolves left.
+    #[test]
+    fn handoff_helpers_name_directions_and_sides_deterministically() {
+        assert_eq!(movement_direction(1.0), MovementDirection::Forward);
+        assert_eq!(movement_direction(-1.0), MovementDirection::Reverse);
+        assert_eq!(travel_sign(MovementDirection::Forward), 1.0);
+        assert_eq!(travel_sign(MovementDirection::Reverse), -1.0);
+        assert_eq!(travel_pass_side(AdjacencySide::Left), PassSide::Left);
+        assert_eq!(travel_pass_side(AdjacencySide::Right), PassSide::Right);
+        assert_eq!(connector_crossing_side(0.0, 0.2), PassSide::Left);
+        assert_eq!(connector_crossing_side(0.0, -0.2), PassSide::Right);
+        assert_eq!(
+            connector_crossing_side(0.0, 0.0),
+            PassSide::Left,
+            "a straight continuation resolves left"
         );
     }
 }

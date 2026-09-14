@@ -38,7 +38,7 @@
 
 use std::cmp::Ordering;
 
-use tangle_model::{CrossingId, FacilityId};
+use tangle_model::{CrossingId, FacilityId, MovementDirection};
 
 use crate::agent::AgentId;
 use crate::control::Constraint;
@@ -146,6 +146,11 @@ impl ManeuverState {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LateralManeuverRequest {
     /// The target signed offset in metres, in the agent's own travel frame.
+    ///
+    /// For a cross-facility maneuver ([`Self::target_facility`] is `Some`) the
+    /// offset names the target on the *destination* facility's own reference,
+    /// which is where the agent settles once the handoff crosses the shared
+    /// boundary.
     pub target_offset_m: f64,
     /// The passed obstacle: the body the maneuver displaces around, which is
     /// the contract's *target body*. The maneuver completes when the agent's
@@ -153,6 +158,12 @@ pub struct LateralManeuverRequest {
     /// this body's front envelope along the travel direction, and aborts when
     /// this body disappears.
     pub passed_body: AgentId,
+    /// The destination facility of a cross-facility change of lane, or `None`
+    /// for a within-facility pass or overtake. When present, the maneuver
+    /// crosses the lateral boundary the compiled adjacency shares with the
+    /// agent's current facility and the handoff moves route and facility
+    /// ownership to the destination traversal.
+    pub target_facility: Option<FacilityId>,
 }
 
 /// The tolerance in metres within which a returning or aborted maneuver counts
@@ -205,6 +216,11 @@ pub enum ManeuverAbortReason {
     /// The predicted swept clearance fell below the commit policy's
     /// minimum after commitment.
     ClearanceLost,
+    /// The crossing would enter a traversal the applicable rule does not
+    /// permit: the contract's forbidden-boundary crossing. It is prevented when
+    /// avoidable (this reason), and recorded as a `permitted: false`
+    /// [`FacilityTransitionRecord`] when the committed policy cannot avoid it.
+    BoundaryForbidden,
 }
 
 impl ManeuverAbortReason {
@@ -216,8 +232,68 @@ impl ManeuverAbortReason {
             Self::HoldTimeout => "hold_timeout",
             Self::CorridorInfeasible => "corridor_infeasible",
             Self::ClearanceLost => "clearance_lost",
+            Self::BoundaryForbidden => "boundary_forbidden",
         }
     }
+}
+
+/// Which geometric handoff a facility transition took.
+///
+/// `docs/schema-v2-contract.md` *Increment 2 events and metrics* fixes the
+/// `FacilityTransition` event's `via` field to these two kinds, so a later event
+/// surface names them without a second spelling. No public event is emitted
+/// here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionKind {
+    /// A lateral crossing of the shared boundary between two side-by-side
+    /// bands.
+    Lateral,
+    /// A longitudinal handoff through a compiled connector at its coincidence.
+    Connector,
+}
+
+impl TransitionKind {
+    /// Stable lowercase label, the contract's code.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Lateral => "lateral",
+            Self::Connector => "connector",
+        }
+    }
+}
+
+/// One facility handoff a step performed, for the `FacilityTransition` event
+/// `docs/schema-v2-contract.md` *Increment 2 events and metrics* fixes.
+///
+/// The record is the kernel's own fact, produced once at the contract-defined
+/// geometric handoff step. It is exposed on [`crate::StepOutput`] so the event
+/// surface can emit it; no public event is produced here, and `permitted:
+/// false` is the forbidden-boundary fact the contract names (what `T-O3` reads
+/// for its zero-crossing-without-record requirement).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FacilityTransitionRecord {
+    /// The agent that changed facility.
+    pub agent: AgentId,
+    /// The facility the agent left.
+    pub from_facility: FacilityId,
+    /// The facility the agent entered.
+    pub to_facility: FacilityId,
+    /// The traversal direction the agent travelled on the facility it left.
+    pub from_direction: MovementDirection,
+    /// The traversal direction the agent travels on the facility it entered.
+    pub to_direction: MovementDirection,
+    /// Which geometric handoff the transition took.
+    pub via: TransitionKind,
+    /// The side of the crossing in the agent's own travel frame.
+    pub side: PassSide,
+    /// Route progress in metres at the handoff, on the facility the agent left.
+    pub s_m: f64,
+    /// Signed lateral offset in metres at the handoff, in the agent's own
+    /// travel frame on the facility it left.
+    pub d_m: f64,
+    /// Whether the applicable rule permitted the destination traversal. `false`
+    /// is the forbidden-boundary fact.
+    pub permitted: bool,
 }
 
 /// Why a lateral maneuver was selected, or why eligibility rejected one.
@@ -249,6 +325,12 @@ pub enum ManeuverReason {
     /// Rejection: the mode declares no lateral target clearance or horizon, or
     /// the candidate corridor predicts infeasible over the horizon.
     NoCorridor,
+    /// Rejection: the requested cross-facility change of lane would enter a
+    /// traversal the applicable rule does not permit. It is the preventable half
+    /// of the contract's forbidden-boundary crossing; when the committed policy
+    /// cannot avoid the crossing, the fact is a
+    /// [`FacilityTransitionRecord`] with `permitted: false` instead.
+    BoundaryForbidden,
 }
 
 impl ManeuverReason {
@@ -261,6 +343,7 @@ impl ManeuverReason {
             Self::NoBenefit => "no_benefit",
             Self::InsufficientWidth => "insufficient_width",
             Self::NoCorridor => "no_corridor",
+            Self::BoundaryForbidden => "boundary_forbidden",
         }
     }
 }
@@ -901,10 +984,13 @@ mod tests {
                 "corridor_infeasible",
             ),
             (ManeuverAbortReason::ClearanceLost, "clearance_lost"),
+            (ManeuverAbortReason::BoundaryForbidden, "boundary_forbidden"),
         ];
         for (reason, label) in reasons {
             assert_eq!(reason.label(), label);
         }
+        assert_eq!(TransitionKind::Lateral.label(), "lateral");
+        assert_eq!(TransitionKind::Connector.label(), "connector");
         assert_eq!(SETTLE_TOLERANCE_M, 1e-3);
     }
 
@@ -920,6 +1006,7 @@ mod tests {
             (ManeuverReason::NoBenefit, "no_benefit"),
             (ManeuverReason::InsufficientWidth, "insufficient_width"),
             (ManeuverReason::NoCorridor, "no_corridor"),
+            (ManeuverReason::BoundaryForbidden, "boundary_forbidden"),
         ];
         for (reason, label) in reasons {
             assert_eq!(reason.label(), label);
