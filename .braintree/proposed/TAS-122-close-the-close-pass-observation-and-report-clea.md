@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T22:52:14Z
+updated: 2026-09-14T23:06:31Z
 summary: Close the close-pass observation and report clearance metrics.
-next: "[[TAS-140-accumulate-close-pass-metric-families]]"
+next: "[[TAS-141-surface-close-pass-metric-families]]"
 ---
 
 Parent [[TAS-101-measure-close-passes-with-exact-clearance-evidence]].

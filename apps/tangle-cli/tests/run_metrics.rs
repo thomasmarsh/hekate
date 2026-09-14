@@ -25,13 +25,13 @@ use sha2::{Digest, Sha256};
 use tangle_cli::{
     EVENT_STREAM_FILE, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
     MetricValue, OperationalValues, RunDirectoryRequest, RunMetrics, RunMetricsArtifact,
-    SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, canonical_run_captured,
+    RunMetricsRecorder, SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, canonical_run_captured,
     load_scenario_provenance, write_run_directory,
 };
-use tangle_model::CompiledScenario;
+use tangle_model::{CompiledScenario, TacticKind, parse_scenario_source_v2};
 use tangle_sim::{
-    AgentId, AgentMode, Event, MetricMinimum, ModePair, MovementKey, OperationValues,
-    PostEncroachment, RunConfig, Simulation,
+    AgentId, AgentMode, Event, ManeuverEdge, ManeuverState, MetricMinimum, ModePair, MovementKey,
+    OperationValues, OvertakeObservation, PostEncroachment, RunConfig, Simulation,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -1049,5 +1049,487 @@ fn run_and_batch_write_metrics_and_resume_treats_it_like_the_other_artifacts() {
         content_hashes(&scratch.path("batch").join("seed-1")),
         seed1_before,
         "the resume mutated a completed run"
+    );
+}
+
+/// Ticks long enough for demand to enter, catch up, and complete an overtake on
+/// the close-pass fixture below: 900 ticks at the default 0.05 s step is 45 s.
+const CLOSE_PASS_TICKS: u64 = 900;
+
+/// Ticks long enough for the same demand to enter and travel but not to
+/// complete an overtake, for the cases that must record none.
+const NO_PASS_TICKS: u64 = 300;
+
+/// The close-pass fixture: one shared continuous-width road that a motor mode
+/// and a narrower, slower mode both ride, one demand source each, so the faster
+/// motor catches a slower narrow user and passes it.
+///
+/// The shape mirrors `crates/tangle-sim/tests/close_pass.rs`, with the knobs
+/// these cases need: the two speeds, whether the motor mode declares the
+/// `overtake` tactic at all, and whether the facility is `shared` or `centered`.
+fn passing_scenario(
+    motor_speed_mps: f64,
+    narrow_speed_mps: f64,
+    overtakes: bool,
+    lateral_use: &str,
+) -> CompiledScenario {
+    let tactics = match overtakes {
+        true => "'follow', 'stop', 'yield', 'overtake'",
+        false => "'follow', 'stop', 'yield'",
+    };
+    // A mode declares lateral maneuver parameters only when it carries the
+    // tactic that selects one, and a centered facility offers no lateral target
+    // for a passing side to apply to.
+    let lateral = match overtakes {
+        true => "lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },",
+        false => "",
+    };
+    let lateral_policy = match lateral_use {
+        "centered" => "",
+        _ => "lateral_policy: { passing_side: 'left' },",
+    };
+    // A wheeled box uses its steering, lateral-acceleration, and clearance
+    // parameters exactly when it carries the lateral tactic that steers.
+    let car_lateral_profile = match overtakes {
+        true => {
+            "steering_rate_max_rad_s: { min: 0.9, max: 0.9 },\n\
+                 lateral_accel_max_mps2: { min: 2.0, max: 2.0 },\n\
+                 lateral_clearance_m: { min: 0.3, max: 0.3 },"
+        }
+        false => "",
+    };
+    let source = parse_scenario_source_v2(&format!(
+        r#"{{
+  schema_version: 2,
+  id: 'close_pass_metrics',
+  coordinate_system: {{ x: 'east_m', y: 'north_m' }},
+  paths: [ {{ id: 'guide', points: [ {{ x: 0.0, y: 0.0 }}, {{ x: 500.0, y: 0.0 }} ] }} ],
+  portals: [
+    {{ id: 'entry', path: 'guide', end: 'start', width_m: 10.0 }},
+    {{ id: 'exit', path: 'guide', end: 'end', width_m: 10.0 }},
+  ],
+  boundaries: [
+    {{ id: 'world', points: [
+      {{ x: -20.0, y: -20.0 }}, {{ x: 520.0, y: -20.0 }},
+      {{ x: 520.0, y: 20.0 }}, {{ x: -20.0, y: 20.0 }},
+    ] }},
+  ],
+  regions: [
+    {{ id: 'band', points: [
+      {{ x: 0.0, y: -5.0 }}, {{ x: 500.0, y: -5.0 }},
+      {{ x: 500.0, y: 5.0 }}, {{ x: 0.0, y: 5.0 }},
+    ] }},
+  ],
+  facilities: [
+    {{ id: 'road', region: 'band', reference_path: 'guide',
+      width_m: 10.0, nominal_direction: 'forward',
+      access: {{ modes: [ 'passenger_car', 'bicycle' ] }}, lateral_use: '{lateral_use}',
+      {lateral_policy}
+      speed_policy: {{ limit_mps: null }} }},
+  ],
+  movements: [
+    {{ id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+      direction: 'forward' }},
+  ],
+  mode_templates: [
+    {{
+      id: 'passenger_car',
+      body: {{ kind: 'box', length_m: {{ min: 4.5, max: 4.5 }},
+        width_m: {{ min: 1.8, max: 1.8 }} }},
+      motion: 'single_body_wheeled',
+      tactics: [ {tactics} ],
+      access: {{ facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: {{ limit_mps: null }} }},
+      occupancy: 'operator_only',
+      profiles: {{
+        speed_mps: {{ min: {motor_speed_mps}, max: {motor_speed_mps} }},
+        max_accel_mps2: {{ min: 1.2, max: 1.2 }},
+        comfortable_brake_mps2: {{ min: 2.0, max: 2.0 }},
+        time_gap_s: {{ min: 1.0, max: 1.0 }},
+        {car_lateral_profile}
+        compliance: {{ min: 1.0, max: 1.0 }},
+      }},
+      {lateral}
+    }},
+    {{
+      id: 'bicycle',
+      body: {{ kind: 'capsule', length_m: {{ min: 1.8, max: 1.8 }},
+        radius_m: {{ min: 0.35, max: 0.35 }} }},
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: {{ facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: {{ limit_mps: null }} }},
+      occupancy: 'operator_only',
+      profiles: {{
+        speed_mps: {{ min: {narrow_speed_mps}, max: {narrow_speed_mps} }},
+        max_accel_mps2: {{ min: 1.2, max: 1.2 }},
+        comfortable_brake_mps2: {{ min: 2.0, max: 2.0 }},
+        time_gap_s: {{ min: 1.0, max: 1.0 }},
+        steering_rate_max_rad_s: {{ min: 0.9, max: 0.9 }},
+        lateral_clearance_m: {{ min: 0.3, max: 0.3 }},
+        compliance: {{ min: 1.0, max: 1.0 }},
+      }},
+    }},
+  ],
+  clearance_bands: [
+    {{ id: 'bicycle_close', threshold_m: 0.75, violation: true,
+      applies_to_modes: [ 'bicycle' ] }},
+    {{ id: 'bicycle_study', threshold_m: 1.5, violation: false,
+      applies_to_modes: [ 'bicycle' ] }},
+    {{ id: 'all_study', threshold_m: 3.0, violation: false }},
+  ],
+  maneuver_policy: {{
+    commit: {{ min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 }},
+  }},
+  demand: [
+    {{ id: 'bicycle_inflow', mode: 'bicycle',
+      spawn: {{ rate: {{
+        portal: 'entry',
+        rate_per_hour: 450.0,
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'through', weight: 1.0 }} ] }},
+      }} }} }},
+    {{ id: 'car_inflow', mode: 'passenger_car',
+      spawn: {{ rate: {{
+        portal: 'entry',
+        rate_per_hour: 450.0,
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'through', weight: 1.0 }} ] }},
+      }} }} }},
+  ],
+}}"#
+    ))
+    .expect("the document is version 2");
+    CompiledScenario::compile_v2(source).expect("the scenario compiles")
+}
+
+/// The four overtaking family counts of one run, counted from the event stream
+/// so the recorder is checked against its own record set rather than against a
+/// reimplementation of the writer.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct OvertakingCounts {
+    attempts: u64,
+    commits: u64,
+    completions: u64,
+    aborts: u64,
+}
+
+/// One recorded close-pass run: the metrics the recorder captured, the
+/// observations the tracker closed, and the overtaking counts.
+struct Recording {
+    metrics: RunMetrics,
+    observations: Vec<OvertakeObservation>,
+    overtaking: OvertakingCounts,
+}
+
+fn record_run(scenario: CompiledScenario, seed: u64, ticks: u64) -> Recording {
+    let mut sim = Simulation::new(scenario, RunConfig::new(seed)).expect("simulation builds");
+    let mut recorder = RunMetricsRecorder::new();
+    let mut overtaking = OvertakingCounts::default();
+    for _ in 0..ticks {
+        let output = sim.step();
+        for event in output.events() {
+            let Event::Maneuver {
+                kind,
+                edge,
+                from,
+                to,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if *kind != TacticKind::Overtake {
+                continue;
+            }
+            match (*edge, *from, *to) {
+                (ManeuverEdge::Attempted, ..) => overtaking.attempts += 1,
+                (ManeuverEdge::Committed, ..) => overtaking.commits += 1,
+                (ManeuverEdge::Completed, ManeuverState::Committed, ManeuverState::Returning) => {
+                    overtaking.completions += 1;
+                }
+                (ManeuverEdge::Aborted, ..) => overtaking.aborts += 1,
+                // The return's own completion is not the pass's.
+                (ManeuverEdge::Completed, ..) => {}
+            }
+        }
+        recorder.record(&output);
+    }
+    let metrics = recorder.finish(&sim);
+    Recording {
+        metrics,
+        observations: sim.close_pass_tracker().overtakes().to_vec(),
+        overtaking,
+    }
+}
+
+/// A reported countable family carries its value and the reported status.
+fn assert_count(actual: &MetricValue, expected: u64) {
+    assert_eq!(actual.status, MetricStatus::Reported);
+    assert_eq!(actual.value, Some(expected as f64));
+}
+
+/// The band-duration series of one bucket, as `(band id, seconds)` in
+/// declaration order.
+fn band_durations(durations: &BTreeMap<u32, MetricValue>) -> Vec<(u32, Option<f64>)> {
+    durations
+        .iter()
+        .map(|(band, value)| (*band, value.value))
+        .collect()
+}
+
+/// The closed observations accumulate into every close-pass family, and each
+/// bucket's applicability is explicit rather than a false `0`.
+#[test]
+fn close_pass_families_accumulate_from_the_closed_observations() {
+    let recording = record_run(
+        passing_scenario(9.0, 4.0, true, "shared"),
+        7,
+        CLOSE_PASS_TICKS,
+    );
+    let observations = &recording.observations;
+    assert!(
+        !observations.is_empty(),
+        "the faster motor must overtake the slower narrow user at least once"
+    );
+    let pass = &recording.metrics.close_pass.run;
+
+    // The overtaking families are the counted `Maneuver` edges of the run.
+    assert_count(&pass.overtake_attempts, recording.overtaking.attempts);
+    assert_count(&pass.overtake_commits, recording.overtaking.commits);
+    assert_count(&pass.overtake_completions, recording.overtaking.completions);
+    assert_count(&pass.overtake_aborts, recording.overtaking.aborts);
+    assert!(
+        recording.overtaking.completions > 0,
+        "the run completes an overtake: {:?}",
+        recording.overtaking
+    );
+
+    // The close-pass count is the tracker's own closed-observation slice, and
+    // the violations are the observations that recorded a violating band.
+    assert_count(&pass.close_passes, observations.len() as u64);
+    assert_count(
+        &pass.close_pass_violations,
+        observations
+            .iter()
+            .filter(|observation| !observation.violating_bands.is_empty())
+            .count() as u64,
+    );
+
+    // The minimum is the least observed clearance, with the time and relative
+    // speed the observation recorded at it.
+    let least = observations
+        .iter()
+        .map(|observation| observation.min_clearance_m)
+        .fold(f64::INFINITY, f64::min);
+    let observed = observations
+        .iter()
+        .find(|observation| observation.min_clearance_m == least)
+        .expect("the least clearance belongs to an observation");
+    let minimum = &pass.close_pass_minimum_clearance_m;
+    assert_eq!(minimum.status, MetricStatus::Reported);
+    assert_eq!(minimum.value, Some(least));
+    assert_eq!(minimum.agent, Some(observed.agent.get()));
+    assert_eq!(minimum.other, Some(observed.partner.get()));
+    assert_eq!(minimum.mode_pair.as_deref(), Some("vehicle_vehicle"));
+    assert_eq!(minimum.time_s, Some(observed.min_clearance_time_s));
+    assert_eq!(
+        minimum.relative_speed_mps,
+        Some(observed.relative_speed_mps)
+    );
+
+    // One duration series entry per declared band, in declaration order, each
+    // the sum of the observations that participated in it.
+    assert_eq!(
+        band_durations(&pass.clearance_band_durations_s)
+            .iter()
+            .map(|(band, _)| *band)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "the series is every declared band in declaration order"
+    );
+    for (band, value) in band_durations(&pass.clearance_band_durations_s) {
+        let expected: f64 = observations
+            .iter()
+            .filter_map(|observation| {
+                observation
+                    .bands
+                    .iter()
+                    .find(|observed| observed.band.get() == band)
+            })
+            .map(|observed| observed.duration_s)
+            .sum();
+        assert_eq!(
+            value,
+            Some(expected),
+            "band {band} sums its participating observations"
+        );
+        assert_eq!(
+            pass.clearance_band_durations_s[&band].status,
+            MetricStatus::Reported
+        );
+    }
+    assert!(
+        pass.clearance_band_durations_s[&2].value.expect("a value") > 0.0,
+        "the every-pair band is crossed by a real pass"
+    );
+
+    // The mode-pair slice is the vehicle pair the fixture produces, and a pair
+    // that could host a pass but recorded none is not_observed rather than a
+    // reported zero; a class no template declares the tactic for is
+    // not_applicable.
+    let vehicle_pair = &recording.metrics.close_pass.by_mode_pair["vehicle_vehicle"];
+    assert_count(&vehicle_pair.close_passes, observations.len() as u64);
+    assert_eq!(
+        vehicle_pair.close_pass_minimum_clearance_m.value,
+        Some(least)
+    );
+    let cross_pair = &recording.metrics.close_pass.by_mode_pair["vehicle_pedestrian"];
+    assert_eq!(
+        cross_pair.close_pass_minimum_clearance_m.status,
+        MetricStatus::NotObserved
+    );
+    assert_eq!(cross_pair.close_pass_minimum_clearance_m.value, None);
+    let pedestrian_pair = &recording.metrics.close_pass.by_mode_pair["pedestrian_pedestrian"];
+    assert_eq!(
+        pedestrian_pair.close_pass_minimum_clearance_m.status,
+        MetricStatus::NotApplicable
+    );
+    assert!(
+        pedestrian_pair
+            .clearance_band_durations_s
+            .values()
+            .all(|band| band.status == MetricStatus::NotApplicable && band.value.is_none()),
+        "a mode pair that cannot host a pass reports no clearance value"
+    );
+
+    // The facility slice is the shared road both bodies ride, and the movement
+    // slice is the pairwise key of the one movement the fixture declares.
+    let facility = &recording.metrics.close_pass.by_facility["facility:road"];
+    assert_count(
+        &facility.close_passes,
+        observations
+            .iter()
+            .filter(|observation| observation.facility.is_some())
+            .count() as u64,
+    );
+    let movement = &recording.metrics.close_pass.by_movement["movement:through|movement:through"];
+    assert_count(&movement.close_passes, observations.len() as u64);
+    assert_eq!(
+        recording.metrics.close_pass.by_movement.len(),
+        1,
+        "one movement pair is declared, so one movement bucket exists"
+    );
+}
+
+/// Nominal travel is not counted: an abreast convoy at one speed is no overtake,
+/// so the countable families report a true zero and the value families report no
+/// observation rather than a false `0`.
+#[test]
+fn nominal_travel_is_not_counted() {
+    let recording = record_run(passing_scenario(4.0, 4.0, true, "shared"), 7, NO_PASS_TICKS);
+    assert!(
+        recording.observations.is_empty(),
+        "an abreast convoy is not an overtake: {:?}",
+        recording.observations
+    );
+    assert_eq!(recording.overtaking.completions, 0);
+
+    let pass = &recording.metrics.close_pass.run;
+    assert_count(&pass.close_passes, 0);
+    assert_count(&pass.close_pass_violations, 0);
+    assert_count(&pass.overtake_attempts, recording.overtaking.attempts);
+    assert_eq!(
+        pass.close_pass_minimum_clearance_m.status,
+        MetricStatus::NotObserved
+    );
+    assert_eq!(pass.close_pass_minimum_clearance_m.value, None);
+    assert!(
+        pass.clearance_band_durations_s
+            .values()
+            .all(|band| band.status == MetricStatus::NotObserved && band.value.is_none()),
+        "no observation is not a band duration of zero"
+    );
+}
+
+/// An inapplicable mode and a facility that offers no lateral freedom report no
+/// clearance value at all, while a bucket that could host a pass reports its
+/// no-observation status instead.
+#[test]
+fn an_inapplicable_mode_reports_no_clearance_value() {
+    // No mode declares the `overtake` or `pass` tactic, so no mode pair can host
+    // a pass; the shared facility still could, and only recorded none.
+    let recording = record_run(
+        passing_scenario(9.0, 4.0, false, "shared"),
+        7,
+        NO_PASS_TICKS,
+    );
+    assert!(recording.observations.is_empty());
+    let pass = &recording.metrics.close_pass.run;
+    assert_eq!(
+        pass.close_pass_minimum_clearance_m.status,
+        MetricStatus::NotApplicable
+    );
+    assert_eq!(pass.close_pass_minimum_clearance_m.value, None);
+    assert!(
+        pass.clearance_band_durations_s
+            .values()
+            .all(|band| band.status == MetricStatus::NotApplicable && band.value.is_none()),
+        "an inapplicable run reports no band duration"
+    );
+    for values in recording.metrics.close_pass.by_mode_pair.values() {
+        assert_eq!(
+            values.close_pass_minimum_clearance_m.status,
+            MetricStatus::NotApplicable
+        );
+        assert_eq!(values.close_pass_minimum_clearance_m.value, None);
+    }
+    // The shared facility could host a pass, so it reports the no-observation
+    // status instead of the inapplicable one.
+    assert_eq!(
+        recording.metrics.close_pass.by_facility["facility:road"]
+            .close_pass_minimum_clearance_m
+            .status,
+        MetricStatus::NotObserved
+    );
+    assert_count(&pass.close_passes, 0);
+}
+
+/// Nominal travel on a centered facility is not counted: the facility offers no
+/// lateral freedom, so its bucket is not applicable and the pair that could host
+/// a pass on a shared facility still reports no observation here.
+#[test]
+fn a_centered_facility_reports_no_clearance_value() {
+    let recording = record_run(
+        passing_scenario(9.0, 4.0, true, "centered"),
+        7,
+        NO_PASS_TICKS,
+    );
+    assert!(
+        recording.observations.is_empty(),
+        "a centered facility admits no pass: {:?}",
+        recording.observations
+    );
+    let facility = &recording.metrics.close_pass.by_facility["facility:road"];
+    assert_count(&facility.close_passes, 0);
+    assert_eq!(
+        facility.close_pass_minimum_clearance_m.status,
+        MetricStatus::NotApplicable
+    );
+    assert_eq!(facility.close_pass_minimum_clearance_m.value, None);
+    assert!(
+        facility
+            .clearance_band_durations_s
+            .values()
+            .all(|band| band.status == MetricStatus::NotApplicable && band.value.is_none()),
+        "a centered facility reports no band duration"
+    );
+    // The mode pair itself declares the overtaking tactic, so it is a bucket
+    // that could host a pass and recorded none.
+    assert_eq!(
+        recording.metrics.close_pass.by_mode_pair["vehicle_vehicle"]
+            .close_pass_minimum_clearance_m
+            .status,
+        MetricStatus::NotObserved
     );
 }
