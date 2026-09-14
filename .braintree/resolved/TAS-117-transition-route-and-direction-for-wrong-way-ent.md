@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T15:31:55Z
+updated: 2026-09-14T16:03:24Z
 summary: Transition route and direction for wrong-way entry and completion.
-next: "[[TAS-138-order-a-turned-riders-leaders-and-encounters]]"
 ---
 
 Parent [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]].
@@ -83,14 +82,17 @@ regression); `cargo clippy --workspace --all-targets --all-features -- -D warnin
 clean; `cargo fmt --all --check` clean; `scripts/check-dependency-direction.sh` OK;
 `braintree check` passes.
 
-Remaining scope:
+Complete. [[TAS-138-order-a-turned-riders-leaders-and-encounters]] landed the
+ordering evidence: a turned rider's leader query and its own within-tick record
+order follow its actual travel direction in both authored reference directions
+(tests only; `Simulation::nearest_leader` and `Event::order_key` already read the
+travel sign).
 
-- Opposing leaders and encounters ordered in the actual travel direction is
-  unverified; that is the child [[TAS-138-order-a-turned-riders-leaders-and-encounters]].
-- The entry resolves the same-facility reverse traversal, whose connectivity the
-  compiled topology makes possible (a connector leaving or entering along that
-  direction, which is what a two-way facility authors). An opposing traversal
-  reachable only by *crossing* a compiled adjacency is not landed here: that
-  needs the ordinary lateral maneuver's crossing at the compiled shared
-  boundary, and `Simulation::request_wrong_way_entry` refuses it rather than
-  taking a route-only move away from that boundary.
+Limitation (outside this Done when): the entry resolves the same-facility
+reverse traversal, whose connectivity the compiled topology makes possible (a
+connector leaving or entering along that direction, which is what a two-way
+facility authors). An opposing traversal reachable only by *crossing* a compiled
+lateral adjacency is not entered here; `Simulation::request_wrong_way_entry`
+refuses it rather than taking a route-only move away from the shared boundary.
+The Increment 2 wrong-way gate does not require that shape, and the contract's
+decision connectivity names connector or adjacency as alternatives.

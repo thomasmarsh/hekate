@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:12Z
+updated: 2026-09-14T16:03:24Z
 summary: Route wrong-way agents through ordinary steering, collision, and lifecycle paths.
-next: [[TAS-117-transition-route-and-direction-for-wrong-way-ent]]
+next: [[TAS-118-reject-an-occupied-opposing-corridor-and-keep-th]]
 ---
 
 Parent [[TAS-096-contextual-wrong-way-travel]].
