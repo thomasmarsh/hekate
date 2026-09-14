@@ -1552,6 +1552,7 @@ mod tests {
             narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
+            route_state: None,
         })
     }
 
@@ -1876,6 +1877,7 @@ mod tests {
             narrow_profile: None,
             pedestrian_route,
             pedestrian_profile: None,
+            route_state: None,
         })
     }
 

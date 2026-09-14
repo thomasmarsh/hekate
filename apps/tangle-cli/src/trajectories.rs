@@ -34,7 +34,7 @@ use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use tangle_model::BodyKind;
-use tangle_sim::{BodySegmentSample, Simulation, SnapshotDetail};
+use tangle_sim::{BodySegmentSample, ManeuverState, Simulation, SnapshotDetail};
 
 use crate::run_dir::TrajectorySampling;
 use crate::trace::sha256_hex;
@@ -47,11 +47,16 @@ pub const TRAJECTORY_FORMAT: &str = "parquet";
 
 /// Version of the sampled-trajectory artifact's column shape.
 ///
-/// Version 2 adds `body_kind` and the ordered `segments` pose list, so a run
-/// directory's trajectories describe every body's envelope rather than only its
-/// mode. Version 1 was the seven columns `tick`, `agent`, `mode`, `x_m`, `y_m`,
-/// `heading_rad`, and `speed_mps`.
-pub const TRAJECTORY_FORMAT_VERSION: u32 = 2;
+/// Version 3 appends the optional route-relative tactical columns
+/// `route_s_m`, `route_d_m`, `target_offset_m`, `maneuver_state`, and
+/// `predicted_min_clearance_m`, so a run directory's trajectories describe a
+/// steering body's route coordinates and maneuver state where it has them and
+/// stay absent (`null`) where it does not. They are additive: no existing
+/// column changes meaning or position, and a run that authors no Increment 2
+/// policy writes `null` in each. Version 2 added `body_kind` and the ordered
+/// `segments` pose list; version 1 was the seven columns `tick`, `agent`,
+/// `mode`, `x_m`, `y_m`, `heading_rad`, and `speed_mps`.
+pub const TRAJECTORY_FORMAT_VERSION: u32 = 3;
 
 /// The trajectory columns, in schema and declaration order.
 ///
@@ -59,18 +64,26 @@ pub const TRAJECTORY_FORMAT_VERSION: u32 = 2;
 /// contract: a consumer that reads by position and one that reads by name see
 /// the same record. Units are spelled into the names, as the event records do.
 /// `segments` is an ordered list of `{x_m, y_m, heading_rad}` poses, empty for a
-/// Phase 1 single-envelope body and never null.
-fn trajectory_columns() -> Vec<(&'static str, DataType)> {
+/// Phase 1 single-envelope body and never null. The final five columns are the
+/// optional route-relative tactical state: they are `null` for a pedestrian and
+/// a legacy version-1 path-following agent, which carry no route coordinates.
+/// The third tuple field is the column's nullability.
+fn trajectory_columns() -> Vec<(&'static str, DataType, bool)> {
     vec![
-        ("tick", DataType::UInt64),
-        ("agent", DataType::UInt32),
-        ("mode", DataType::Utf8),
-        ("body_kind", DataType::Utf8),
-        ("x_m", DataType::Float64),
-        ("y_m", DataType::Float64),
-        ("heading_rad", DataType::Float64),
-        ("speed_mps", DataType::Float64),
-        ("segments", segments_data_type()),
+        ("tick", DataType::UInt64, false),
+        ("agent", DataType::UInt32, false),
+        ("mode", DataType::Utf8, false),
+        ("body_kind", DataType::Utf8, false),
+        ("x_m", DataType::Float64, false),
+        ("y_m", DataType::Float64, false),
+        ("heading_rad", DataType::Float64, false),
+        ("speed_mps", DataType::Float64, false),
+        ("segments", segments_data_type(), false),
+        ("route_s_m", DataType::Float64, true),
+        ("route_d_m", DataType::Float64, true),
+        ("target_offset_m", DataType::Float64, true),
+        ("maneuver_state", DataType::Utf8, true),
+        ("predicted_min_clearance_m", DataType::Float64, true),
     ]
 }
 
@@ -115,6 +128,18 @@ pub struct TrajectorySample {
     /// Ordered body segments front to back, each with its own world pose. Empty
     /// for a Phase 1 single-envelope body.
     pub segments: Vec<BodySegmentSample>,
+    /// Arc length along the compiled facility reference in metres, present for a
+    /// steering body that carries route state.
+    pub route_s_m: Option<f64>,
+    /// Signed lateral offset in metres, positive to the left of travel, present
+    /// for a steering body that carries route state.
+    pub route_d_m: Option<f64>,
+    /// The active maneuver's target signed offset, once one is fixed.
+    pub target_offset_m: Option<f64>,
+    /// The active maneuver lifecycle state, present with the route coordinates.
+    pub maneuver_state: Option<ManeuverState>,
+    /// Predicted minimum clearance over the maneuver horizon, once predicted.
+    pub predicted_min_clearance_m: Option<f64>,
 }
 
 /// The Parquet sampled-trajectory artifact a manifest describes.
@@ -219,6 +244,7 @@ impl TrajectoryRecorder {
                 .motion
                 .as_ref()
                 .expect("a full snapshot detail carries motion");
+            let route = motion.route_state;
             self.samples.push(TrajectorySample {
                 tick,
                 agent: sample.id.get(),
@@ -229,6 +255,11 @@ impl TrajectoryRecorder {
                 heading_rad: sample.heading_rad,
                 speed_mps: motion.speed_mps,
                 segments: motion.segments.clone(),
+                route_s_m: route.map(|route| route.s_m),
+                route_d_m: route.map(|route| route.d_m),
+                target_offset_m: route.and_then(|route| route.target_offset_m),
+                maneuver_state: route.map(|route| route.maneuver_state),
+                predicted_min_clearance_m: route.and_then(|route| route.predicted_min_clearance_m),
             });
         }
     }
@@ -322,7 +353,7 @@ fn trajectory_schema() -> SchemaRef {
     Arc::new(Schema::new(
         trajectory_columns()
             .into_iter()
-            .map(|(name, data_type)| Field::new(name, data_type, false))
+            .map(|(name, data_type, nullable)| Field::new(name, data_type, nullable))
             .collect::<Vec<_>>(),
     ))
 }
@@ -364,6 +395,35 @@ fn record_batch(schema: &SchemaRef, samples: &[TrajectorySample]) -> RecordBatch
                 .collect::<Vec<_>>(),
         )),
         Arc::new(segments_array(samples)),
+        Arc::new(Float64Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.route_s_m)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.route_d_m)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(Float64Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.target_offset_m)
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from_iter(
+            samples
+                .iter()
+                .map(|sample| sample.maneuver_state.map(ManeuverState::label)),
+        )),
+        Arc::new(Float64Array::from(
+            samples
+                .iter()
+                .map(|sample| sample.predicted_min_clearance_m)
+                .collect::<Vec<_>>(),
+        )),
     ];
     RecordBatch::try_new(schema.clone(), columns)
         .expect("every column of the trajectory schema has the row count")
@@ -426,6 +486,11 @@ struct TrajectoryColumns<'a> {
     headings: &'a Float64Array,
     speeds: &'a Float64Array,
     segments: &'a ListArray,
+    route_s: &'a Float64Array,
+    route_d: &'a Float64Array,
+    target_offset: &'a Float64Array,
+    maneuver_states: Vec<Option<ManeuverState>>,
+    predicted_min_clearances: &'a Float64Array,
 }
 
 impl<'a> TrajectoryColumns<'a> {
@@ -433,20 +498,25 @@ impl<'a> TrajectoryColumns<'a> {
     fn new(batch: &'a RecordBatch, path: &Path) -> Result<Self, TrajectoryError> {
         let schema = batch.schema();
         let columns = trajectory_columns();
-        for (index, (name, data_type)) in columns.iter().enumerate() {
+        for (index, (name, data_type, nullable)) in columns.iter().enumerate() {
             let Some(field) = schema.fields().get(index) else {
                 return Err(schema_error(
                     path,
                     format!("column {index} ('{name}') is absent"),
                 ));
             };
-            if field.name() != name || field.data_type() != data_type {
+            if field.name() != name
+                || field.data_type() != data_type
+                || field.is_nullable() != *nullable
+            {
                 return Err(schema_error(
                     path,
                     format!(
-                        "column {index} is '{}' of type {}, not '{name}' of type {data_type}",
+                        "column {index} is '{}' of type {} (nullable {}), not '{name}' of type \
+                         {data_type} (nullable {nullable})",
                         field.name(),
-                        field.data_type()
+                        field.data_type(),
+                        field.is_nullable(),
                     ),
                 ));
             }
@@ -473,6 +543,21 @@ impl<'a> TrajectoryColumns<'a> {
                 })
             })
             .collect::<Result<_, _>>()?;
+        let maneuver_states = downcast::<StringArray>(batch, 12)
+            .iter()
+            .map(|label| {
+                label
+                    .map(|label| {
+                        ManeuverState::from_label(label).ok_or_else(|| {
+                            schema_error(
+                                path,
+                                format!("the maneuver-state column holds unknown state '{label}'"),
+                            )
+                        })
+                    })
+                    .transpose()
+            })
+            .collect::<Result<_, _>>()?;
         // The schema check above proves each column's type, so the downcasts
         // cannot fail.
         Ok(Self {
@@ -485,6 +570,11 @@ impl<'a> TrajectoryColumns<'a> {
             headings: downcast(batch, 6),
             speeds: downcast(batch, 7),
             segments: downcast(batch, 8),
+            route_s: downcast(batch, 9),
+            route_d: downcast(batch, 10),
+            target_offset: downcast(batch, 11),
+            maneuver_states,
+            predicted_min_clearances: downcast(batch, 13),
         })
     }
 
@@ -500,8 +590,18 @@ impl<'a> TrajectoryColumns<'a> {
             heading_rad: self.headings.value(row),
             speed_mps: self.speeds.value(row),
             segments: segment_samples(self.segments.value(row)),
+            route_s_m: optional_float(self.route_s, row),
+            route_d_m: optional_float(self.route_d, row),
+            target_offset_m: optional_float(self.target_offset, row),
+            maneuver_state: self.maneuver_states[row],
+            predicted_min_clearance_m: optional_float(self.predicted_min_clearances, row),
         }
     }
+}
+
+/// One nullable float column cell: `None` when the cell is null.
+fn optional_float(column: &Float64Array, row: usize) -> Option<f64> {
+    (!column.is_null(row)).then(|| column.value(row))
 }
 
 /// Reconstruct the ordered body-segment poses of one row from its list cell.
@@ -563,20 +663,20 @@ fn schema_error(path: &Path, detail: String) -> TrajectoryError {
 mod tests {
     use super::*;
 
-    /// The declared columns are the schema: names, types, order, and no
+    /// The declared columns are the schema: names, types, order, and
     /// nullability, so a reader can trust either names or positions.
     #[test]
     fn the_declared_columns_are_the_written_schema() {
         let schema = trajectory_schema();
         let columns = trajectory_columns();
         assert_eq!(schema.fields().len(), columns.len());
-        for (field, (name, data_type)) in schema.fields().iter().zip(columns) {
+        for (field, (name, data_type, nullable)) in schema.fields().iter().zip(columns) {
             assert_eq!(field.name(), name);
             assert_eq!(field.data_type(), &data_type);
-            assert!(!field.is_nullable());
+            assert_eq!(field.is_nullable(), nullable, "column '{name}' nullability");
         }
         // The artifact declares its own column-shape version.
-        assert_eq!(TRAJECTORY_FORMAT_VERSION, 2);
+        assert_eq!(TRAJECTORY_FORMAT_VERSION, 3);
     }
 
     /// A recorded sample carries the kernel's own values, so the artifact
@@ -611,8 +711,56 @@ mod tests {
                 heading_rad: agent.heading_rad,
                 speed_mps: motion.speed_mps,
                 segments: motion.segments.clone(),
+                route_s_m: None,
+                route_d_m: None,
+                target_offset_m: None,
+                maneuver_state: None,
+                predicted_min_clearance_m: None,
             }]
         );
+    }
+
+    /// The artifact round-trips the optional route-relative tactical columns,
+    /// including their absence, so a consumer reads the same route state the
+    /// kernel reported and a legacy row stays absent rather than zero.
+    #[test]
+    fn the_artifact_round_trips_optional_route_state() {
+        let present = TrajectorySample {
+            tick: 1,
+            agent: 0,
+            mode: "vehicle".to_owned(),
+            body_kind: tangle_model::BodyKind::Capsule,
+            x_m: 1.0,
+            y_m: 2.0,
+            heading_rad: 0.5,
+            speed_mps: 3.0,
+            segments: Vec::new(),
+            route_s_m: Some(12.5),
+            route_d_m: Some(-0.25),
+            target_offset_m: Some(1.75),
+            maneuver_state: Some(ManeuverState::Returning),
+            predicted_min_clearance_m: Some(0.6),
+        };
+        let absent = TrajectorySample {
+            route_s_m: None,
+            route_d_m: None,
+            target_offset_m: None,
+            maneuver_state: None,
+            predicted_min_clearance_m: None,
+            ..present.clone()
+        };
+        let rows = vec![present, absent];
+
+        let directory = std::env::temp_dir().join(format!(
+            "tangle-trajectory-route-state-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch directory is created");
+        write_trajectories(&directory, &rows).expect("trajectories write");
+        let read = read_trajectories(&directory).expect("trajectories read back");
+        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(read, rows);
     }
 
     /// The artifact round-trips the body kind and the ordered segment poses, so
@@ -632,6 +780,11 @@ mod tests {
                 heading_rad: 0.5,
                 speed_mps: 3.0,
                 segments,
+                route_s_m: None,
+                route_d_m: None,
+                target_offset_m: None,
+                maneuver_state: None,
+                predicted_min_clearance_m: None,
             };
         let rows = vec![
             sample(0, BodyKind::Box, Vec::new()),
@@ -683,4 +836,108 @@ mod tests {
       },
     }
     "#;
+
+    /// A version-2 narrow mode on a compiled facility whose reference path is
+    /// the movement's path, so the recorder observes route state on a real run.
+    const ROUTE_STATE_V2: &str = r#"
+    {
+      schema_version: 2,
+      id: 'route_state_v2',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [ { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] } ],
+      portals: [
+        { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+        { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+      ],
+      boundaries: [ { id: 'world', points: [
+        { x: -10.0, y: -10.0 }, { x: 210.0, y: -10.0 },
+        { x: 210.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+      ] } ],
+      regions: [ { id: 'band', points: [
+        { x: 0.0, y: -1.5 }, { x: 200.0, y: -1.5 },
+        { x: 200.0, y: 1.5 }, { x: 0.0, y: 1.5 },
+      ] } ],
+      facilities: [
+        { id: 'bikeway', region: 'band', reference_path: 'guide',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: { modes: [ 'rider' ] }, lateral_use: 'shared',
+          speed_policy: { limit_mps: null } },
+      ],
+      movements: [
+        { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+          direction: 'forward' },
+      ],
+      mode_templates: [
+        {
+          id: 'rider',
+          body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+            radius_m: { min: 0.35, max: 0.35 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 6.0, max: 6.0 },
+            max_accel_mps2: { min: 1.2, max: 1.2 },
+            comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+            time_gap_s: { min: 1.0, max: 1.0 },
+            steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+            lateral_clearance_m: { min: 0.3, max: 0.3 },
+            compliance: { min: 1.0, max: 1.0 },
+          },
+        },
+      ],
+      permissions: [],
+      demand: [
+        { id: 'rider_inflow', mode: 'rider',
+          spawn: { rate: {
+            portal: 'entry',
+            rate_per_hour: 900.0,
+            interval_s: { start_s: 0.0, end_s: null },
+            choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+          } } },
+      ],
+    }
+    "#;
+
+    /// The recorder reads a real run's route state into the artifact: a
+    /// steering body on a compiled facility writes non-null `route_s_m`,
+    /// `route_d_m`, and `maneuver_state`, while the maneuver targets it has not
+    /// fixed stay absent.
+    #[test]
+    fn a_narrow_run_records_route_coordinates_into_the_artifact() {
+        use tangle_model::{CompiledScenario, parse_scenario_source_v2};
+
+        let source = parse_scenario_source_v2(ROUTE_STATE_V2).expect("the document is version 2");
+        let scenario = CompiledScenario::compile_v2(source).expect("the scenario compiles");
+        let policy = TrajectorySampling {
+            retention: crate::run_dir::TrajectoryRetention::Full,
+            stride_ticks: 1,
+            max_samples: 400,
+        };
+        let (_, _, samples) = crate::trace::canonical_run_sampled(
+            scenario,
+            tangle_sim::RunConfig::new(0),
+            400,
+            &policy,
+        )
+        .expect("the run completes");
+
+        let recorded: Vec<&TrajectorySample> = samples
+            .iter()
+            .filter(|sample| sample.maneuver_state.is_some())
+            .collect();
+        assert!(
+            !recorded.is_empty(),
+            "a narrow run must record route state for its steering bodies"
+        );
+        for sample in recorded {
+            assert!(sample.route_s_m.is_some(), "route_s_m must be present");
+            assert!(sample.route_d_m.is_some(), "route_d_m must be present");
+            assert_eq!(sample.maneuver_state, Some(ManeuverState::Following));
+            assert_eq!(sample.target_offset_m, None);
+            assert_eq!(sample.predicted_min_clearance_m, None);
+        }
+    }
 }

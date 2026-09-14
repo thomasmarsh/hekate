@@ -42,7 +42,7 @@ use tangle_model::{
     PedestrianRouteId, PortalId, RuleKind, SignalColor, SignalId,
 };
 
-use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore};
+use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
 use crate::compliance::{self, ComplianceDecision, ComplianceReason, SignalAction};
 use crate::config::RunConfig;
 use crate::control::{Constraint, IDM_STANDSTILL_GAP_M};
@@ -63,11 +63,11 @@ use crate::rng::{
 };
 use crate::safety::SafetyMonitor;
 use crate::signal::{self, PedestrianSignalColor, SignalRuntime};
-use crate::snapshot::{AgentSample, MotionSample, Snapshot, SnapshotDetail};
+use crate::snapshot::{AgentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail};
 use crate::stage::{
-    AbortCondition, Commitment, MotionCommand, MotionControl, Observation, PedestrianObservation,
-    PhysicalAdvance, RelevantWorldQuery, Tactic, TacticReason, TacticTarget, TacticalChoice,
-    VehicleObservation,
+    AbortCondition, ManeuverState, MotionCommand, MotionControl, Observation,
+    PedestrianObservation, PhysicalAdvance, RelevantWorldQuery, Tactic, TacticReason, TacticTarget,
+    TacticalChoice, VehicleObservation,
 };
 use crate::time::SimTime;
 use crate::units::Seconds;
@@ -359,6 +359,9 @@ impl Simulation {
                     narrow_profile: None,
                     pedestrian_route: None,
                     pedestrian_profile: None,
+                    // The walking skeleton is a legacy version-1 path population,
+                    // so it carries no route coordinates.
+                    route_state: None,
                 });
             }
             spawned_total = u64::from(population.vehicle_count);
@@ -441,6 +444,16 @@ impl Simulation {
                         decision: self.agents.decision[index],
                         pedestrian_decision: self.agents.pedestrian_decision[index],
                         yield_crossing: self.agents.yield_crossing[index],
+                        route_state: self.agents.route_state[index].map(|state| RouteStateSample {
+                            s_m: state.s_m,
+                            d_m: state.d_m,
+                            maneuver_state: state.maneuver,
+                            target_offset_m: state.target_offset_m,
+                            target_facility: state.target_facility,
+                            predicted_min_clearance_m: state.predicted_min_clearance_m,
+                            target_clearance_m: state.target_clearance_m,
+                            horizon_s: state.horizon_s,
+                        }),
                     }),
                 },
             })
@@ -1389,6 +1402,12 @@ impl Simulation {
         // still follow the nearest vehicle ahead; the desired speed remains the
         // target once the entry is safe.
         let speed_mps = self.safe_entry_speed(path_id, entry_distance, direction, &profile);
+        // A steering mode on a compiled facility initializes its route
+        // coordinates by projecting the entry pose onto the facility reference.
+        // The family check inside keeps passenger cars and narrow agents on one
+        // code path; a version-1 demand has no mode and carries no state.
+        let route_state =
+            mode.and_then(|mode| self.route_state_for(mode, path_id, position, direction));
 
         self.agents.push(AgentInit {
             mode: AgentMode::Vehicle,
@@ -1405,6 +1424,7 @@ impl Simulation {
             narrow_profile,
             pedestrian_route: None,
             pedestrian_profile: None,
+            route_state,
         });
         self.spawned_total += 1;
         self.events.push(Event::Spawned {
@@ -1488,6 +1508,9 @@ impl Simulation {
             narrow_profile: None,
             pedestrian_route: Some(route_id),
             pedestrian_profile: Some(profile),
+            // A pedestrian walks in world space and carries no route
+            // coordinates.
+            route_state: None,
         });
         self.spawned_total += 1;
         self.events.push(Event::Spawned {
@@ -1555,6 +1578,65 @@ impl Simulation {
             speed_mps = speed_mps.min(limit);
         }
         speed_mps.max(0.0)
+    }
+
+    /// Route-relative state for a newly spawned agent, when its mode steers and
+    /// its route lies on a compiled facility that mode may use.
+    ///
+    /// The decision is taken from the compiled mode family and the compiled
+    /// facility geometry, never from a mode or scenario id: a wheeled box, a
+    /// wheeled capsule, and a future articulated chain share the one path, and
+    /// a holonomic walking body carries no route coordinates. The mode's
+    /// resolved lateral policy seeds the target clearance and horizon when it
+    /// declares one, and `None` leaves them absent exactly as Increment 1.
+    fn route_state_for(
+        &self,
+        mode: ModeTemplateId,
+        path: PathId,
+        position: DVec2,
+        direction: f64,
+    ) -> Option<RouteState> {
+        let template = self.scenario.mode_template(mode)?;
+        if template.family() == Some(AgentFamily::HolonomicCircle) {
+            return None;
+        }
+        let facility = self.scenario.facilities().iter().find(|facility| {
+            facility.reference_path() == Some(path) && facility.permits_mode(mode)
+        })?;
+        let geometry = facility.reference()?.geometry();
+        let lateral = template.lateral();
+        Some(RouteState::project(
+            facility.id(),
+            geometry,
+            position,
+            direction,
+            lateral.map(|policy| policy.target_clearance_m()),
+            lateral.map(|policy| policy.horizon_s()),
+        ))
+    }
+
+    /// Reproject one agent's integrated world pose into its facility route
+    /// frame.
+    ///
+    /// The world pose is the integrated truth, so the tactical coordinates are
+    /// projected back from it after integration; the pose is never moved to a
+    /// target offset. An agent with no route state is left untouched, so the
+    /// legacy path population costs nothing.
+    fn reproject_route_state(&mut self, index: usize, direction: f64) {
+        let Some(mut state) = self.agents.route_state[index] else {
+            return;
+        };
+        let position = self.agents.position[index];
+        let Some(geometry) = self
+            .scenario
+            .facility(state.facility)
+            .and_then(|facility| facility.reference())
+            .map(|reference| reference.geometry())
+        else {
+            return;
+        };
+        state.reproject(geometry, position, direction);
+        self.agents.route_state[index] = Some(state);
     }
 }
 
@@ -1673,34 +1755,34 @@ impl Simulation {
 impl TacticalChoice for Simulation {
     /// Stage 2: record the one maneuver the agent executes this step.
     fn choose_tactic(&self, _index: usize, observation: &Observation) -> Tactic {
-        let (reason, target, commitment, abort) = match observation {
+        let (reason, target, maneuver_state, abort) = match observation {
             Observation::Vehicle(vehicle) => {
                 if vehicle.stop_line.is_some() {
                     (
                         TacticReason::StopLine,
                         TacticTarget::StopLine,
-                        Commitment::Committed,
+                        ManeuverState::Committed,
                         AbortCondition::ConstraintClears,
                     )
                 } else if let Some((crossing, _)) = vehicle.crossing_yield {
                     (
                         TacticReason::YieldCrossing,
                         TacticTarget::Crossing(crossing),
-                        Commitment::Committed,
+                        ManeuverState::Committed,
                         AbortCondition::ConstraintClears,
                     )
                 } else if let Some((leader, _)) = vehicle.leader {
                     (
                         TacticReason::Follow,
                         TacticTarget::Leader(leader),
-                        Commitment::Preparing,
+                        ManeuverState::Preparing,
                         AbortCondition::ConstraintClears,
                     )
                 } else {
                     (
                         TacticReason::FreeFlow,
                         TacticTarget::Route,
-                        Commitment::Preparing,
+                        ManeuverState::Preparing,
                         AbortCondition::RouteComplete,
                     )
                 }
@@ -1716,21 +1798,21 @@ impl TacticalChoice for Simulation {
                     (
                         TacticReason::SignalWait,
                         target,
-                        Commitment::Committed,
+                        ManeuverState::Committed,
                         AbortCondition::ConstraintClears,
                     )
                 } else if let Some(target) = pedestrian.target {
                     (
                         TacticReason::SeekWaypoint,
                         TacticTarget::Waypoint(target),
-                        Commitment::Preparing,
+                        ManeuverState::Preparing,
                         AbortCondition::WaypointReached,
                     )
                 } else {
                     (
                         TacticReason::SeekWaypoint,
                         TacticTarget::Route,
-                        Commitment::Preparing,
+                        ManeuverState::Preparing,
                         AbortCondition::RouteComplete,
                     )
                 }
@@ -1739,7 +1821,7 @@ impl TacticalChoice for Simulation {
         Tactic {
             reason,
             target,
-            commitment,
+            maneuver_state,
             abort,
             started_at: self.time(),
         }
@@ -1906,6 +1988,7 @@ impl PhysicalAdvance for Simulation {
                 self.agents.distance_m[index] = distance_m;
                 self.agents.position[index] = path.position_at(distance_m);
                 self.agents.heading_rad[index] = path.heading_at(distance_m);
+                self.reproject_route_state(index, direction);
 
                 let exited = if direction < 0.0 {
                     travelled <= 0.0
@@ -2365,6 +2448,7 @@ mod tests {
             narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
+            route_state: None,
         });
 
         sim.step();
@@ -2474,6 +2558,7 @@ mod tests {
             narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
+            route_state: None,
         });
         sim.spatial.rebuild(&sim.agents);
         assert!(
@@ -2552,6 +2637,10 @@ mod tests {
                     motion.segments.is_empty(),
                     "a Phase 1 body carries no ordered segments"
                 );
+                assert!(
+                    motion.route_state.is_none(),
+                    "a legacy version-1 path-following body carries no route state"
+                );
                 match motion.mode {
                     AgentMode::Vehicle => {
                         assert_eq!(motion.body_kind, BodyKind::Box);
@@ -2610,7 +2699,7 @@ mod tests {
         let tactic = sim.choose_tactic(0, &observation);
         assert_eq!(tactic.reason, TacticReason::Follow);
         assert_eq!(tactic.target, TacticTarget::Leader(AgentId::from_index(1)));
-        assert_eq!(tactic.commitment, Commitment::Preparing);
+        assert_eq!(tactic.maneuver_state, ManeuverState::Preparing);
         assert_eq!(tactic.abort, AbortCondition::ConstraintClears);
         assert_eq!(tactic.started_at, sim.time());
     }
@@ -2642,7 +2731,7 @@ mod tests {
         let tactic = sim.choose_tactic(0, &observation);
         assert_eq!(tactic.reason, TacticReason::StopLine);
         assert_eq!(tactic.target, TacticTarget::StopLine);
-        assert_eq!(tactic.commitment, Commitment::Committed);
+        assert_eq!(tactic.maneuver_state, ManeuverState::Committed);
         assert_eq!(tactic.abort, AbortCondition::ConstraintClears);
         assert_eq!(tactic.started_at, sim.time());
 
@@ -2765,7 +2854,7 @@ mod tests {
         let tactic = sim.choose_tactic(index, &observation);
         assert_eq!(tactic.reason, TacticReason::SeekWaypoint);
         assert_eq!(tactic.target, TacticTarget::Waypoint(target));
-        assert_eq!(tactic.commitment, Commitment::Preparing);
+        assert_eq!(tactic.maneuver_state, ManeuverState::Preparing);
         assert_eq!(tactic.abort, AbortCondition::WaypointReached);
 
         let command = sim.command_motion(index, &observation, &tactic, dt);

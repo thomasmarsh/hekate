@@ -5,12 +5,13 @@
 //! kernel.
 
 use glam::DVec2;
-use tangle_model::{BodyKind, CrossingId, MovementId, PathId, PedestrianRouteId};
+use tangle_model::{BodyKind, CrossingId, FacilityId, MovementId, PathId, PedestrianRouteId};
 
 use crate::agent::{AgentId, AgentMode};
 use crate::compliance::ComplianceDecision;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
+use crate::stage::ManeuverState;
 use crate::time::SimTime;
 
 /// How much per-agent detail a snapshot carries.
@@ -85,6 +86,38 @@ pub struct MotionSample {
     /// Crossing a vehicle is currently yielding to, present for a vehicle
     /// stopped for an occupied crossing. `None` when it is not yielding.
     pub yield_crossing: Option<CrossingId>,
+    /// Route-relative tactical state, present for a steering body whose route
+    /// lies on a compiled facility. `None` for a pedestrian and a legacy
+    /// version-1 path-following agent, which carry no route coordinates.
+    pub route_state: Option<RouteStateSample>,
+}
+
+/// The optional route-relative tactical state of one agent.
+///
+/// The world pose stays collision and output truth; these coordinates are the
+/// pose projected onto the compiled facility reference. A sample is present
+/// only for an agent that carries route state, so a consumer distinguishes
+/// "no route state" (`None`) from a coordinate of zero.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RouteStateSample {
+    /// Arc length along the compiled facility reference in metres.
+    pub s_m: f64,
+    /// Signed lateral offset in metres, positive to the left of the agent's own
+    /// direction of travel.
+    pub d_m: f64,
+    /// The agent's active maneuver lifecycle state.
+    pub maneuver_state: ManeuverState,
+    /// The active maneuver's target signed offset, once one is fixed.
+    pub target_offset_m: Option<f64>,
+    /// The target facility of a cross-facility transition, once one is fixed.
+    pub target_facility: Option<FacilityId>,
+    /// Predicted minimum clearance over the maneuver horizon, once predicted.
+    pub predicted_min_clearance_m: Option<f64>,
+    /// The mode's resolved target clearance, when its policy declares one.
+    pub target_clearance_m: Option<f64>,
+    /// The mode's resolved feasible horizon in seconds, when its policy
+    /// declares one.
+    pub horizon_s: Option<f64>,
 }
 
 /// One agent as observed at a single instant.

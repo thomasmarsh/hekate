@@ -74,19 +74,56 @@ pub(crate) enum TacticTarget {
     Waypoint(PedestrianWaypoint),
 }
 
-/// Where a tactic stands in the maneuver commitment state machine.
+/// Where a tactic stands in the maneuver lifecycle state machine.
 ///
 /// `PHASE_2_PLAN.md` names `following -> preparing -> committed -> returning`
-/// with an `aborted` exit. Phase 1 selects a tactic each tick and commits no
-/// maneuver, so it uses the first two states: a free or following tactic is
-/// reselected at the next decision and is [`Commitment::Preparing`], while a
-/// tactic held by an active control is [`Commitment::Committed`] for the step.
+/// with an `aborted` exit, and `docs/schema-v2-contract.md` *Maneuver lifecycle*
+/// fixes the five states with these names. Increment 1 carries the first two as
+/// its tactical record: a free or following tactic is reselected at the next
+/// decision and is [`ManeuverState::Preparing`], while a tactic held by an
+/// active control is [`ManeuverState::Committed`] for the step. The lateral
+/// lifecycle — selecting a maneuver, committing a claim, returning, and aborting
+/// — is Increment 2's state machine; this record is the state representation it
+/// drives, and no state is spelled differently anywhere else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Commitment {
-    /// Selected for this step; reselected at the next decision.
+pub enum ManeuverState {
+    /// No active lateral maneuver: the agent holds its offset and runs the
+    /// longitudinal tactics.
+    Following,
+    /// A target and candidate corridor are fixed and a claim is sought.
     Preparing,
-    /// An active control holds the command to this tactic for the step.
+    /// The claim is granted and the agent displaces toward the target.
     Committed,
+    /// The passed body is cleared and the agent returns to its own offset.
+    Returning,
+    /// The maneuver ended without reaching its target.
+    Aborted,
+}
+
+impl ManeuverState {
+    /// Stable lowercase label for snapshots, trajectories, and diagnostics.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Following => "following",
+            Self::Preparing => "preparing",
+            Self::Committed => "committed",
+            Self::Returning => "returning",
+            Self::Aborted => "aborted",
+        }
+    }
+
+    /// Parse a label written by [`Self::label`], or `None` for an unknown label.
+    pub fn from_label(label: &str) -> Option<Self> {
+        [
+            Self::Following,
+            Self::Preparing,
+            Self::Committed,
+            Self::Returning,
+            Self::Aborted,
+        ]
+        .into_iter()
+        .find(|state| state.label() == label)
+    }
 }
 
 /// The condition that ends a tactic.
@@ -112,8 +149,8 @@ pub(crate) struct Tactic {
     pub(crate) reason: TacticReason,
     /// What the maneuver acts on.
     pub(crate) target: TacticTarget,
-    /// Where the maneuver stands in its commitment lifecycle.
-    pub(crate) commitment: Commitment,
+    /// Where the maneuver stands in its lifecycle.
+    pub(crate) maneuver_state: ManeuverState,
     /// What ends the maneuver.
     pub(crate) abort: AbortCondition,
     /// Simulation time the maneuver was selected at.

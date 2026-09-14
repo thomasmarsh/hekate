@@ -6,12 +6,15 @@
 //! shift; state-affecting logic therefore never iterates a hash map.
 
 use glam::DVec2;
-use tangle_model::{BodyKind, CrossingId, MovementId, PathId, PedestrianRouteId};
+use tangle_model::{
+    BodyKind, CompiledReferencePath, CrossingId, FacilityId, MovementId, PathId, PedestrianRouteId,
+};
 
 use crate::compliance::ComplianceDecision;
 use crate::narrow::NarrowProfile;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
+use crate::stage::ManeuverState;
 
 /// Which mode of agent a slot holds.
 ///
@@ -66,6 +69,88 @@ impl AgentId {
     }
 }
 
+/// Route-relative tactical state of one steering agent on a compiled facility.
+///
+/// `s_m` and `d_m` are the agent's authoritative world pose projected onto the
+/// facility's compiled reference. The world pose stays collision and output
+/// truth; this state is projected back after integration and is never written
+/// to the world directly. It is present only for an agent whose compiled mode
+/// family steers (a wheeled box or capsule) and whose route lies on a compiled
+/// facility, so a pedestrian and a legacy version-1 path-following agent carry
+/// no route state and keep their current output.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RouteState {
+    /// The facility whose compiled reference the coordinates are measured on.
+    pub(crate) facility: FacilityId,
+    /// Arc length along the facility reference in metres.
+    pub(crate) s_m: f64,
+    /// Signed lateral offset in metres, positive to the left of the agent's own
+    /// direction of travel.
+    pub(crate) d_m: f64,
+    /// The agent's active maneuver lifecycle state.
+    pub(crate) maneuver: ManeuverState,
+    /// The active maneuver's target signed offset, once one is fixed.
+    pub(crate) target_offset_m: Option<f64>,
+    /// The target facility of a cross-facility transition, once one is fixed.
+    pub(crate) target_facility: Option<FacilityId>,
+    /// Predicted minimum clearance over the maneuver horizon, once predicted.
+    pub(crate) predicted_min_clearance_m: Option<f64>,
+    /// The mode's resolved target clearance, when its compiled policy declares
+    /// one; `None` for a mode with no free lateral motion.
+    pub(crate) target_clearance_m: Option<f64>,
+    /// The mode's resolved feasible horizon in seconds, when its compiled policy
+    /// declares one; `None` for a mode with no free lateral motion.
+    pub(crate) horizon_s: Option<f64>,
+}
+
+impl RouteState {
+    /// Project a world pose onto a compiled facility reference.
+    ///
+    /// `direction` is the agent's longitudinal travel sign (`1.0` forward,
+    /// `-1.0` reverse). The reference offsets are measured against the
+    /// reference's own forward tangent, so the signed offset is mirrored into
+    /// the agent's own travel frame: a body on the reference's left while
+    /// travelling forward has a positive offset, and the same body travelling
+    /// in reverse has the negated one.
+    pub(crate) fn project(
+        facility: FacilityId,
+        geometry: &CompiledReferencePath,
+        position: DVec2,
+        direction: f64,
+        target_clearance_m: Option<f64>,
+        horizon_s: Option<f64>,
+    ) -> Self {
+        let coordinate = geometry.project(position);
+        Self {
+            facility,
+            s_m: coordinate.s(),
+            d_m: coordinate.d() * direction,
+            maneuver: ManeuverState::Following,
+            target_offset_m: None,
+            target_facility: None,
+            predicted_min_clearance_m: None,
+            target_clearance_m,
+            horizon_s,
+        }
+    }
+
+    /// Reproject an integrated world pose back into the facility route frame.
+    ///
+    /// The world pose is the integrated truth, so this is the drift check that
+    /// keeps the tactical coordinates consistent with it; it never moves the
+    /// pose and never writes a target offset to `d`.
+    pub(crate) fn reproject(
+        &mut self,
+        geometry: &CompiledReferencePath,
+        position: DVec2,
+        direction: f64,
+    ) {
+        let coordinate = geometry.project(position);
+        self.s_m = coordinate.s();
+        self.d_m = coordinate.d() * direction;
+    }
+}
+
 /// Initial state for one agent slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct AgentInit {
@@ -106,6 +191,10 @@ pub(crate) struct AgentInit {
     /// Sampled pedestrian body and gait, present for demand-generated
     /// pedestrians.
     pub pedestrian_profile: Option<PedestrianProfile>,
+    /// Route-relative tactical state, present for a steering agent whose route
+    /// lies on a compiled facility and absent for a pedestrian and a legacy
+    /// version-1 path-following agent.
+    pub route_state: Option<RouteState>,
 }
 
 /// Contiguous, stable-order agent state.
@@ -145,6 +234,10 @@ pub(crate) struct AgentStore {
     /// for every other agent, and for a yielding vehicle once the crossing
     /// clears.
     pub(crate) yield_crossing: Vec<Option<CrossingId>>,
+    /// Route-relative tactical state of each steering agent on a compiled
+    /// facility, in slot order. `None` for a pedestrian and for a legacy
+    /// version-1 path-following agent, so absent state stays absent.
+    pub(crate) route_state: Vec<Option<RouteState>>,
 }
 
 impl AgentStore {
@@ -175,6 +268,7 @@ impl AgentStore {
         self.decision.push(None);
         self.pedestrian_decision.push(None);
         self.yield_crossing.push(None);
+        self.route_state.push(init.route_state);
         id
     }
 
@@ -209,6 +303,7 @@ mod tests {
             narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
+            route_state: None,
         }
     }
 
@@ -260,5 +355,140 @@ mod tests {
         assert_eq!(store.len(), 2);
         assert_eq!(store.alive_count(), 1);
         assert_eq!(store.push(init(20.0)), AgentId::from_index(2));
+    }
+
+    /// A straight reference along the world x axis, so the left normal is
+    /// `+y` and an offset's sign is unambiguous.
+    fn straight_reference() -> CompiledReferencePath {
+        CompiledReferencePath::from_polyline(&[DVec2::new(0.0, 0.0), DVec2::new(100.0, 0.0)])
+    }
+
+    /// Projection signs are measured in the agent's own travel frame: a point
+    /// left of the reference while travelling forward is positively offset, and
+    /// the same point travelling in reverse is negatively offset.
+    #[test]
+    fn projection_mirrors_the_signed_offset_in_the_travel_frame() {
+        let reference = straight_reference();
+        let left_of_forward = DVec2::new(10.0, 1.5);
+        let forward = RouteState::project(
+            FacilityId::from_index(0),
+            &reference,
+            left_of_forward,
+            1.0,
+            None,
+            None,
+        );
+        assert!((forward.s_m - 10.0).abs() < 1e-12);
+        assert!((forward.d_m - 1.5).abs() < 1e-12);
+
+        let reverse = RouteState::project(
+            FacilityId::from_index(0),
+            &reference,
+            left_of_forward,
+            -1.0,
+            None,
+            None,
+        );
+        assert!((reverse.s_m - 10.0).abs() < 1e-12);
+        assert!((reverse.d_m + 1.5).abs() < 1e-12);
+        assert_eq!(reverse.d_m, -forward.d_m);
+    }
+
+    /// A projection also carries the mode's compiled maneuver policy and starts
+    /// in the `following` state, and reprojection keeps only the geometry.
+    #[test]
+    fn projection_carries_the_maneuver_policy_and_follows() {
+        let reference = straight_reference();
+        let mut state = RouteState::project(
+            FacilityId::from_index(3),
+            &reference,
+            DVec2::new(4.0, 0.25),
+            1.0,
+            Some(0.75),
+            Some(4.0),
+        );
+        assert_eq!(state.maneuver, ManeuverState::Following);
+        assert_eq!(state.target_clearance_m, Some(0.75));
+        assert_eq!(state.horizon_s, Some(4.0));
+        assert_eq!(state.target_offset_m, None);
+        assert_eq!(state.target_facility, None);
+        assert_eq!(state.predicted_min_clearance_m, None);
+
+        state.reproject(&reference, DVec2::new(20.0, -0.5), 1.0);
+        assert!((state.s_m - 20.0).abs() < 1e-12);
+        assert!((state.d_m + 0.5).abs() < 1e-12);
+        // Reprojection never clears or rewrites the maneuver policy.
+        assert_eq!(state.target_clearance_m, Some(0.75));
+    }
+
+    /// Route state is stored in slot order and a dead slot keeps it, so the
+    /// column never shifts under a despawn.
+    #[test]
+    fn route_state_is_stored_per_slot_and_survives_a_despawn() {
+        let reference = straight_reference();
+        let mut store = AgentStore::default();
+        store.push(init(0.0));
+        store.push(AgentInit {
+            route_state: Some(RouteState::project(
+                FacilityId::from_index(1),
+                &reference,
+                DVec2::new(5.0, 0.0),
+                1.0,
+                None,
+                None,
+            )),
+            ..init(5.0)
+        });
+        assert_eq!(store.route_state[0], None);
+        assert_eq!(
+            store.route_state[1].map(|state| state.facility),
+            Some(FacilityId::from_index(1))
+        );
+
+        store.alive[1] = false;
+        assert_eq!(
+            store.route_state[1].map(|state| state.s_m),
+            Some(5.0),
+            "a dead slot keeps its route state, so no column shifts"
+        );
+    }
+
+    /// Every maneuver lifecycle state the contract fixes is representable and
+    /// storable, and its stable label round-trips for snapshot and trajectory
+    /// serialization.
+    #[test]
+    fn every_maneuver_state_is_recorded_and_labeled() {
+        let states = [
+            ManeuverState::Following,
+            ManeuverState::Preparing,
+            ManeuverState::Committed,
+            ManeuverState::Returning,
+            ManeuverState::Aborted,
+        ];
+        let reference = straight_reference();
+        let mut store = AgentStore::default();
+        for (offset, state) in states.into_iter().enumerate() {
+            assert_eq!(ManeuverState::from_label(state.label()), Some(state));
+            let mut route = RouteState::project(
+                FacilityId::from_index(0),
+                &reference,
+                DVec2::new(offset as f64, 0.0),
+                1.0,
+                None,
+                None,
+            );
+            route.maneuver = state;
+            store.push(AgentInit {
+                route_state: Some(route),
+                ..init(offset as f64)
+            });
+        }
+        let stored: Vec<ManeuverState> = store
+            .route_state
+            .iter()
+            .map(|state| state.expect("every slot carries route state").maneuver)
+            .collect();
+        assert_eq!(stored, states);
+        assert_eq!(ManeuverState::from_label("not_a_state"), None);
     }
 }

@@ -1364,6 +1364,7 @@ mod tests {
                 decision: None,
                 pedestrian_decision: None,
                 yield_crossing: None,
+                route_state: None,
             }),
         }
     }

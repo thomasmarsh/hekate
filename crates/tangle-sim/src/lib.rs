@@ -83,7 +83,10 @@ pub use query::{
 pub use safety::{NEAR_MISS_THRESHOLD_M, QUEUE_STOP_SPEED_MPS};
 pub use signal::PedestrianSignalColor;
 pub use sim::{InitError, RunSummary, Simulation, StepOutput};
-pub use snapshot::{AgentSample, BodySegmentSample, MotionSample, Snapshot, SnapshotDetail};
+pub use snapshot::{
+    AgentSample, BodySegmentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail,
+};
+pub use stage::ManeuverState;
 pub use swept::{SweptBody, TOI_TIME_TOLERANCE, TimeOfImpact, band_entry, time_of_impact};
 pub use time::SimTime;
 pub use units::Seconds;

@@ -514,6 +514,7 @@ mod tests {
             narrow_profile: None,
             pedestrian_route: None,
             pedestrian_profile: None,
+            route_state: None,
         }
     }
 
