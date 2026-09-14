@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:12Z
+updated: 2026-09-14T13:36:07Z
 summary: Check in Increment 2 narrow passing, motor overtaking, and lane-transition fixtures.
 next: [[TAS-129-check-in-the-increment-2-passing-fixtures]]
 ---
@@ -31,11 +31,11 @@ close-clearance and prohibited-boundary variants, through the CLI.
 
 # Context
 
-Gated on [[TAS-093-enable-same-facility-narrow-user-passing]],
-[[TAS-094-enable-motor-vehicle-overtaking-of-narrow-users]],
-[[TAS-095-complete-lane-transitions-and-safe-aborts]], and
-[[TAS-101-measure-close-passes-with-exact-clearance-evidence]]. Owns
-scenarios/phase2/inc2 passing fixtures, one focused integration suite, and only
+Depends on [[TAS-093-enable-same-facility-narrow-user-passing]] at context_rev 1.
+Depends on [[TAS-094-enable-motor-vehicle-overtaking-of-narrow-users]] at context_rev 1.
+Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
+Gated on [[TAS-101-measure-close-passes-with-exact-clearance-evidence]].
+Owns scenarios/phase2/inc2 passing fixtures, one focused integration suite, and only
 their path entries in docs/benchmark-matrix.md and .json.
 
 Gates my scenario artifacts enter: apps/tangle-cli/tests/migration_regression.rs
