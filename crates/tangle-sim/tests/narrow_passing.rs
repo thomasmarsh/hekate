@@ -100,7 +100,7 @@ fn drive(sim: &mut Simulation, ticks: u64) -> Trace {
         }
         let frame = sim.snapshot(SnapshotDetail::Position);
         for sample in frame.agents() {
-            if let Some(reason) = sim.narrow_pass_reason(sample.id) {
+            if let Some(reason) = sim.lateral_maneuver_reason(sample.id) {
                 trace.reasons.entry(sample.id).or_default().insert(reason);
             }
             if let Some(before) = previous.get(&sample.id) {

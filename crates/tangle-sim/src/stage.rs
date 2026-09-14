@@ -235,7 +235,8 @@ pub enum ManeuverReason {
     /// Selection: a visible slower leader ahead is the obstacle the pass
     /// displaces around.
     SlowerLeader,
-    /// Rejection: the mode's compiled tactics carry no `Pass` capability.
+    /// Rejection: the mode's compiled tactics carry no `Pass` or `Overtake`
+    /// capability.
     Capability,
     /// Rejection: an applicable `overtake` statement prohibits passing, or the
     /// facility offers no lateral maneuver target.

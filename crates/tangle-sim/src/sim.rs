@@ -52,7 +52,7 @@ use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, 
 use crate::event::{DespawnReason, Event, ViolationKind};
 use crate::index::{self, SpatialIndex};
 use crate::metrics::InteractionMetrics;
-use crate::narrow::{self, NarrowProfile, sample_narrow_profile};
+use crate::narrow::{self, sample_narrow_profile};
 use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
 use crate::prediction::{
@@ -60,7 +60,8 @@ use crate::prediction::{
     predict_maneuver_corridor,
 };
 use crate::profile::{
-    PedestrianProfile, VehicleProfile, sample_pedestrian_profile, sample_profile,
+    PedestrianProfile, VehicleProfile, WheeledLateralLimits, sample_pedestrian_profile,
+    sample_profile, sample_wheeled_lateral_limits,
 };
 use crate::query;
 use crate::rng::{
@@ -688,22 +689,22 @@ impl Simulation {
             .flatten()
     }
 
-    /// The most recent narrow pass eligibility outcome for an agent.
+    /// The most recent lateral maneuver eligibility outcome for an agent.
     ///
-    /// Present for a lateral-capable agent the pass tactic has evaluated:
+    /// Present for a lateral-capable agent the maneuver tactic has evaluated:
     /// [`ManeuverReason::SlowerLeader`] when the tactic recorded an intent for a
-    /// visible slower leader, or the precondition that rejected the pass. `None`
-    /// for a pedestrian, a version-1 path follower, a mode with no free lateral
-    /// motion, and an agent the tactic has not yet evaluated. This is the
-    /// inspectable reason a rejected precondition reports; no public event is
-    /// emitted from it.
-    pub fn narrow_pass_reason(&self, agent: AgentId) -> Option<ManeuverReason> {
+    /// visible slower leader, or the precondition that rejected the pass or
+    /// overtake. `None` for a pedestrian, a version-1 path follower, a mode with
+    /// no free lateral motion, and an agent the tactic has not yet evaluated.
+    /// This is the inspectable reason a rejected precondition reports; no public
+    /// event is emitted from it.
+    pub fn lateral_maneuver_reason(&self, agent: AgentId) -> Option<ManeuverReason> {
         self.agents
             .route_state
             .get(agent.index())
             .copied()
             .flatten()
-            .and_then(|state| state.pass_reason)
+            .and_then(|state| state.maneuver_reason)
     }
 
     /// Current pedestrian signal state of a crossing.
@@ -943,12 +944,13 @@ impl Simulation {
         let Some(commit) = self.scenario.commit_policy() else {
             return;
         };
-        // The narrow pass tactic runs before the lifecycle, so an eligible
+        // The lateral maneuver tactic runs before the lifecycle, so an eligible
         // following agent's intent is consumed by this step's attempt clause in
-        // the same batch. `pass_candidate` is a cheap scan, so a run with no
+        // the same batch. `maneuver_candidate` is a cheap scan, so a run with no
         // candidate and no maneuver in flight stays inert without a prediction.
-        let has_pass_candidate = (0..self.agents.len()).any(|index| self.pass_candidate(index));
-        if !has_pass_candidate && !self.maneuver_in_flight() {
+        let has_maneuver_candidate =
+            (0..self.agents.len()).any(|index| self.maneuver_candidate(index));
+        if !has_maneuver_candidate && !self.maneuver_in_flight() {
             return;
         }
 
@@ -960,8 +962,8 @@ impl Simulation {
             now,
             dt,
         };
-        if has_pass_candidate {
-            self.record_narrow_pass_intents(&batch);
+        if has_maneuver_candidate {
+            self.record_maneuver_intents(&batch);
         }
         let mut plans: Vec<ManeuverPlan> = Vec::new();
         let mut claims: Vec<CorridorClaim> = Vec::new();
@@ -1038,9 +1040,18 @@ impl Simulation {
                 continue;
             };
             let agent = AgentId::from_index(index);
-            // Only the attempt puts an agent into a maneuver state, and it
-            // requires the mode's resolved target clearance, so a live maneuver
-            // always carries one.
+            // Only `preparing` and `committed` seek a claim; `following`,
+            // `returning`, and `aborted` have no claim clause. The attempt that
+            // puts an agent into a maneuver state requires the mode's resolved
+            // target clearance, so a live maneuver always carries one, while an
+            // agent that merely carries route state (a lateral-incapable mode on
+            // a compiled facility) is skipped here.
+            if !matches!(
+                state.maneuver,
+                ManeuverState::Preparing | ManeuverState::Committed
+            ) {
+                continue;
+            }
             let target_clearance_m = state
                 .target_clearance_m
                 .expect("a maneuver state carries its mode's target clearance");
@@ -1282,11 +1293,11 @@ impl Simulation {
         })
     }
 
-    /// Whether one agent is a candidate for the narrow pass tactic this step: a
-    /// live `following` agent that carries a bounded-steering envelope, a
-    /// target clearance, and a horizon (a lateral-capable mode on a compiled
+    /// Whether one agent is a candidate for the lateral maneuver tactic this
+    /// step: a live `following` agent that carries a bounded-steering envelope,
+    /// a target clearance, and a horizon (a lateral-capable mode on a compiled
     /// facility) and has no maneuver or intent already recorded.
-    fn pass_candidate(&self, index: usize) -> bool {
+    fn maneuver_candidate(&self, index: usize) -> bool {
         self.agents.alive[index]
             && self.agents.route_state[index].is_some_and(|state| {
                 state.maneuver == ManeuverState::Following
@@ -1297,21 +1308,27 @@ impl Simulation {
             })
     }
 
-    /// Record the narrow pass tactic's intent for every eligible candidate.
+    /// Record the lateral maneuver tactic's intent for every eligible
+    /// candidate.
     ///
-    /// Each candidate's decision is a pure function of the tick-start bodies and
-    /// route state, so the decisions are computed before any is written and the
-    /// result never depends on agent iteration order. The recorded intent is
-    /// consumed by this step's `following -> preparing` attempt clause; a
-    /// rejected candidate records only its inspectable [`ManeuverReason`].
-    fn record_narrow_pass_intents(&mut self, batch: &ManeuverBatch<'_>) {
-        let decisions: Vec<(usize, NarrowPassDecision)> = (0..self.agents.len())
-            .filter(|&index| self.pass_candidate(index))
-            .map(|index| (index, self.narrow_pass_decision(index, batch)))
+    /// The one tactic covers a within-facility `pass` (a bicycle or scooter
+    /// passing a slower narrow user) and an `overtake` (a motor vehicle
+    /// displacing past a slower user): both select a deterministic lateral
+    /// target on the facility's passing side and name the slower leader they
+    /// displace around. Each candidate's decision is a pure function of the
+    /// tick-start bodies and route state, so the decisions are computed before
+    /// any is written and the result never depends on agent iteration order.
+    /// The recorded intent is consumed by this step's `following -> preparing`
+    /// attempt clause; a rejected candidate records only its inspectable
+    /// [`ManeuverReason`].
+    fn record_maneuver_intents(&mut self, batch: &ManeuverBatch<'_>) {
+        let decisions: Vec<(usize, ManeuverDecision)> = (0..self.agents.len())
+            .filter(|&index| self.maneuver_candidate(index))
+            .map(|index| (index, self.maneuver_decision(index, batch)))
             .collect();
         for (index, decision) in decisions {
             let (reason, intent) = match decision {
-                NarrowPassDecision::Selected {
+                ManeuverDecision::Selected {
                     target_offset_m,
                     passed_body,
                 } => (
@@ -1321,10 +1338,10 @@ impl Simulation {
                         passed_body,
                     }),
                 ),
-                NarrowPassDecision::Rejected(reason) => (reason, None),
+                ManeuverDecision::Rejected(reason) => (reason, None),
             };
             if let Some(state) = self.agents.route_state[index].as_mut() {
-                state.pass_reason = Some(reason);
+                state.maneuver_reason = Some(reason);
                 if let Some(intent) = intent {
                     state.intent = Some(intent);
                 }
@@ -1332,43 +1349,54 @@ impl Simulation {
         }
     }
 
-    /// The narrow pass tactic: the documented eligibility preconditions and the
-    /// deterministic target a within-facility pass selects.
+    /// The lateral maneuver tactic: the documented eligibility preconditions
+    /// and the deterministic target a within-facility pass or overtake selects.
     ///
-    /// Every precondition reads a component, a compiled policy value, or a
-    /// measured geometric fact — never a mode, template, or scenario name. The
-    /// checks run in a fixed order, so a rejected candidate reports the first
-    /// precondition that failed:
+    /// The same component-driven tactic serves a `pass` and an `overtake`: the
+    /// two differ only in which compiled capability selects them, never in a
+    /// mode, body, or scenario name. Every precondition reads a component, a
+    /// compiled policy value, or a measured geometric fact — never a mode,
+    /// template, or scenario name. The checks run in a fixed order, so a
+    /// rejected candidate reports the first precondition that failed:
     ///
-    /// 1. capability — the mode's compiled tactics carry [`TacticalCapability::Pass`];
+    /// 1. capability — the mode's compiled tactics carry [`TacticalCapability::Pass`]
+    ///    or [`TacticalCapability::Overtake`];
     /// 2. target clearance and horizon — the mode declares a lateral policy;
     /// 3. applicable permission — no `overtake` statement prohibits passing and
     ///    the facility names a side;
     /// 4. route benefit — a visible slower leader is within the maneuver reach
     ///    and its desired speed is below the agent's;
     /// 5. the deterministic target — the offset that balances the clearance to
-    ///    the leader and the clearance to the band edge, on the resolved side;
+    ///    the leader and the clearance to the band edge, on the resolved side,
+    ///    so the `self_half_m` term scales the required room with the agent's
+    ///    own body width (a wider motor box needs a wider corridor);
     /// 6. sufficient usable width — the balanced clearance reaches the target
     ///    clearance and the target lies inside the usable corridor;
     /// 7. feasible horizon — the ordinary predictor's candidate corridor on the
-    ///    selected side stays clear over the whole horizon.
-    fn narrow_pass_decision(&self, index: usize, batch: &ManeuverBatch<'_>) -> NarrowPassDecision {
-        let state = self.agents.route_state[index].expect("a pass candidate carries route state");
-        // 1. capability.
+    ///    selected side stays clear over the whole horizon against the passed
+    ///    body, every front, rear, and side body, the facility band edge, and
+    ///    the mode's target clearance.
+    fn maneuver_decision(&self, index: usize, batch: &ManeuverBatch<'_>) -> ManeuverDecision {
+        let state =
+            self.agents.route_state[index].expect("a maneuver candidate carries route state");
+        // 1. capability: either an explicit `pass` or an explicit `overtake`.
         let Some(template) = self.scenario.mode_template(state.mode_template) else {
-            return NarrowPassDecision::Rejected(ManeuverReason::Capability);
+            return ManeuverDecision::Rejected(ManeuverReason::Capability);
         };
-        if !template.tactics().supports(TacticalCapability::Pass) {
-            return NarrowPassDecision::Rejected(ManeuverReason::Capability);
+        let tactics = template.tactics();
+        if !tactics.supports(TacticalCapability::Pass)
+            && !tactics.supports(TacticalCapability::Overtake)
+        {
+            return ManeuverDecision::Rejected(ManeuverReason::Capability);
         }
         // 2. target clearance and horizon: the mode's compiled lateral policy.
         let Some(lateral) = template.lateral() else {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoCorridor);
+            return ManeuverDecision::Rejected(ManeuverReason::NoCorridor);
         };
         let target_clearance_m = lateral.target_clearance_m();
         let horizon_s = lateral.horizon_s();
         let Some(steering) = state.bounded_steering else {
-            return NarrowPassDecision::Rejected(ManeuverReason::Capability);
+            return ManeuverDecision::Rejected(ManeuverReason::Capability);
         };
         // 3. applicable permission and the facility's passing side.
         let movement = self.agents.movement[index];
@@ -1376,26 +1404,26 @@ impl Simulation {
             self.scenario
                 .traversal_policy(state.mode_template, state.facility, movement)
         else {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoPermission);
+            return ManeuverDecision::Rejected(ManeuverReason::NoPermission);
         };
         if policy.overtake() == Some(PermissionEffect::Prohibit) {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoPermission);
+            return ManeuverDecision::Rejected(ManeuverReason::NoPermission);
         }
         let Some(passing_side) = policy.passing_side() else {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoPermission);
+            return ManeuverDecision::Rejected(ManeuverReason::NoPermission);
         };
         // 4. route benefit: a visible slower leader inside the maneuver reach.
         let desired_speed_mps =
             self.agents.profile[index].map_or(f64::INFINITY, |profile| profile.desired_speed_mps);
-        let Some(leader) = self.narrow_pass_leader(index) else {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoBenefit);
+        let Some(leader) = self.maneuver_leader(index) else {
+            return ManeuverDecision::Rejected(ManeuverReason::NoBenefit);
         };
         if leader.desired_speed_mps >= desired_speed_mps {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoBenefit);
+            return ManeuverDecision::Rejected(ManeuverReason::NoBenefit);
         }
         let speed_mps = self.agents.speed_mps[index];
         if leader.gap_m > speed_mps * horizon_s {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoBenefit);
+            return ManeuverDecision::Rejected(ManeuverReason::NoBenefit);
         }
         // 5. the deterministic target on the selected side: the offset that
         // equalizes the clearance to the passed leader and the clearance to the
@@ -1425,8 +1453,8 @@ impl Simulation {
             PassingSide::MostClearance => {
                 let (left_target_m, _) = target_on(PassSide::Left);
                 let (right_target_m, _) = target_on(PassSide::Right);
-                let left_clearance_m = self.narrow_pass_clearance(index, left_target_m, batch);
-                let right_clearance_m = self.narrow_pass_clearance(index, right_target_m, batch);
+                let left_clearance_m = self.maneuver_clearance(index, left_target_m, batch);
+                let right_clearance_m = self.maneuver_clearance(index, right_target_m, batch);
                 target_on(narrow::pass_side(
                     passing_side,
                     left_clearance_m,
@@ -1440,26 +1468,26 @@ impl Simulation {
         if balanced_clearance_m < target_clearance_m
             || target_offset_m.abs() > corridor_bound_m + CORRIDOR_TOLERANCE_M
         {
-            return NarrowPassDecision::Rejected(ManeuverReason::InsufficientWidth);
+            return ManeuverDecision::Rejected(ManeuverReason::InsufficientWidth);
         }
         // 7. feasible horizon: the ordinary predictor's candidate corridor must
         // stay at or above the target clearance over the whole horizon and the
         // usable corridor.
         let Some(prediction) = self.predict_maneuver(index, target_offset_m, batch) else {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoCorridor);
+            return ManeuverDecision::Rejected(ManeuverReason::NoCorridor);
         };
         if !prediction.is_feasible() {
-            return NarrowPassDecision::Rejected(ManeuverReason::NoCorridor);
+            return ManeuverDecision::Rejected(ManeuverReason::NoCorridor);
         }
-        NarrowPassDecision::Selected {
+        ManeuverDecision::Selected {
             target_offset_m,
             passed_body: leader.agent,
         }
     }
 
-    /// The predicted minimum swept clearance of a candidate pass target, or
+    /// The predicted minimum swept clearance of a candidate maneuver target, or
     /// negative infinity when no prediction exists (no geometry or envelope).
-    fn narrow_pass_clearance(
+    fn maneuver_clearance(
         &self,
         index: usize,
         target_offset_m: f64,
@@ -1477,9 +1505,9 @@ impl Simulation {
     /// The scan is in ascending [`AgentId`] order and replaces the leader only
     /// for a strictly smaller gap, so two candidates at exactly equal gaps
     /// resolve to the lowest id, exactly as [`Self::nearest_leader`] does. Only
-    /// a body with a sampled profile and route state is a pass leader, so the
-    /// scripted population and a body on another facility are never it.
-    fn narrow_pass_leader(&self, index: usize) -> Option<PassLeader> {
+    /// a body with a sampled profile and route state is a maneuver leader, so
+    /// the scripted population and a body on another facility are never it.
+    fn maneuver_leader(&self, index: usize) -> Option<ManeuverLeader> {
         let state = self.agents.route_state[index]?;
         let direction = self.agents.direction[index];
         let own_progress = direction * state.s_m;
@@ -1507,7 +1535,7 @@ impl Simulation {
                 best = Some((other, gap));
             }
         }
-        best.map(|(other, gap)| PassLeader {
+        best.map(|(other, gap)| ManeuverLeader {
             agent: AgentId::from_index(other),
             gap_m: gap.max(0.0),
             desired_speed_mps: self.agents.profile[other]
@@ -2387,23 +2415,33 @@ impl Simulation {
         // mode draws from the same per-agent streams and projects onto the
         // shared longitudinal profile, so the shared stages stay one code path.
         let agent_id = AgentId::from_index(self.agents.len());
+        let mut profile_rng = derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get());
+        let mut compliance_rng =
+            derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get());
         let narrow_profile = match mode.and_then(|id| self.scenario.mode_template(id)) {
-            Some(template) if template.family() == Some(AgentFamily::WheeledCapsule) => {
-                Some(sample_narrow_profile(
-                    template,
-                    &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
-                    &mut derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get()),
-                ))
-            }
+            Some(template) if template.family() == Some(AgentFamily::WheeledCapsule) => Some(
+                sample_narrow_profile(template, &mut profile_rng, &mut compliance_rng),
+            ),
             _ => None,
         };
         let profile = match narrow_profile {
             Some(narrow) => narrow.vehicle_profile(),
             None => sample_profile(
                 self.scenario.profiles(),
-                &mut derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get()),
-                &mut derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get()),
+                &mut profile_rng,
+                &mut compliance_rng,
             ),
+        };
+        // The bounded-steering limits a mode steers under come from its own
+        // compiled profile. A capsule already carries them on its narrow
+        // profile; a wheeled box samples them from its mode template, so a
+        // lateral-capable car gets an envelope without a mode-id branch. A
+        // version-1 source and a box with no `lateral` object carry none.
+        let lateral = match narrow_profile {
+            Some(narrow) => narrow.lateral_limits(),
+            None => mode
+                .and_then(|id| self.scenario.mode_template(id))
+                .and_then(|template| sample_wheeled_lateral_limits(template, &mut profile_rng)),
         };
         if !self.entry_clear(path_id, entry_distance, profile.length_m) {
             return false;
@@ -2423,7 +2461,7 @@ impl Simulation {
         // The family check inside keeps passenger cars and narrow agents on one
         // code path; a version-1 demand has no mode and carries no state.
         let route_state = mode.and_then(|mode| {
-            self.route_state_for(mode, path_id, position, direction, narrow_profile)
+            self.route_state_for(mode, path_id, position, direction, profile.width_m, lateral)
         });
 
         self.agents.push(AgentInit {
@@ -2605,16 +2643,17 @@ impl Simulation {
     /// wheeled capsule, and a future articulated chain share the one path, and
     /// a holonomic walking body carries no route coordinates. The mode's
     /// resolved lateral policy seeds the target clearance and horizon when it
-    /// declares one, and its sampled narrow profile seeds the bounded-steering
-    /// limits and usable corridor; `None` leaves each of them absent exactly as
-    /// Increment 1.
+    /// declares one, and its sampled bounded-steering limits seed the usable
+    /// corridor for its own body width; `None` leaves each of them absent
+    /// exactly as Increment 1.
     fn route_state_for(
         &self,
         mode: ModeTemplateId,
         path: PathId,
         position: DVec2,
         direction: f64,
-        narrow: Option<NarrowProfile>,
+        body_width_m: f64,
+        lateral: Option<WheeledLateralLimits>,
     ) -> Option<RouteState> {
         let template = self.scenario.mode_template(mode)?;
         if template.family() == Some(AgentFamily::HolonomicCircle) {
@@ -2624,34 +2663,33 @@ impl Simulation {
             facility.reference_path() == Some(path) && facility.permits_mode(mode)
         })?;
         let geometry = facility.reference()?.geometry();
-        let lateral = template.lateral();
+        let policy = template.lateral();
         let state = RouteState::project(
             mode,
             facility.id(),
             geometry,
             position,
             direction,
-            lateral.map(|policy| policy.target_clearance_m()),
-            lateral.map(|policy| policy.horizon_s()),
+            policy.map(|policy| policy.target_clearance_m()),
+            policy.map(|policy| policy.horizon_s()),
         );
-        // Only a mode whose sampled profile carries a lateral-acceleration limit
+        // Only a mode whose sampled limits carry a lateral-acceleration bound
         // can steer laterally; the corridor is the facility's usable interval
-        // for its envelope width and preferred clearance. A template with no
+        // for its own envelope width and preferred clearance. A mode with no
         // compiled limit stays longitudinal-only.
-        let bounded = narrow.and_then(|narrow| {
-            let lateral_accel_max_mps2 = narrow.lateral_accel_max_mps2?;
+        let bounded = lateral.map(|lateral| {
             let interval =
-                facility.usable_lateral_interval(narrow.body_width_m(), narrow.lateral_clearance_m);
-            Some(BoundedSteering {
+                facility.usable_lateral_interval(body_width_m, lateral.lateral_clearance_m);
+            BoundedSteering {
                 limits: SteeringLimits {
-                    heading_rate_max_rad_s: narrow.steering_rate_max_rad_s,
-                    lateral_accel_max_mps2,
+                    heading_rate_max_rad_s: lateral.heading_rate_max_rad_s,
+                    lateral_accel_max_mps2: lateral.lateral_accel_max_mps2,
                 },
                 corridor: LateralCorridor {
                     d_min: interval.d_min(),
                     d_max: interval.d_max(),
                 },
-            })
+            }
         });
         Some(match bounded {
             Some(bounded) => state.with_bounded_steering(bounded),
@@ -2762,11 +2800,12 @@ enum Attempt {
     Infeasible,
 }
 
-/// One candidate's view of the visible slower leader ahead it might pass.
+/// One candidate's view of the visible slower leader ahead it might pass or
+/// overtake.
 ///
 /// Every field is a component, a compiled policy value, or a measured geometric
-/// fact, so a pass decision never reads a mode or scenario name.
-struct PassLeader {
+/// fact, so a maneuver decision never reads a mode or scenario name.
+struct ManeuverLeader {
     /// The leader's stable identifier, which becomes the maneuver's passed body.
     agent: AgentId,
     /// Bumper-to-bumper gap ahead along the reference in metres.
@@ -2779,18 +2818,18 @@ struct PassLeader {
     offset_m: f64,
 }
 
-/// The narrow pass tactic's outcome for one agent this step.
-enum NarrowPassDecision {
-    /// A pass is selected: the deterministic target offset (whose sign is the
-    /// resolved side in the agent's own travel frame) and the slower leader it
-    /// displaces around.
+/// The lateral maneuver tactic's outcome for one agent this step.
+enum ManeuverDecision {
+    /// A pass or overtake is selected: the deterministic target offset (whose
+    /// sign is the resolved side in the agent's own travel frame) and the
+    /// slower leader it displaces around.
     Selected {
         /// The target signed offset in metres, in the agent's own travel frame.
         target_offset_m: f64,
-        /// The slower leader the maneuver passes.
+        /// The slower leader the maneuver passes or overtakes.
         passed_body: AgentId,
     },
-    /// No pass: the precondition that failed, an inspectable
+    /// No maneuver: the precondition that failed, an inspectable
     /// [`ManeuverReason`].
     Rejected(ManeuverReason),
 }
@@ -3394,7 +3433,7 @@ mod tests {
     use super::*;
     use crate::config::DEFAULT_STEP;
     use crate::controller::{VehicleController, WaypointController};
-    use crate::narrow;
+    use crate::narrow::{self, NarrowProfile};
     use crate::units::Seconds;
     use tangle_model::{
         AgentBody, CompiledModeTemplate, CompiledScenario, ProfileRange, compile_mode_template,
@@ -4504,6 +4543,145 @@ mod tests {
         );
     }
 
+    /// A version-2 wide road with a lateral-capable box mode (`passenger_car`, an
+    /// `overtake` template with a `lateral` object) and a plain box mode
+    /// (`plain_car`, no `lateral`), so the route-state seed for a box body can
+    /// be exercised without a demand schedule.
+    const CAR_LATERAL_V2: &str = r#"
+    {
+      schema_version: 2,
+      id: 'car_lateral_v2',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [ { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] } ],
+      portals: [
+        { id: 'entry', path: 'guide', end: 'start', width_m: 10.0 },
+        { id: 'exit', path: 'guide', end: 'end', width_m: 10.0 },
+      ],
+      boundaries: [
+        { id: 'world', points: [
+          { x: -10.0, y: -10.0 }, { x: 210.0, y: -10.0 },
+          { x: 210.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+        ] },
+      ],
+      regions: [
+        { id: 'band', points: [
+          { x: 0.0, y: -5.0 }, { x: 200.0, y: -5.0 },
+          { x: 200.0, y: 5.0 }, { x: 0.0, y: 5.0 },
+        ] },
+      ],
+      facilities: [
+        { id: 'road', region: 'band', reference_path: 'guide',
+          width_m: 10.0, nominal_direction: 'forward',
+          access: { modes: [ 'passenger_car', 'plain_car' ] }, lateral_use: 'shared',
+          lateral_policy: { passing_side: 'left' },
+          speed_policy: { limit_mps: null } },
+      ],
+      movements: [
+        { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+          direction: 'forward' },
+      ],
+      mode_templates: [
+        {
+          id: 'passenger_car',
+          body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+            width_m: { min: 1.8, max: 1.8 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield', 'overtake' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 9.0, max: 9.0 },
+            max_accel_mps2: { min: 1.2, max: 1.2 },
+            comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+            time_gap_s: { min: 1.0, max: 1.0 },
+            steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+            lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+            lateral_clearance_m: { min: 0.3, max: 0.3 },
+            compliance: { min: 1.0, max: 1.0 },
+          },
+          lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+        },
+        {
+          id: 'plain_car',
+          body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+            width_m: { min: 1.8, max: 1.8 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 9.0, max: 9.0 },
+            max_accel_mps2: { min: 1.2, max: 1.2 },
+            comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+            time_gap_s: { min: 1.0, max: 1.0 },
+            compliance: { min: 1.0, max: 1.0 },
+          },
+        },
+      ],
+      permissions: [],
+      maneuver_policy: {
+        commit: { min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 },
+      },
+      demand: [],
+    }
+    "#;
+
+    /// A lateral box mode seeds a bounded-steering envelope and the mode's
+    /// target clearance and horizon, while a plain box mode on the same facility
+    /// carries route state but no envelope: the device that lets a motor vehicle
+    /// overtake without a mode-id branch.
+    #[test]
+    fn a_lateral_box_mode_seeds_a_bounded_steering_envelope_and_a_plain_box_does_not() {
+        let source = parse_scenario_source_v2(CAR_LATERAL_V2).expect("the document is version 2");
+        let scenario = CompiledScenario::compile_v2(source).expect("the scenario compiles");
+        let sim = Simulation::new(scenario, RunConfig::new(0)).expect("the simulation builds");
+        let mode_of = |id: &str| {
+            let templates = sim.scenario().mode_templates();
+            let index = templates
+                .iter()
+                .position(|template| template.id() == id)
+                .unwrap_or_else(|| panic!("the fixture authors '{id}'"));
+            ModeTemplateId::from_index(index)
+        };
+        let path = PathId::from_index(0);
+        let position = DVec2::new(10.0, 0.0);
+
+        let lateral = WheeledLateralLimits {
+            heading_rate_max_rad_s: 0.9,
+            lateral_accel_max_mps2: 2.0,
+            lateral_clearance_m: 0.3,
+        };
+        let state = sim
+            .route_state_for(
+                mode_of("passenger_car"),
+                path,
+                position,
+                1.0,
+                1.8,
+                Some(lateral),
+            )
+            .expect("the lateral box steers on the compiled facility");
+        assert_eq!(state.target_clearance_m, Some(0.75));
+        assert_eq!(state.horizon_s, Some(2.0));
+        let bounded = state
+            .bounded_steering
+            .expect("a lateral box carries an envelope");
+        assert!((bounded.limits.heading_rate_max_rad_s - 0.9).abs() < 1e-9);
+        assert!((bounded.limits.lateral_accel_max_mps2 - 2.0).abs() < 1e-9);
+        // Half width 5.0 minus half body 0.9 minus clearance 0.3.
+        assert!((bounded.corridor.d_max - 3.8).abs() < 1e-9);
+        assert!((bounded.corridor.d_min + 3.8).abs() < 1e-9);
+
+        let state = sim
+            .route_state_for(mode_of("plain_car"), path, position, 1.0, 1.8, None)
+            .expect("a plain box still carries route state on the facility");
+        assert!(state.bounded_steering.is_none());
+        assert_eq!(state.target_clearance_m, None);
+        assert_eq!(state.horizon_s, None);
+    }
+
     /// A version-2 bikeway with the given commit policy, no demand, and no
     /// population, so a maneuver test places exactly the riders it needs and
     /// nothing else moves.
@@ -4642,7 +4820,14 @@ mod tests {
         let (position, heading_rad) = rider_body(sim, distance_m, d_m);
         let narrow = rider_narrow();
         let route_state = sim
-            .route_state_for(rider_mode(sim), path_id, position, 1.0, Some(narrow))
+            .route_state_for(
+                rider_mode(sim),
+                path_id,
+                position,
+                1.0,
+                narrow.body_width_m(),
+                narrow.lateral_limits(),
+            )
             .expect("the rider mode steers on the compiled facility");
         sim.agents.push(AgentInit {
             mode: AgentMode::Vehicle,

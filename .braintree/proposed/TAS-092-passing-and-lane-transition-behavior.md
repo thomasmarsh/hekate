@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T04:52:09Z
+updated: 2026-09-14T05:26:01Z
 summary: Integrate narrow passing, motor overtaking, and safe lane or facility transitions.
-next: [[TAS-094-enable-motor-vehicle-overtaking-of-narrow-users]]
+next: [[TAS-095-complete-lane-transitions-and-safe-aborts]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].

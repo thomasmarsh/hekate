@@ -9,7 +9,7 @@
 //! both under its own stable agent id.
 
 use rand_chacha::ChaCha20Rng;
-use tangle_model::{CompiledPedestrianProfile, CompiledProfile};
+use tangle_model::{CompiledModeTemplate, CompiledPedestrianProfile, CompiledProfile};
 
 use crate::rng::uniform01;
 
@@ -35,6 +35,54 @@ pub struct VehicleProfile {
     /// stream. See [`crate::compliance`] for how the red-light decision uses
     /// it.
     pub compliance: f64,
+}
+
+/// The sampled bounded-steering limits of one wheeled agent.
+///
+/// A wheeled mode's lateral-maneuver limits — its maximum heading rate, its
+/// maximum lateral acceleration, and its preferred lateral clearance from a
+/// facility edge — live in its compiled mode template, not in the scenario's
+/// passenger-car distribution its longitudinal values come from. A capsule
+/// samples them into its [`crate::NarrowProfile`]; a box samples them here from
+/// its own compiled template, so both families seed one [`crate::BoundedSteering`]
+/// envelope from the same shape. A mode whose compiled profile declares no
+/// lateral-acceleration limit has no such limits and stays longitudinal-only.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct WheeledLateralLimits {
+    /// Maximum steering/heading rate in radians per second.
+    pub(crate) heading_rate_max_rad_s: f64,
+    /// Maximum lateral acceleration in metres per second squared.
+    pub(crate) lateral_accel_max_mps2: f64,
+    /// Preferred lateral clearance from a facility edge in metres.
+    pub(crate) lateral_clearance_m: f64,
+}
+
+/// Draw one wheeled mode's lateral limits from its compiled template, or `None`
+/// when the template declares no lateral-acceleration limit.
+///
+/// The three values come from `profile_rng` in a fixed order — lateral
+/// acceleration first (which decides whether there is a bounded-steering
+/// envelope at all), then the heading rate, then the lateral clearance — so a
+/// mode's limits are stable for the run. A template without a
+/// `lateral_accel_max_mps2` parameter draws nothing and returns `None`, exactly
+/// as a mode with no free lateral motion.
+pub(crate) fn sample_wheeled_lateral_limits(
+    template: &CompiledModeTemplate,
+    profile_rng: &mut ChaCha20Rng,
+) -> Option<WheeledLateralLimits> {
+    let profile = template.profile();
+    let lateral_accel_max_mps2 = profile
+        .lateral_accel_max_mps2()?
+        .sample(uniform01(profile_rng));
+    Some(WheeledLateralLimits {
+        heading_rate_max_rad_s: profile
+            .steering_rate_max_rad_s()
+            .map_or(0.0, |range| range.sample(uniform01(profile_rng))),
+        lateral_accel_max_mps2,
+        lateral_clearance_m: profile
+            .lateral_clearance_m()
+            .map_or(0.0, |range| range.sample(uniform01(profile_rng))),
+    })
 }
 
 /// A stable physical and behavioral profile for one pedestrian.
@@ -102,7 +150,9 @@ pub(crate) fn sample_profile(
 mod tests {
     use super::*;
     use crate::rng::{STREAM_COMPLIANCE, STREAM_PROFILE, derive_stream};
-    use tangle_model::{CompiledScenario, parse_scenario_source};
+    use tangle_model::{
+        CompiledScenario, compile_mode_template, parse_scenario_source, parse_scenario_source_v2,
+    };
 
     const FLOW: &str = r#"
     {
@@ -148,6 +198,74 @@ mod tests {
         assert!((profile.comfortable_brake_mps2 - 3.0).abs() < 1e-9);
         // A profile that omits `compliance` defaults to fully compliant.
         assert!((profile.compliance - 1.0).abs() < 1e-9);
+    }
+
+    /// A lateral box template's three authored lateral parameters sample into
+    /// the shared wheeled lateral limits, and a wheeled template without a
+    /// `lateral` object samples none.
+    #[test]
+    fn a_lateral_wheeled_mode_samples_its_lateral_limits_from_its_template() {
+        const BOXES: &str = r#"{
+          schema_version: 2, id: 'lateral_boxes',
+          coordinate_system: { x: 'east_m', y: 'north_m' },
+          paths: [], portals: [],
+          mode_templates: [
+            {
+              id: 'passenger_car',
+              body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+                width_m: { min: 1.8, max: 1.8 } },
+              motion: 'single_body_wheeled',
+              tactics: [ 'follow', 'overtake' ],
+              access: { facility_kinds: [ 'facility' ] },
+              occupancy: 'operator_only',
+              profiles: {
+                speed_mps: { min: 9.0, max: 9.0 },
+                max_accel_mps2: { min: 1.2, max: 1.2 },
+                comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+                time_gap_s: { min: 1.0, max: 1.0 },
+                steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+                lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+                lateral_clearance_m: { min: 0.3, max: 0.3 },
+                compliance: { min: 1.0, max: 1.0 },
+              },
+              lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+            },
+            {
+              id: 'plain_car',
+              body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+                width_m: { min: 1.8, max: 1.8 } },
+              motion: 'single_body_wheeled',
+              tactics: [ 'follow', 'stop', 'yield' ],
+              access: { facility_kinds: [ 'facility' ] },
+              occupancy: 'operator_only',
+              profiles: {
+                speed_mps: { min: 9.0, max: 9.0 },
+                max_accel_mps2: { min: 1.2, max: 1.2 },
+                comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+                time_gap_s: { min: 1.0, max: 1.0 },
+                compliance: { min: 1.0, max: 1.0 },
+              },
+            },
+          ],
+        }"#;
+        let source = parse_scenario_source_v2(BOXES).expect("the document parses");
+        let lateral =
+            compile_mode_template(&source.mode_templates[0]).expect("the lateral box compiles");
+        let plain =
+            compile_mode_template(&source.mode_templates[1]).expect("the plain box compiles");
+
+        let limits =
+            sample_wheeled_lateral_limits(&lateral, &mut derive_stream(1, STREAM_PROFILE, 0))
+                .expect("a lateral box carries limits");
+        assert!((limits.heading_rate_max_rad_s - 0.9).abs() < 1e-9);
+        assert!((limits.lateral_accel_max_mps2 - 2.0).abs() < 1e-9);
+        assert!((limits.lateral_clearance_m - 0.3).abs() < 1e-9);
+
+        assert_eq!(
+            sample_wheeled_lateral_limits(&plain, &mut derive_stream(1, STREAM_PROFILE, 0)),
+            None,
+            "a wheeled mode without a lateral policy carries no limits"
+        );
     }
 
     #[test]

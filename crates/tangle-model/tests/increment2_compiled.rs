@@ -630,6 +630,88 @@ fn compiles_the_lateral_acceleration_profile_parameter() {
     );
 }
 
+/// A lateral-capable box template carries all three authored lateral profile
+/// parameters on its compiled bundle, exactly as a capsule does; a box that
+/// authors no `lateral` carries none of them.
+///
+/// Validation requires the three parameters for any lateral-capable wheeled
+/// body, so the compiled bundle must expose them whichever body it carries.
+/// The template compiler is driven directly because a lateral box needs no
+/// scenario-level policy to compile its bundle.
+#[test]
+fn a_lateral_box_carries_all_three_lateral_profile_parameters() {
+    let box_template = |lateral: bool| {
+        let lateral_field = if lateral {
+            "lateral: { target_clearance_m: 0.75, horizon_s: 4.0 },"
+        } else {
+            ""
+        };
+        let tactic = if lateral {
+            "'follow', 'overtake'"
+        } else {
+            "'follow'"
+        };
+        let lateral_params = if lateral {
+            "steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+                    lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+                    lateral_clearance_m: { min: 0.3, max: 0.3 },"
+        } else {
+            ""
+        };
+        format!(
+            r#"{{
+                schema_version: 2, id: 'lateral_box',
+                coordinate_system: {{ x: 'east_m', y: 'north_m' }},
+                paths: [], portals: [],
+                mode_templates: [ {{
+                    id: 'passenger_car',
+                    body: {{ kind: 'box', length_m: {{ min: 4.5, max: 4.5 }},
+                        width_m: {{ min: 1.8, max: 1.8 }} }},
+                    motion: 'single_body_wheeled',
+                    tactics: [ {tactic} ],
+                    access: {{ facility_kinds: [ 'facility' ] }},
+                    occupancy: 'operator_only',
+                    profiles: {{
+                        speed_mps: {{ min: 9.0, max: 9.0 }},
+                        max_accel_mps2: {{ min: 1.2, max: 1.2 }},
+                        comfortable_brake_mps2: {{ min: 2.0, max: 2.0 }},
+                        time_gap_s: {{ min: 1.0, max: 1.0 }},
+                        {lateral_params}
+                        compliance: {{ min: 1.0, max: 1.0 }},
+                    }},
+                    {lateral_field}
+                }} ],
+            }}"#
+        )
+    };
+
+    let source = parse_scenario_source_v2(&box_template(true)).expect("the document parses");
+    let compiled = compile_mode_template(&source.mode_templates[0]).expect("it compiles");
+    let profile = compiled.profile();
+    assert_eq!(
+        profile.steering_rate_max_rad_s().map(|range| range.max()),
+        Some(0.9)
+    );
+    assert_eq!(
+        profile.lateral_accel_max_mps2().map(|range| range.max()),
+        Some(2.0)
+    );
+    assert_eq!(
+        profile.lateral_clearance_m().map(|range| range.max()),
+        Some(0.3)
+    );
+    // The template-level accessors the usable interval reads agree.
+    assert_eq!(compiled.envelope_width_m(), 1.8);
+    assert_eq!(compiled.lateral_clearance_m(), 0.3);
+
+    let source = parse_scenario_source_v2(&box_template(false)).expect("the document parses");
+    let compiled = compile_mode_template(&source.mode_templates[0]).expect("it compiles");
+    let profile = compiled.profile();
+    assert_eq!(profile.steering_rate_max_rad_s(), None);
+    assert_eq!(profile.lateral_accel_max_mps2(), None);
+    assert_eq!(profile.lateral_clearance_m(), None);
+}
+
 #[test]
 fn keeps_nominal_permitted_and_physically_possible_directions_separate() {
     let scenario = increment_2();

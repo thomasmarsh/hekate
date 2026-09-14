@@ -705,6 +705,33 @@ impl AgentBehaviorProfile {
         self
     }
 
+    /// This profile with the mode's maximum steering/heading rate attached.
+    ///
+    /// The parameter is the `steering_rate_max_rad_s` a lateral-capable wheeled
+    /// mode declares; a mode without free lateral motion attaches none, so the
+    /// Increment 0 and Increment 1 profile sets are unchanged. A capsule's
+    /// [`Self::narrow_wheeled`] profile already carries this parameter, so
+    /// attaching it again there is idempotent.
+    pub const fn with_steering_rate_max_rad_s(
+        mut self,
+        steering_rate_max_rad_s: ProfileRange,
+    ) -> Self {
+        self.steering_rate_max_rad_s = Some(steering_rate_max_rad_s);
+        self
+    }
+
+    /// This profile with the mode's preferred lateral clearance attached.
+    ///
+    /// The parameter is the `lateral_clearance_m` a lateral-capable wheeled
+    /// mode declares; a mode without free lateral motion attaches none, so the
+    /// Increment 0 and Increment 1 profile sets are unchanged. A capsule's
+    /// [`Self::narrow_wheeled`] profile already carries this parameter, so
+    /// attaching it again there is idempotent.
+    pub const fn with_lateral_clearance_m(mut self, lateral_clearance_m: ProfileRange) -> Self {
+        self.lateral_clearance_m = Some(lateral_clearance_m);
+        self
+    }
+
     /// Desired free-flow speed distribution in metres per second.
     pub fn desired_speed_mps(&self) -> ProfileRange {
         self.desired_speed_mps

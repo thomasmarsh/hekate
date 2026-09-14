@@ -513,6 +513,30 @@ fn compiled_profile(
             param("compliance"),
         ),
     };
+    // A `single_body_wheeled` template that declares `lateral` carries all
+    // three authored lateral parameters on its compiled profile — the steering
+    // response, the lateral-acceleration bound, and the lateral-clearance
+    // preference — whichever body it carries. A capsule's `narrow_wheeled`
+    // profile already reads the first and third, so re-attaching them is
+    // idempotent; a box's `wheeled` profile carries none of them, so without
+    // this the compiled bundle would be missing two parameters its validation
+    // required.
+    let profile = if lateral {
+        let profile = match template.profiles.get("steering_rate_max_rad_s") {
+            Some(source) => {
+                profile.with_steering_rate_max_rad_s(ProfileRange::new(source.min, source.max))
+            }
+            None => profile,
+        };
+        match template.profiles.get("lateral_clearance_m") {
+            Some(source) => {
+                profile.with_lateral_clearance_m(ProfileRange::new(source.min, source.max))
+            }
+            None => profile,
+        }
+    } else {
+        profile
+    };
     Some(match template.profiles.get("lateral_accel_max_mps2") {
         Some(source) => {
             profile.with_lateral_accel_max_mps2(ProfileRange::new(source.min, source.max))

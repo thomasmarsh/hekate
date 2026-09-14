@@ -140,12 +140,13 @@ pub(crate) struct RouteState {
     /// settle tolerance of its return target, or `None` while it is away from
     /// it.
     pub(crate) settled_since: Option<SimTime>,
-    /// The most recent narrow pass eligibility outcome for this agent: the
+    /// The most recent lateral maneuver eligibility outcome for this agent: the
     /// selection reason ([`ManeuverReason::SlowerLeader`]) when the tactic
-    /// recorded an intent, or the precondition that rejected the pass. `None`
-    /// until the agent is first evaluated; it is inspectable through
-    /// [`crate::Simulation`] and is not written to any output artifact here.
-    pub(crate) pass_reason: Option<ManeuverReason>,
+    /// recorded an intent, or the precondition that rejected the pass or
+    /// overtake. `None` until the agent is first evaluated; it is inspectable
+    /// through [`crate::Simulation`] and is not written to any output artifact
+    /// here.
+    pub(crate) maneuver_reason: Option<ManeuverReason>,
 }
 
 impl RouteState {
@@ -188,7 +189,7 @@ impl RouteState {
             braking: false,
             hold_since: None,
             settled_since: None,
-            pass_reason: None,
+            maneuver_reason: None,
         }
     }
 

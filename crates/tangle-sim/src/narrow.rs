@@ -327,7 +327,7 @@ use rand_chacha::ChaCha20Rng;
 use tangle_model::{AgentBody, CompiledModeTemplate, PassingSide};
 
 use crate::control::{self, Constraint};
-use crate::profile::VehicleProfile;
+use crate::profile::{VehicleProfile, WheeledLateralLimits};
 use crate::rng::uniform01;
 use crate::stage::PassSide;
 
@@ -395,6 +395,19 @@ impl NarrowProfile {
             comfortable_brake_mps2: self.comfortable_brake_mps2,
             compliance: self.compliance,
         }
+    }
+
+    /// The bounded-steering limits this narrow profile carries, in the shared
+    /// shape the wheeled lateral seam reads; `None` when the template declares
+    /// no lateral-acceleration limit, exactly as a mode with no free lateral
+    /// motion.
+    pub(crate) fn lateral_limits(self) -> Option<WheeledLateralLimits> {
+        self.lateral_accel_max_mps2
+            .map(|lateral_accel_max_mps2| WheeledLateralLimits {
+                heading_rate_max_rad_s: self.steering_rate_max_rad_s,
+                lateral_accel_max_mps2,
+                lateral_clearance_m: self.lateral_clearance_m,
+            })
     }
 }
 
