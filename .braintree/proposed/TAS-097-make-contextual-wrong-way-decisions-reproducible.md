@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:12Z
+updated: 2026-09-14T15:06:36Z
 summary: Make contextual bicycle and scooter wrong-way decisions reproducible and inspectable.
-next: [[TAS-115-define-contextual-wrong-way-decision-inputs-and]]
+next: [[TAS-116-key-the-wrong-way-draw-and-reject-impossible-opp]]
 ---
 
 Parent [[TAS-096-contextual-wrong-way-travel]].

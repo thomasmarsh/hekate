@@ -58,6 +58,7 @@ pub mod steering;
 mod swept;
 mod time;
 mod units;
+pub mod wrong_way;
 
 pub use agent::{AgentId, AgentMode};
 pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
@@ -105,5 +106,6 @@ pub use steering::{
 pub use swept::{SweptBody, TOI_TIME_TOLERANCE, TimeOfImpact, band_entry, time_of_impact};
 pub use time::SimTime;
 pub use units::Seconds;
+pub use wrong_way::{WrongWayDecision, WrongWayInputs, WrongWayOption, WrongWayReason, decide};
 
 pub use tangle_model::MODEL_VERSION;
