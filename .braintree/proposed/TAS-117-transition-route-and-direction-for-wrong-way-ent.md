@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:49Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Transition route and direction for wrong-way entry and completion.
 next: Move route state to the opposing traversal through the connected-transition contract and keep progress correct in both reference directions.
 ---

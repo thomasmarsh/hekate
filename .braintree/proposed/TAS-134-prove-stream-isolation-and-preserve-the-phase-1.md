@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:54Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Prove stream isolation and preserve the Phase 1 baseline.
 next: Add the stream-isolation cases and a falsification probe while keeping Phase 1 baseline artifacts unchanged.
 ---

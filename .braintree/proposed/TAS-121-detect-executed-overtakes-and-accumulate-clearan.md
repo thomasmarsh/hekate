@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:50Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Detect executed overtakes and accumulate clearance-band durations.
 next: Detect an actual overtaking interval from exact world body queries and accumulate each configured clearance band.
 ---

@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:04Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Keep destination leader/follower constraints active through a handoff.
 next: Select leaders and followers from the current and destination facility before and during a handoff, with tests.
 ---

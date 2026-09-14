@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:52Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Prove deterministic simultaneous-claim resolution.
 next: Prove two and three-agent claims select the same winner after reversing declaration, discovery, and insertion order.
 ---

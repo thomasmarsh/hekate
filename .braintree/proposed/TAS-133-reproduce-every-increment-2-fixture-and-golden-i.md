@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:54Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Reproduce every Increment 2 fixture and golden its transitions.
 next: Reproduce each fixture at fixed seeds and presets and golden every maneuver transition and wrong-way interval lifecycle.
 ---

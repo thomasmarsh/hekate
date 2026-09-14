@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:52Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Build analytic and high-resolution clearance reference cases.
 next: Add analytic and high-resolution reference minima for the straight, shift, curved, and body-shape pair cases.
 ---

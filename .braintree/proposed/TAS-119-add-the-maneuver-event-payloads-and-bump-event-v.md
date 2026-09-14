@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:50Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Add the maneuver event payloads and bump EVENT_VERSION once.
 next: Add the maneuver, transition, and violation event payloads and bump EVENT_VERSION exactly once.
 ---

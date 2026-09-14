@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:50Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Emit maneuver events edge-triggered with stable ordering.
 next: Emit the new maneuver events edge-triggered from the state changes with explicit stable order keys.
 ---

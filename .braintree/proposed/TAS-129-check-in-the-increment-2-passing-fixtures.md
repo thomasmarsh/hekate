@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:53Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Check in the Increment 2 passing fixtures.
 next: Add the minimal passing, motor-overtaking, and lane-change fixtures under scenarios/phase2/inc2 with their assertions.
 ---

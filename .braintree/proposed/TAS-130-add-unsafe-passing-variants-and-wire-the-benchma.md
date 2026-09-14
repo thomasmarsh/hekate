@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:53Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Add unsafe-passing variants and wire the benchmark matrix.
 next: Add the unsafe and prohibited passing variants and replace only the planned benchmark-matrix entries.
 ---

@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:54Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Map Increment 2 state into presenter overlays with backend parity.
 next: Map the versioned snapshot and event state into backend-neutral overlays and expose all five overlays in both backends.
 ---

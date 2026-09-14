@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:55Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Check in presenter fixtures and the negative source guard.
 next: Add the passing and occupied-opposing presenter fixtures and the source-text negative guard with a falsification probe.
 ---

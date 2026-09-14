@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:24:58Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Return a cross-facility change of lane to the source band.
 next: Add the return crossing at the compiled shared boundary and the return-leg obstruction policy, with focused tests.
 ---

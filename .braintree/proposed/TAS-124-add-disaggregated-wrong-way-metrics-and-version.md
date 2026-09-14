@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:51Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Add disaggregated wrong-way metrics and version bumps.
 next: Accumulate wrong-way distance, duration, exposure, encounters, and conflicts by dimension and bump the needed format versions.
 ---

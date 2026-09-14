@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:54Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Prove declaration-order invariance and wire the matrix.
 next: Show reversed facility and reference declarations preserve the physical outcome and replace only the planned matrix entries.
 ---

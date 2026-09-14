@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:53Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Check in the contextual wrong-way fixtures.
 next: Add the permitted, prohibited-but-connected, disconnected, and occupied-corridor fixtures with their rule assertions.
 ---

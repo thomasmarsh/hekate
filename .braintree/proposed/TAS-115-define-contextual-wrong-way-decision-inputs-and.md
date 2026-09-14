@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:49Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Define contextual wrong-way decision inputs and reason-coded output.
 next: Add the wrong-way decision input set, its reason codes, and the perceived-rule output with table-driven tests.
 ---

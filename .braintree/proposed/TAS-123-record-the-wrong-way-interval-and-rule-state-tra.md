@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:51Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Record the wrong-way interval and rule-state trajectory.
 next: Open and close the wrong-way interval at the rule boundaries and expose rule state on sampled trajectories.
 ---

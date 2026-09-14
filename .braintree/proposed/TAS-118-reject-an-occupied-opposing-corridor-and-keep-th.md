@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:50Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Reject an occupied opposing corridor and keep the ordinary lifecycle.
 next: Reject an occupied opposing corridor through ordinary feasibility and keep the normal identity, events, and metrics.
 ---

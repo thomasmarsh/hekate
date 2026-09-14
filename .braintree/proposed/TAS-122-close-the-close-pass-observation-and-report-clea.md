@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:51Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Close the close-pass observation and report clearance metrics.
 next: Close one observation per participant pair and report close-pass metrics under a bumped metric definition.
 ---

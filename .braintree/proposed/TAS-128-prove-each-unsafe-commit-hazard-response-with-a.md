@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:52Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Prove each unsafe-commit hazard response with a falsification probe.
 next: Prove each committed-hazard response and add a falsification probe for the tie-break key and a hazard response.
 ---

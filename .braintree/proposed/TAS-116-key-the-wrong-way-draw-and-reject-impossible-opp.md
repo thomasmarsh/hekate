@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:49Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Key the wrong-way draw and reject impossible opposing options.
 next: Key any wrong-way draw to the versioned maneuver stream and reject a physically disconnected option before any claim or motion.
 ---

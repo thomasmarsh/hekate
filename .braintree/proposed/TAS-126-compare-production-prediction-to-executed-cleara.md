@@ -1,6 +1,7 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:25:52Z
+priority: P1
+updated: 2026-09-14T13:26:43Z
 summary: Compare production prediction to executed clearance with an endpoint probe.
 next: Compare production prediction and executed minima under the matrix tolerance and add a coarse-endpoint falsification case.
 ---
