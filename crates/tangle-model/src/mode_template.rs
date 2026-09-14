@@ -32,12 +32,47 @@ use crate::source::{
 };
 use crate::validate::{Diagnostic, DiagnosticCode, required_profile_params};
 
+/// The resolved lateral-maneuver policy of a lateral-capable mode.
+///
+/// Authored as `mode_templates[].lateral`; absent for a mode with no free
+/// lateral motion, which is the Increment 1 behaviour. The mode's bounded
+/// steering limits are its profile's `steering_rate_max_rad_s` and
+/// `lateral_accel_max_mps2`, read through [`CompiledModeTemplate::profile`], so
+/// no limit is stored twice.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompiledLateralPolicy {
+    target_clearance_m: f64,
+    horizon_s: f64,
+}
+
+impl CompiledLateralPolicy {
+    /// Construct a policy from its authored maneuver parameters.
+    pub const fn new(target_clearance_m: f64, horizon_s: f64) -> Self {
+        Self {
+            target_clearance_m,
+            horizon_s,
+        }
+    }
+
+    /// The signed body-to-body surface clearance, in metres, a maneuver by this
+    /// mode targets at its closest approach.
+    pub const fn target_clearance_m(self) -> f64 {
+        self.target_clearance_m
+    }
+
+    /// The feasible time horizon of a candidate corridor, in seconds.
+    pub const fn horizon_s(self) -> f64 {
+        self.horizon_s
+    }
+}
+
 /// A mode template compiled into its agent components.
 ///
 /// The bundle carries the template id alongside the six components the authored
 /// template maps onto: [`AgentBody`], [`AgentMotion`], [`TacticalCapabilities`],
 /// [`AgentAccess`], [`AgentOccupancy`], and [`AgentBehaviorProfile`], plus the
-/// [`AgentFamily`] derived from the body and motion when one serves the pair.
+/// [`AgentFamily`] derived from the body and motion when one serves the pair,
+/// and the [`CompiledLateralPolicy`] of a lateral-capable mode.
 ///
 /// A bundle built directly with [`Self::new`] may carry an impossible
 /// combination; [`Self::validate`] rejects it. A bundle returned by
@@ -52,6 +87,7 @@ pub struct CompiledModeTemplate {
     occupancy: AgentOccupancy,
     profile: AgentBehaviorProfile,
     family: Option<AgentFamily>,
+    lateral: Option<CompiledLateralPolicy>,
 }
 
 impl CompiledModeTemplate {
@@ -79,7 +115,17 @@ impl CompiledModeTemplate {
             occupancy,
             profile,
             family,
+            lateral: None,
         }
+    }
+
+    /// This bundle with the mode's resolved lateral-maneuver policy attached.
+    ///
+    /// A template that authors no `lateral` object keeps `None`, so it has no
+    /// free lateral motion and behaves exactly as in Increment 1.
+    pub fn with_lateral(mut self, lateral: CompiledLateralPolicy) -> Self {
+        self.lateral = Some(lateral);
+        self
     }
 
     /// The authored template id.
@@ -121,6 +167,43 @@ impl CompiledModeTemplate {
     /// when no family serves the pair.
     pub fn family(&self) -> Option<AgentFamily> {
         self.family
+    }
+
+    /// The mode's resolved lateral-maneuver policy, or `None` for a mode with
+    /// no free lateral motion: no lateral maneuver is selectable and the mode
+    /// behaves exactly as in Increment 1.
+    pub fn lateral(&self) -> Option<CompiledLateralPolicy> {
+        self.lateral
+    }
+
+    /// The width of the mode's widest body envelope in metres: `2 * radius` for
+    /// a circle or capsule, `width` for a box, and the widest segment for an
+    /// articulated chain.
+    ///
+    /// This mirrors the Increment 1 usable-width rule, which validation applies
+    /// to the authored body; the compiled bundle exposes it so the lane-use
+    /// policy reads no source string.
+    pub fn envelope_width_m(&self) -> f64 {
+        match &self.body {
+            AgentBody::Box { width_m, .. } => width_m.max(),
+            AgentBody::Circle { radius_m } => 2.0 * radius_m.max(),
+            AgentBody::Capsule { radius_m, .. } => 2.0 * radius_m.max(),
+            AgentBody::ArticulatedChain { segments } => segments
+                .iter()
+                .map(|segment| segment.width_m().max())
+                .fold(0.0, f64::max),
+        }
+    }
+
+    /// The mode's preferred lateral clearance from a facility edge in metres,
+    /// or zero when its profile declares none, which is the Increment 1
+    /// default.
+    pub fn lateral_clearance_m(&self) -> f64 {
+        self.profile
+            .lateral_clearance_m()
+            .map(|range| range.max())
+            .filter(|clearance| clearance.is_finite() && *clearance >= 0.0)
+            .unwrap_or(0.0)
     }
 
     /// Every impossible combination this bundle carries, in a stable order.
@@ -224,8 +307,9 @@ pub fn compile_mode_template(
     let Some(profile) = compiled_profile(template, &mut diagnostics) else {
         return Err(diagnostics);
     };
+    let lateral = compiled_lateral(template);
 
-    let compiled = CompiledModeTemplate::new(
+    let mut compiled = CompiledModeTemplate::new(
         template.id.clone(),
         body,
         motion,
@@ -234,6 +318,9 @@ pub fn compile_mode_template(
         occupancy,
         profile,
     );
+    if let Some(lateral) = lateral {
+        compiled = compiled.with_lateral(lateral);
+    }
     diagnostics.extend(compiled.validate());
     if diagnostics.is_empty() {
         Ok(compiled)
@@ -347,6 +434,23 @@ fn compiled_occupancy(occupancy: OccupancyKind) -> AgentOccupancy {
     }
 }
 
+/// Compile the optional lateral-maneuver policy of a mode template.
+///
+/// A template that authors no `lateral` object compiles to `None` and keeps the
+/// Increment 1 behaviour. A `lateral` object carries no identifier target: the
+/// template that authors it is the target, so both parameters are copied
+/// verbatim and never defaulted. The bounded-steering limits a lateral-capable
+/// mode declares — `steering_rate_max_rad_s` and `lateral_accel_max_mps2` — are
+/// profile parameters carried by [`CompiledModeTemplate::profile`]; requiring
+/// them is the validation seam's rule, not the compiler's.
+fn compiled_lateral(template: &ModeTemplateSource) -> Option<CompiledLateralPolicy> {
+    let lateral = template.lateral?;
+    Some(CompiledLateralPolicy::new(
+        lateral.target_clearance_m,
+        lateral.horizon_s,
+    ))
+}
+
 /// Build the behavior profile from the profile map for the body/motion family.
 ///
 /// Every parameter the family requires is read by name; a missing one is
@@ -385,7 +489,7 @@ fn compiled_profile(
             .expect("a required profile is present after the presence check");
         ProfileRange::new(source.min, source.max)
     };
-    Some(match (&template.body, template.motion) {
+    let profile = match (&template.body, template.motion) {
         (ModeBodySource::Capsule { .. }, MotionKind::SingleBodyWheeled) => {
             AgentBehaviorProfile::narrow_wheeled(
                 param("speed_mps"),
@@ -407,6 +511,12 @@ fn compiled_profile(
             param("comfortable_brake_mps2"),
             param("compliance"),
         ),
+    };
+    Some(match template.profiles.get("lateral_accel_max_mps2") {
+        Some(source) => {
+            profile.with_lateral_accel_max_mps2(ProfileRange::new(source.min, source.max))
+        }
+        None => profile,
     })
 }
 

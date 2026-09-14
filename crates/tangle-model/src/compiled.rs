@@ -15,10 +15,11 @@ use crate::mode_template::{
     CompiledModeTemplate, compile_mode_template, compiled_nominal_direction, compiled_speed_policy,
 };
 use crate::source::{
-    DemandChoiceSource, DemandSource, DemandSpawnSource, LateralUse, ModeBodySource,
-    ModeTemplateSource, MovementDirection, MovementSource, PathEnd, PedestrianDemandSource,
-    PedestrianProfileSource, PopulationSource, ProfileRangeSource, ProfileSource, RuleKind,
-    ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource,
+    AdjacencySide, CommitPolicySource, DemandChoiceSource, DemandSource, DemandSpawnSource,
+    LateralUse, ManeuverPolicySource, ModeBodySource, ModeTemplateSource, MovementDirection,
+    MovementSource, PassingSide, PathEnd, PedestrianDemandSource, PedestrianProfileSource,
+    PermissionEffect, PermissionKind, PopulationSource, ProfileRangeSource, ProfileSource,
+    RuleKind, ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource, WrongWayPolicySource,
 };
 use crate::validate::{Diagnostic, validate, validate_v2};
 
@@ -358,6 +359,69 @@ impl FacilityConnectorId {
     }
 }
 
+/// Dense index of a compiled side-by-side facility adjacency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FacilityAdjacencyId(u32);
+
+impl FacilityAdjacencyId {
+    /// Construct a dense adjacency identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this adjacency.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled clearance band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClearanceBandId(u32);
+
+impl ClearanceBandId {
+    /// Construct a dense band identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this band.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Dense index of a compiled permission statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PermissionId(u32);
+
+impl PermissionId {
+    /// Construct a dense statement identifier from its array index.
+    pub const fn from_index(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    /// The zero-based array index of this statement.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The raw integer value, suitable for serialization.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 /// Stable string identifiers in dense-index order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdMap {
@@ -376,6 +440,9 @@ pub struct IdMap {
     pedestrian_demand: Vec<String>,
     facilities: Vec<String>,
     facility_connectors: Vec<String>,
+    facility_adjacencies: Vec<String>,
+    permissions: Vec<String>,
+    clearance_bands: Vec<String>,
 }
 
 impl IdMap {
@@ -454,6 +521,21 @@ impl IdMap {
         &self.facility_connectors
     }
 
+    /// Facility-adjacency identifiers indexed by [`FacilityAdjacencyId`].
+    pub fn facility_adjacencies(&self) -> &[String] {
+        &self.facility_adjacencies
+    }
+
+    /// Permission-statement identifiers indexed by [`PermissionId`].
+    pub fn permissions(&self) -> &[String] {
+        &self.permissions
+    }
+
+    /// Clearance-band identifiers indexed by [`ClearanceBandId`].
+    pub fn clearance_bands(&self) -> &[String] {
+        &self.clearance_bands
+    }
+
     /// Look up the authored name of a compiled path.
     pub fn path_name(&self, id: PathId) -> Option<&str> {
         lookup(&self.paths, id.index())
@@ -527,6 +609,21 @@ impl IdMap {
     /// Look up the authored name of a compiled facility connector.
     pub fn facility_connector_name(&self, id: FacilityConnectorId) -> Option<&str> {
         lookup(&self.facility_connectors, id.index())
+    }
+
+    /// Look up the authored name of a compiled facility adjacency.
+    pub fn facility_adjacency_name(&self, id: FacilityAdjacencyId) -> Option<&str> {
+        lookup(&self.facility_adjacencies, id.index())
+    }
+
+    /// Look up the authored name of a compiled permission statement.
+    pub fn permission_name(&self, id: PermissionId) -> Option<&str> {
+        lookup(&self.permissions, id.index())
+    }
+
+    /// Look up the authored name of a compiled clearance band.
+    pub fn clearance_band_name(&self, id: ClearanceBandId) -> Option<&str> {
+        lookup(&self.clearance_bands, id.index())
     }
 }
 
@@ -963,7 +1060,7 @@ impl CompiledFacilityReference {
 
 /// A compiled traversable region and reference path: a continuous-width
 /// facility with usable width, nominal direction, mode access, lateral-use
-/// policy, speed policy, and connector adjacency.
+/// policy, pass policy, speed policy, and connector adjacency.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledFacility {
     id: FacilityId,
@@ -974,6 +1071,7 @@ pub struct CompiledFacility {
     nominal_direction: NominalDirection,
     access: Vec<ModeTemplateId>,
     lateral_use: LateralUse,
+    passing_side: Option<PassingSide>,
     speed_policy: SpeedPolicy,
     outgoing: Vec<FacilityConnectorId>,
     incoming: Vec<FacilityConnectorId>,
@@ -1077,6 +1175,15 @@ impl CompiledFacility {
         self.lateral_use
     }
 
+    /// The side a within-facility pass or overtake displaces toward, resolved
+    /// from the facility's authored `lateral_policy`, or `None` when the
+    /// facility offers no lateral maneuver target and an agent may not start a
+    /// pass, an overtake, or a lateral position change on it — the Increment 1
+    /// behaviour.
+    pub fn passing_side(&self) -> Option<PassingSide> {
+        self.passing_side
+    }
+
     /// The facility's own speed policy; the effective limit on the facility is
     /// the more restrictive of this and the permitting mode's policy.
     pub fn speed_policy(&self) -> SpeedPolicy {
@@ -1160,6 +1267,145 @@ impl UsableLateralInterval {
     }
 }
 
+/// A set of the two reference-path traversal directions.
+///
+/// The three direction properties of a facility traversal stay separate and are
+/// never substituted for one another: the **nominal** set is the facility's
+/// authored `nominal_direction`, the **permitted** set is a mode's own access
+/// restriction intersected with the applicable permission statement, and the
+/// **physically possible** set is what the compiled connector and adjacency
+/// topology connects. A permission never widens physical possibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectionSet {
+    forward: bool,
+    reverse: bool,
+}
+
+impl DirectionSet {
+    /// No direction.
+    pub const NONE: Self = Self {
+        forward: false,
+        reverse: false,
+    };
+
+    /// The authored forward direction only.
+    pub const FORWARD: Self = Self {
+        forward: true,
+        reverse: false,
+    };
+
+    /// The authored reverse direction only.
+    pub const REVERSE: Self = Self {
+        forward: false,
+        reverse: true,
+    };
+
+    /// Both directions.
+    pub const BOTH: Self = Self {
+        forward: true,
+        reverse: true,
+    };
+
+    /// The set holding exactly `direction`.
+    pub const fn of(direction: MovementDirection) -> Self {
+        match direction {
+            MovementDirection::Forward => Self::FORWARD,
+            MovementDirection::Reverse => Self::REVERSE,
+        }
+    }
+
+    /// Whether the set holds no direction.
+    pub const fn is_empty(self) -> bool {
+        !self.forward && !self.reverse
+    }
+
+    /// Whether the set holds `direction`.
+    pub const fn contains(self, direction: MovementDirection) -> bool {
+        match direction {
+            MovementDirection::Forward => self.forward,
+            MovementDirection::Reverse => self.reverse,
+        }
+    }
+
+    /// The directions both sets hold.
+    pub const fn intersection(self, other: Self) -> Self {
+        Self {
+            forward: self.forward && other.forward,
+            reverse: self.reverse && other.reverse,
+        }
+    }
+
+    /// The directions at least one set holds.
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            forward: self.forward || other.forward,
+            reverse: self.reverse || other.reverse,
+        }
+    }
+
+    /// The directions this set holds and `other` does not.
+    pub const fn difference(self, other: Self) -> Self {
+        Self {
+            forward: self.forward && !other.forward,
+            reverse: self.reverse && !other.reverse,
+        }
+    }
+
+    /// Whether every direction this set holds is also in `other`.
+    pub const fn is_subset_of(self, other: Self) -> bool {
+        (!self.forward || other.forward) && (!self.reverse || other.reverse)
+    }
+
+    /// The directions in the set, forward before reverse.
+    pub fn iter(self) -> impl Iterator<Item = MovementDirection> {
+        [MovementDirection::Forward, MovementDirection::Reverse]
+            .into_iter()
+            .filter(move |direction| self.contains(*direction))
+    }
+}
+
+impl From<NominalDirection> for DirectionSet {
+    fn from(direction: NominalDirection) -> Self {
+        match direction {
+            NominalDirection::Forward => Self::FORWARD,
+            NominalDirection::Reverse => Self::REVERSE,
+            NominalDirection::Either => Self::BOTH,
+        }
+    }
+}
+
+impl FromIterator<MovementDirection> for DirectionSet {
+    fn from_iter<I: IntoIterator<Item = MovementDirection>>(iter: I) -> Self {
+        iter.into_iter()
+            .fold(Self::NONE, |set, direction| set.union(Self::of(direction)))
+    }
+}
+
+/// The zero-based index of a traversal direction, for arrays indexed by the two
+/// reference directions.
+fn direction_index(direction: MovementDirection) -> usize {
+    match direction {
+        MovementDirection::Forward => 0,
+        MovementDirection::Reverse => 1,
+    }
+}
+
+/// The direction other than `direction`.
+fn opposite_direction(direction: MovementDirection) -> MovementDirection {
+    match direction {
+        MovementDirection::Forward => MovementDirection::Reverse,
+        MovementDirection::Reverse => MovementDirection::Forward,
+    }
+}
+
+/// The side other than `side`.
+fn opposite_side(side: AdjacencySide) -> AdjacencySide {
+    match side {
+        AdjacencySide::Left => AdjacencySide::Right,
+        AdjacencySide::Right => AdjacencySide::Left,
+    }
+}
+
 /// One facility traversal named by a connector: a facility and the direction
 /// of travel along its reference path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1167,7 +1413,6 @@ pub struct FacilityTraversal {
     facility: FacilityId,
     direction: MovementDirection,
 }
-
 impl FacilityTraversal {
     /// The facility traversed.
     pub fn facility(self) -> FacilityId {
@@ -1208,6 +1453,350 @@ impl CompiledFacilityConnector {
     /// The traversal the connector enters.
     pub fn to(&self) -> FacilityTraversal {
         self.to
+    }
+}
+
+/// One lateral transition target: the facility band an agent crosses into and
+/// the side of the crossing in the agent's own travel frame.
+///
+/// The target is a compiled traversal, not a lateral offset: the handoff fixes
+/// the destination `(facility, direction)` and the pose is projected onto the
+/// destination reference afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LateralTransition {
+    target: FacilityTraversal,
+    side: AdjacencySide,
+}
+
+impl LateralTransition {
+    /// The destination traversal that continues the agent's travel.
+    pub fn target(self) -> FacilityTraversal {
+        self.target
+    }
+
+    /// The side of the crossing in the agent's own travel frame: `left` is the
+    /// positive-`d` side of its direction of travel.
+    pub fn side(self) -> AdjacencySide {
+        self.side
+    }
+}
+
+/// A compiled side-by-side adjacency between two facility bands.
+///
+/// The adjacency is an undirected side-by-side relation and is the only lateral
+/// transition relation: proximity alone never infers one, and a
+/// [`CompiledFacilityConnector`] keeps its end-join meaning. The authored `side`
+/// is the side of `first` on which `second` lies in `first`'s authored forward
+/// direction; the resolved transitions map it into each band's own travel frame
+/// and name the destination traversal whose reference tangent agrees with the
+/// agent's travel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledFacilityAdjacency {
+    id: FacilityAdjacencyId,
+    name: String,
+    first: FacilityId,
+    second: FacilityId,
+    side: AdjacencySide,
+    /// The resolved transition from each band and direction, indexed
+    /// `[band: first, second][direction: forward, reverse]`.
+    transitions: [[LateralTransition; 2]; 2],
+}
+
+impl CompiledFacilityAdjacency {
+    /// Dense identifier of this adjacency.
+    pub fn id(&self) -> FacilityAdjacencyId {
+        self.id
+    }
+
+    /// Authored name of this adjacency.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The first facility band.
+    pub fn first(&self) -> FacilityId {
+        self.first
+    }
+
+    /// The second facility band.
+    pub fn second(&self) -> FacilityId {
+        self.second
+    }
+
+    /// The authored side of `first` on which `second` lies, in `first`'s
+    /// authored forward direction.
+    pub fn side(&self) -> AdjacencySide {
+        self.side
+    }
+
+    /// The lateral transition an agent on `facility` travelling in `direction`
+    /// takes, or `None` when `facility` is not one of the two bands.
+    pub fn transition(
+        &self,
+        facility: FacilityId,
+        direction: MovementDirection,
+    ) -> Option<LateralTransition> {
+        let band = if facility == self.first {
+            0
+        } else if facility == self.second {
+            1
+        } else {
+            return None;
+        };
+        Some(self.transitions[band][direction_index(direction)])
+    }
+}
+
+/// The compiled transition targets of one facility traversal.
+///
+/// An agent on `(facility, direction)` may hand off longitudinally through the
+/// connectors that leave that traversal's end, or laterally across every
+/// adjacency the facility authors. Both lists preserve authored order, and both
+/// name compiled objects rather than copied geometry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraversalTransitions {
+    longitudinal: Vec<FacilityConnectorId>,
+    lateral: Vec<LateralTransition>,
+}
+
+impl TraversalTransitions {
+    /// Connectors leaving this traversal's end, in authored order.
+    pub fn longitudinal(&self) -> &[FacilityConnectorId] {
+        &self.longitudinal
+    }
+
+    /// Side-by-side bands reachable from this traversal, in authored adjacency
+    /// order.
+    pub fn lateral(&self) -> &[LateralTransition] {
+        &self.lateral
+    }
+}
+
+/// The declared object one compiled permission statement names.
+///
+/// The statement's `kind` fixes the object kind, so a lookup key carries the
+/// resolved dense identifier rather than an authored string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionTarget {
+    /// A continuous-width facility.
+    Facility(FacilityId),
+    /// A movement connector.
+    Movement(MovementId),
+    /// A pedestrian crossing.
+    Crossing(CrossingId),
+    /// A target this build does not resolve: a `stop_service` statement's
+    /// `bus_stop` (Increment 4), or an id no declared object supplies. Such a
+    /// statement matches no traversal and fixes no effect.
+    Undeclared,
+}
+
+/// One compiled permission or obligation statement.
+///
+/// The holder, the target, and the effect are resolved once at compile time and
+/// the authored order is preserved, so a traversal applies the statement the
+/// specificity rule selects without reading a source string.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledPermission {
+    id: PermissionId,
+    name: String,
+    kind: PermissionKind,
+    holder: ModeTemplateId,
+    target: PermissionTarget,
+    effect: PermissionEffect,
+}
+
+impl CompiledPermission {
+    /// Dense identifier of this statement.
+    pub fn id(&self) -> PermissionId {
+        self.id
+    }
+
+    /// Authored name of this statement.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// What the statement is about; it fixes the target object kind.
+    pub fn kind(&self) -> PermissionKind {
+        self.kind
+    }
+
+    /// The mode template the statement binds.
+    pub fn holder(&self) -> ModeTemplateId {
+        self.holder
+    }
+
+    /// The declared object the statement is about.
+    pub fn target(&self) -> PermissionTarget {
+        self.target
+    }
+
+    /// Whether the statement permits, prohibits, or obligates.
+    pub fn effect(&self) -> PermissionEffect {
+        self.effect
+    }
+}
+
+/// One compiled scenario-scoped clearance band.
+///
+/// Bands are metric definitions for the scenario that authors them and stay in
+/// declaration order, which is what makes the reported set deterministic. A
+/// band applies to a passing pair when either mode appears in its
+/// `applies_to_modes`; an absent list applies to every mode pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledClearanceBand {
+    id: ClearanceBandId,
+    name: String,
+    threshold_m: f64,
+    violation: bool,
+    applies_to_modes: Option<Vec<ModeTemplateId>>,
+}
+
+impl CompiledClearanceBand {
+    /// Dense identifier of this band.
+    pub fn id(&self) -> ClearanceBandId {
+        self.id
+    }
+
+    /// Authored name of this band.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The signed surface clearance threshold the band defines, in metres.
+    pub fn threshold_m(&self) -> f64 {
+        self.threshold_m
+    }
+
+    /// Whether a pass below the threshold is a lateral-displacement violation
+    /// in this scenario.
+    pub fn violation(&self) -> bool {
+        self.violation
+    }
+
+    /// The mode templates the band applies to, in authored order, or `None`
+    /// when it applies to every mode pair.
+    pub fn applies_to_modes(&self) -> Option<&[ModeTemplateId]> {
+        self.applies_to_modes.as_deref()
+    }
+
+    /// Whether the band applies to a passing pair one of whose modes is
+    /// `mode`.
+    pub fn applies_to(&self, mode: ModeTemplateId) -> bool {
+        self.applies_to_modes
+            .as_ref()
+            .is_none_or(|modes| modes.contains(&mode))
+    }
+}
+
+/// The resolved policy of one eligible body on one facility: the three
+/// direction properties, the usable lateral interval, and the applicable
+/// pass, lane-use, and line-crossing policy.
+///
+/// The nominal, permitted, and physically possible direction sets stay separate
+/// and are never substituted for one another. The permitted set is resolved
+/// from the mode's own access restriction, the facility's nominal direction, and
+/// the applicable `nominal_direction` statement; a permit or obligation naming
+/// an opposing direction the compiled topology does not connect is inert, so a
+/// permission never widens physical possibility.
+///
+/// The usable interval is the signed-offset interval at every arc length: the
+/// authored band width is constant, so the interval is too. Transition targets
+/// are read through [`CompiledScenario::transitions`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FacilityTraversalPolicy {
+    mode: ModeTemplateId,
+    facility: FacilityId,
+    movement: Option<MovementId>,
+    nominal: DirectionSet,
+    permitted: DirectionSet,
+    physically_possible: DirectionSet,
+    nominal_effect: Option<PermissionEffect>,
+    usable_interval: UsableLateralInterval,
+    lateral_use: LateralUse,
+    passing_side: Option<PassingSide>,
+    lane_use: Option<PermissionEffect>,
+    overtake: Option<PermissionEffect>,
+}
+
+impl FacilityTraversalPolicy {
+    /// The mode template the policy is resolved for.
+    pub fn mode(&self) -> ModeTemplateId {
+        self.mode
+    }
+
+    /// The facility the policy is resolved on.
+    pub fn facility(&self) -> FacilityId {
+        self.facility
+    }
+
+    /// The movement the traversal carries, when the policy was resolved with
+    /// one; a movement-targeted statement decides over a facility-targeted one.
+    pub fn movement(&self) -> Option<MovementId> {
+        self.movement
+    }
+
+    /// The facility's authored nominal direction, independent of any mode.
+    pub fn nominal_directions(&self) -> DirectionSet {
+        self.nominal
+    }
+
+    /// The directions the mode may travel.
+    pub fn permitted_directions(&self) -> DirectionSet {
+        self.permitted
+    }
+
+    /// Whether the mode may travel in `direction`.
+    pub fn permits(&self, direction: MovementDirection) -> bool {
+        self.permitted.contains(direction)
+    }
+
+    /// The directions a connected traversal makes physically possible.
+    pub fn physically_possible_directions(&self) -> DirectionSet {
+        self.physically_possible
+    }
+
+    /// The directions both permitted and physically connected: what a
+    /// controller may actually route an agent through.
+    pub fn traversable_directions(&self) -> DirectionSet {
+        self.permitted.intersection(self.physically_possible)
+    }
+
+    /// The applied `nominal_direction` statement's effect, or `None` when no
+    /// statement binds the mode to this target, which leaves the nominal
+    /// direction as the only permitted one.
+    pub fn nominal_effect(&self) -> Option<PermissionEffect> {
+        self.nominal_effect
+    }
+
+    /// The signed lateral offsets the mode's body and clearance may occupy.
+    pub fn usable_interval(&self) -> UsableLateralInterval {
+        self.usable_interval
+    }
+
+    /// Whether the usable lateral interval is shared or centered.
+    pub fn lateral_use(&self) -> LateralUse {
+        self.lateral_use
+    }
+
+    /// The side a pass or overtake on the facility displaces toward, or `None`
+    /// when the facility offers no lateral maneuver target.
+    pub fn passing_side(&self) -> Option<PassingSide> {
+        self.passing_side
+    }
+
+    /// The applied `lane_use` statement's effect, or `None` when no statement
+    /// binds the mode to this facility: the facility's `lateral_use` and
+    /// `lateral_policy` alone decide.
+    pub fn lane_use(&self) -> Option<PermissionEffect> {
+        self.lane_use
+    }
+
+    /// The applied `overtake` statement's effect, or `None` when no statement
+    /// binds the mode to this facility: passing and overtaking are permitted
+    /// wherever the mode's capability and the geometry allow.
+    pub fn overtake(&self) -> Option<PermissionEffect> {
+        self.overtake
     }
 }
 
@@ -2087,6 +2676,13 @@ pub struct CompiledScenario {
     demand_modes: Vec<Option<ModeTemplateId>>,
     facilities: Vec<CompiledFacility>,
     facility_connectors: Vec<CompiledFacilityConnector>,
+    facility_adjacencies: Vec<CompiledFacilityAdjacency>,
+    /// Transition targets of each facility traversal, indexed by facility and
+    /// then by [`direction_index`]. A version-1 view has none.
+    traversal_transitions: Vec<[TraversalTransitions; 2]>,
+    permissions: Vec<CompiledPermission>,
+    clearance_bands: Vec<CompiledClearanceBand>,
+    maneuver_policy: Option<ManeuverPolicySource>,
     id_map: IdMap,
 }
 
@@ -2110,7 +2706,9 @@ impl CompiledScenario {
     /// fields (profiles, pedestrian profiles, population, demand), so the
     /// kernel consumes the same compiled representation. Alongside that view,
     /// the Increment 1 authored shapes populate the compiled facilities, their
-    /// connectors, and the compiled mode-template bundles; a version-1 source
+    /// connectors, and the compiled mode-template bundles, and the Increment 2
+    /// shapes populate the resolved permissions, clearance bands, side-by-side
+    /// adjacencies, transition targets, and maneuver policy; a version-1 source
     /// has none of these.
     pub fn compile_v2(source: ScenarioSourceV2) -> Result<Self, Vec<Diagnostic>> {
         let diagnostics = validate_v2(&source);
@@ -2125,9 +2723,35 @@ impl CompiledScenario {
                 .iter()
                 .map(|template| template.id.as_str()),
         );
+        let facility_index = index_by_id(
+            source
+                .facilities
+                .iter()
+                .map(|facility| facility.id.as_str()),
+        );
+        let movement_index =
+            index_by_id(source.movements.iter().map(|movement| movement.id.as_str()));
+        let crossing_index =
+            index_by_id(source.crossings.iter().map(|crossing| crossing.id.as_str()));
         let facilities = compile_facilities(&source, &mode_template_index);
         let facility_connectors = compile_facility_connectors(&source);
-        let facilities = attach_facility_adjacency(facilities, &facility_connectors);
+        let facility_adjacencies =
+            compile_facility_adjacencies(&source, &facilities, &facility_index);
+        let facilities =
+            attach_facility_topology(facilities, &facility_connectors, &facility_adjacencies);
+        let traversal_transitions = compile_traversal_transitions(
+            facilities.len(),
+            &facility_connectors,
+            &facility_adjacencies,
+        );
+        let permissions = compile_permissions(
+            &source,
+            &facility_index,
+            &movement_index,
+            &crossing_index,
+            &mode_template_index,
+        );
+        let clearance_bands = compile_clearance_bands(&source, &mode_template_index);
         let facility_names = names(source.facilities.iter().map(|facility| &facility.id));
         let facility_connector_names = names(
             source
@@ -2135,6 +2759,14 @@ impl CompiledScenario {
                 .iter()
                 .map(|connector| &connector.id),
         );
+        let facility_adjacency_names = names(
+            source
+                .facility_adjacencies
+                .iter()
+                .map(|adjacency| &adjacency.id),
+        );
+        let permission_names = names(source.permissions.iter().map(|permission| &permission.id));
+        let clearance_band_names = names(source.clearance_bands.iter().map(|band| &band.id));
         // Each mode-tagged demand source's template, in the same order the
         // shared version-1 view materializes its `demand` array. Validation has
         // already rejected an undeclared mode, so an entry is always found.
@@ -2148,13 +2780,22 @@ impl CompiledScenario {
             })
             .collect();
 
+        let maneuver_policy = source.maneuver_policy;
         let mut scenario = Self::compile_validated(v2_to_v1_view(source));
         scenario.mode_templates = mode_templates;
         scenario.demand_modes = demand_modes;
         scenario.facilities = facilities;
         scenario.facility_connectors = facility_connectors;
+        scenario.facility_adjacencies = facility_adjacencies;
+        scenario.traversal_transitions = traversal_transitions;
+        scenario.permissions = permissions;
+        scenario.clearance_bands = clearance_bands;
+        scenario.maneuver_policy = maneuver_policy;
         scenario.id_map.facilities = facility_names;
         scenario.id_map.facility_connectors = facility_connector_names;
+        scenario.id_map.facility_adjacencies = facility_adjacency_names;
+        scenario.id_map.permissions = permission_names;
+        scenario.id_map.clearance_bands = clearance_band_names;
         Ok(scenario)
     }
 
@@ -2400,6 +3041,9 @@ impl CompiledScenario {
             pedestrian_demand: names(source.pedestrian_demand.iter().map(|demand| &demand.id)),
             facilities: Vec::new(),
             facility_connectors: Vec::new(),
+            facility_adjacencies: Vec::new(),
+            permissions: Vec::new(),
+            clearance_bands: Vec::new(),
         };
 
         Self {
@@ -2427,6 +3071,11 @@ impl CompiledScenario {
             demand_modes: Vec::new(),
             facilities: Vec::new(),
             facility_connectors: Vec::new(),
+            facility_adjacencies: Vec::new(),
+            traversal_transitions: Vec::new(),
+            permissions: Vec::new(),
+            clearance_bands: Vec::new(),
+            maneuver_policy: None,
             id_map,
         }
     }
@@ -2640,6 +3289,196 @@ impl CompiledScenario {
     ) -> Option<&CompiledFacilityConnector> {
         self.facility_connectors.get(id.index())
     }
+
+    /// Compiled side-by-side facility adjacencies in dense-index order.
+    ///
+    /// A version-1 source and a version-2 source that authors none have no
+    /// adjacencies, which is the Increment 1 behaviour: no lateral transition
+    /// exists.
+    pub fn facility_adjacencies(&self) -> &[CompiledFacilityAdjacency] {
+        &self.facility_adjacencies
+    }
+
+    /// Look up a compiled facility adjacency by dense identifier.
+    pub fn facility_adjacency(
+        &self,
+        id: FacilityAdjacencyId,
+    ) -> Option<&CompiledFacilityAdjacency> {
+        self.facility_adjacencies.get(id.index())
+    }
+
+    /// The compiled transition targets of one facility traversal, or `None`
+    /// when the facility is not declared.
+    ///
+    /// Longitudinal targets are the connectors that leave the traversal's end;
+    /// lateral targets are the side-by-side bands an adjacency makes reachable.
+    /// Whether a lateral crossing is *permitted* is a legal question answered by
+    /// the destination traversal's
+    /// [`FacilityTraversalPolicy::permitted_directions`]: a destination that
+    /// does not permit the continuation direction is a forbidden boundary
+    /// crossing rather than an impossible route.
+    pub fn transitions(
+        &self,
+        facility: FacilityId,
+        direction: MovementDirection,
+    ) -> Option<&TraversalTransitions> {
+        self.traversal_transitions
+            .get(facility.index())
+            .map(|pair| &pair[direction_index(direction)])
+    }
+
+    /// The resolved policy of one eligible body on one facility.
+    ///
+    /// `mode` is eligible when the facility declares it in its `access.modes`;
+    /// any other mode yields `None`, and so does an undeclared facility or mode.
+    /// `movement` is the movement the traversal carries, when the route stage
+    /// knows one: a movement-targeted `nominal_direction` statement then decides
+    /// over a facility-targeted one, because the narrower object wins.
+    pub fn traversal_policy(
+        &self,
+        mode: ModeTemplateId,
+        facility: FacilityId,
+        movement: Option<MovementId>,
+    ) -> Option<FacilityTraversalPolicy> {
+        let compiled_facility = self.facility(facility)?;
+        if !compiled_facility.permits_mode(mode) {
+            return None;
+        }
+        let template = self.mode_template(mode)?;
+
+        let nominal = DirectionSet::from(compiled_facility.nominal_direction());
+        let physically_possible: DirectionSet = compiled_facility
+            .physically_possible_directions()
+            .iter()
+            .copied()
+            .collect();
+        let facility_effect = self.permission_effect(
+            PermissionKind::NominalDirection,
+            mode,
+            PermissionTarget::Facility(facility),
+        );
+        let nominal_effect = match movement {
+            Some(movement) => self
+                .permission_effect(
+                    PermissionKind::NominalDirection,
+                    mode,
+                    PermissionTarget::Movement(movement),
+                )
+                .or(facility_effect),
+            None => facility_effect,
+        };
+        let permitted = resolve_permitted(
+            template.access().nominal_direction(),
+            compiled_facility.nominal_direction(),
+            nominal_effect,
+            physically_possible,
+        );
+        let target = PermissionTarget::Facility(facility);
+
+        Some(FacilityTraversalPolicy {
+            mode,
+            facility,
+            movement,
+            nominal,
+            permitted,
+            physically_possible,
+            nominal_effect,
+            usable_interval: compiled_facility.usable_lateral_interval(
+                template.envelope_width_m(),
+                template.lateral_clearance_m(),
+            ),
+            lateral_use: compiled_facility.lateral_use(),
+            passing_side: compiled_facility.passing_side(),
+            lane_use: self.permission_effect(PermissionKind::LaneUse, mode, target),
+            overtake: self.permission_effect(PermissionKind::Overtake, mode, target),
+        })
+    }
+
+    /// Every compiled permission statement, in authored order.
+    pub fn permissions(&self) -> &[CompiledPermission] {
+        &self.permissions
+    }
+
+    /// Look up a compiled permission statement by dense identifier.
+    pub fn permission(&self, id: PermissionId) -> Option<&CompiledPermission> {
+        self.permissions.get(id.index())
+    }
+
+    /// The effect of the statement that binds `(kind, holder, target)`, or
+    /// `None` when no statement does.
+    ///
+    /// Specificity has exactly one axis, `(kind, holder, target)`, and
+    /// validation rejects two statements that agree on it, so the first match is
+    /// the only match. A `kind` whose target is a facility or movement is also
+    /// subject to the narrower-object rule, which
+    /// [`Self::traversal_policy`] applies when a traversal carries a movement.
+    pub fn permission_effect(
+        &self,
+        kind: PermissionKind,
+        holder: ModeTemplateId,
+        target: PermissionTarget,
+    ) -> Option<PermissionEffect> {
+        self.permissions
+            .iter()
+            .find(|permission| {
+                permission.kind() == kind
+                    && permission.holder() == holder
+                    && permission.target() == target
+            })
+            .map(CompiledPermission::effect)
+    }
+
+    /// The applied crossing statement's effect for `mode` at `crossing`, or
+    /// `None` when no statement binds the pair: the crossing is then traversed
+    /// wherever its governing rule or control allows.
+    pub fn crossing_permission(
+        &self,
+        mode: ModeTemplateId,
+        crossing: CrossingId,
+    ) -> Option<PermissionEffect> {
+        self.permission_effect(
+            PermissionKind::Crossing,
+            mode,
+            PermissionTarget::Crossing(crossing),
+        )
+    }
+
+    /// Compiled clearance bands in dense-index order, which is the authored
+    /// strictly increasing threshold order.
+    ///
+    /// A version-1 source and a version-2 source that authors none have no
+    /// bands, which is the Increment 1 behaviour: close-pass observations carry
+    /// the minimum clearance, its time, and its relative speed only.
+    pub fn clearance_bands(&self) -> &[CompiledClearanceBand] {
+        &self.clearance_bands
+    }
+
+    /// Look up a compiled clearance band by dense identifier.
+    pub fn clearance_band(&self, id: ClearanceBandId) -> Option<&CompiledClearanceBand> {
+        self.clearance_bands.get(id.index())
+    }
+
+    /// The scenario-scoped maneuver policy, or `None` when none is authored, in
+    /// which case no lateral tactic and no wrong-way decision exists.
+    ///
+    /// The policy carries no identifier: it is scenario-scoped policy that
+    /// applies to every mode, facility, and object in the document, so it needs
+    /// no resolution beyond the choices it already names.
+    pub fn maneuver_policy(&self) -> Option<ManeuverPolicySource> {
+        self.maneuver_policy
+    }
+
+    /// The unsafe-commit and commitment-loss policy, or `None` when none is
+    /// authored.
+    pub fn commit_policy(&self) -> Option<CommitPolicySource> {
+        self.maneuver_policy.and_then(|policy| policy.commit)
+    }
+
+    /// The contextual opposing-traversal decision inputs, or `None` when none
+    /// are authored.
+    pub fn wrong_way_policy(&self) -> Option<WrongWayPolicySource> {
+        self.maneuver_policy.and_then(|policy| policy.wrong_way)
+    }
 }
 
 /// Map each identifier to its dense array index.
@@ -2675,7 +3514,7 @@ fn compile_mode_templates(
 ///
 /// A facility with a `reference_path` gets a compiled [`CompiledReferencePath`]
 /// over that path's vertices; a facility without one exposes region geometry
-/// only. Adjacency is attached afterwards by [`attach_facility_adjacency`].
+/// only. Topology is attached afterwards by [`attach_facility_topology`].
 fn compile_facilities(
     source: &ScenarioSourceV2,
     mode_template_index: &HashMap<&str, usize>,
@@ -2709,6 +3548,7 @@ fn compile_facilities(
                     .map(|mode| ModeTemplateId::from_index(mode_template_index[mode.as_str()]))
                     .collect(),
                 lateral_use: facility.lateral_use,
+                passing_side: facility.lateral_policy.map(|policy| policy.passing_side),
                 speed_policy: compiled_speed_policy(facility.speed_policy),
                 outgoing: Vec::new(),
                 incoming: Vec::new(),
@@ -2745,11 +3585,133 @@ fn compile_facility_connectors(source: &ScenarioSourceV2) -> Vec<CompiledFacilit
         .collect()
 }
 
-/// Attach each connector to the facilities it leaves and enters, recording the
-/// traversal directions the connector graph makes physically possible.
-fn attach_facility_adjacency(
+/// Compile the authored side-by-side adjacencies into resolved lateral
+/// transitions.
+///
+/// An adjacency naming an undeclared facility, a facility without a reference
+/// path, or a non-parallel pair whose tangents cannot agree is dropped: such an
+/// adjacency connects nothing, and validation owns rejecting it. The remaining
+/// entries keep authored order.
+fn compile_facility_adjacencies(
+    source: &ScenarioSourceV2,
+    facilities: &[CompiledFacility],
+    facility_index: &HashMap<&str, usize>,
+) -> Vec<CompiledFacilityAdjacency> {
+    let mut compiled = Vec::with_capacity(source.facility_adjacencies.len());
+    for (index, adjacency) in source.facility_adjacencies.iter().enumerate() {
+        let (Some(&first), Some(&second)) = (
+            facility_index.get(adjacency.first.as_str()),
+            facility_index.get(adjacency.second.as_str()),
+        ) else {
+            continue;
+        };
+        let first = FacilityId::from_index(first);
+        let second = FacilityId::from_index(second);
+        let (Some(first_reference), Some(second_reference)) = (
+            facilities[first.index()].reference(),
+            facilities[second.index()].reference(),
+        ) else {
+            continue;
+        };
+        let Some(continuation) =
+            continuing_direction(first_reference.geometry(), second_reference.geometry())
+        else {
+            continue;
+        };
+        let side = adjacency.side;
+        // An agent on `first` finds `second` on the authored side when it
+        // travels forward and on the opposite side when it travels reverse. On
+        // `second` the side flips exactly when the continuation direction
+        // agrees with `first`'s reference direction, because the two bands then
+        // share an orientation.
+        let first_forward = LateralTransition {
+            target: FacilityTraversal {
+                facility: second,
+                direction: continuation,
+            },
+            side,
+        };
+        let first_reverse = LateralTransition {
+            target: FacilityTraversal {
+                facility: second,
+                direction: opposite_direction(continuation),
+            },
+            side: opposite_side(side),
+        };
+        let second_side = if continuation == MovementDirection::Forward {
+            opposite_side(side)
+        } else {
+            side
+        };
+        let second_forward = LateralTransition {
+            target: FacilityTraversal {
+                facility: first,
+                direction: continuation,
+            },
+            side: second_side,
+        };
+        let second_reverse = LateralTransition {
+            target: FacilityTraversal {
+                facility: first,
+                direction: opposite_direction(continuation),
+            },
+            side: opposite_side(second_side),
+        };
+        compiled.push(CompiledFacilityAdjacency {
+            id: FacilityAdjacencyId::from_index(index),
+            name: adjacency.id.clone(),
+            first,
+            second,
+            side,
+            transitions: [
+                [first_forward, first_reverse],
+                [second_forward, second_reverse],
+            ],
+        });
+    }
+    compiled
+}
+
+/// The direction of `neighbour`'s reference whose tangent agrees with `facility`'s
+/// authored forward direction where the two bands lie beside each other, or
+/// `None` when either reference is empty.
+///
+/// The crossing is evaluated at `facility`'s reference midpoint and
+/// `neighbour`'s nearest point to it. The agreeing direction is the one whose
+/// dot product with the agent's own tangent is non-negative, so an exact
+/// perpendicular crossing resolves to forward.
+fn continuing_direction(
+    facility: &CompiledReferencePath,
+    neighbour: &CompiledReferencePath,
+) -> Option<MovementDirection> {
+    if facility.is_empty() || neighbour.is_empty() {
+        return None;
+    }
+    let s = facility.length() * 0.5;
+    let point = facility.position_at(s);
+    let tangent = facility.tangent_at(s);
+    let neighbour_tangent = neighbour.tangent_at(neighbour.project(point).s());
+    Some(if tangent.dot(neighbour_tangent) >= 0.0 {
+        MovementDirection::Forward
+    } else {
+        MovementDirection::Reverse
+    })
+}
+
+/// Attach each connector and adjacency to the facilities they join, recording
+/// the traversal directions the compiled topology makes physically possible.
+///
+/// The connector graph decides first: a connector makes its leaving and
+/// entering directions possible on the traversal it leaves and enters. A
+/// side-by-side adjacency then contributes the direction whose continuation is
+/// already possible on the adjacent facility, which is what lets a laterally
+/// connected traversal support a direction no connector reaches. Possibility is
+/// never computed from a write in the same pass, so the result does not depend
+/// on adjacency order.
+fn attach_facility_topology(
     mut facilities: Vec<CompiledFacility>,
     connectors: &[CompiledFacilityConnector],
+    adjacencies: &[CompiledFacilityAdjacency],
 ) -> Vec<CompiledFacility> {
     for (index, connector) in connectors.iter().enumerate() {
         let id = FacilityConnectorId::from_index(index);
@@ -2764,7 +3726,189 @@ fn attach_facility_adjacency(
         incoming.incoming.push(id);
         push_direction(&mut incoming.physically_possible, to.direction());
     }
+
+    let connecting: Vec<Vec<MovementDirection>> = facilities
+        .iter()
+        .map(|facility| facility.physically_possible.clone())
+        .collect();
+    for adjacency in adjacencies {
+        for band in [adjacency.first(), adjacency.second()] {
+            for direction in [MovementDirection::Forward, MovementDirection::Reverse] {
+                let Some(transition) = adjacency.transition(band, direction) else {
+                    continue;
+                };
+                if connecting[transition.target().facility().index()]
+                    .contains(&transition.target().direction())
+                {
+                    push_direction(&mut facilities[band.index()].physically_possible, direction);
+                }
+            }
+        }
+    }
     facilities
+}
+
+/// Compile the transition targets of every facility traversal.
+///
+/// The longitudinal list is the connectors that leave the traversal's end, in
+/// authored order; the lateral list is the facility's adjacencies, in authored
+/// order, each with the destination traversal and the crossing side in the
+/// agent's own travel frame.
+fn compile_traversal_transitions(
+    facility_count: usize,
+    connectors: &[CompiledFacilityConnector],
+    adjacencies: &[CompiledFacilityAdjacency],
+) -> Vec<[TraversalTransitions; 2]> {
+    (0..facility_count)
+        .map(|index| {
+            let facility = FacilityId::from_index(index);
+            [MovementDirection::Forward, MovementDirection::Reverse].map(|direction| {
+                let longitudinal = connectors
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, connector)| {
+                        connector.from()
+                            == FacilityTraversal {
+                                facility,
+                                direction,
+                            }
+                    })
+                    .map(|(index, _)| FacilityConnectorId::from_index(index))
+                    .collect();
+                let lateral = adjacencies
+                    .iter()
+                    .filter_map(|adjacency| adjacency.transition(facility, direction))
+                    .collect();
+                TraversalTransitions {
+                    longitudinal,
+                    lateral,
+                }
+            })
+        })
+        .collect()
+}
+
+/// Resolve the permitted directions of one `(mode, facility)` traversal.
+///
+/// The mode's own `AgentAccess::nominal_direction` restriction is intersected
+/// with the applicable statement's effect: a `permit` adds the opposing
+/// direction, a `prohibit` and an absent statement leave only the nominal
+/// direction (both directions on an `either` facility, where both are nominal),
+/// and an `obligate` leaves only the opposing direction. A `permit` or
+/// `obligate` whose opposing direction the compiled topology does not connect is
+/// inert, so a permission never widens physical possibility.
+fn resolve_permitted(
+    access: NominalDirection,
+    nominal: NominalDirection,
+    effect: Option<PermissionEffect>,
+    physically_possible: DirectionSet,
+) -> DirectionSet {
+    let nominal_set = DirectionSet::from(nominal);
+    let opposing = DirectionSet::BOTH.difference(nominal_set);
+    let realizable = !opposing.is_empty() && opposing.is_subset_of(physically_possible);
+    let effective = match effect {
+        Some(PermissionEffect::Permit) if realizable => DirectionSet::BOTH,
+        Some(PermissionEffect::Obligate) if realizable => opposing,
+        _ => nominal_set,
+    };
+    DirectionSet::from(access).intersection(effective)
+}
+
+/// Compile the authored permission statements into resolved, source-ordered
+/// form.
+fn compile_permissions(
+    source: &ScenarioSourceV2,
+    facility_index: &HashMap<&str, usize>,
+    movement_index: &HashMap<&str, usize>,
+    crossing_index: &HashMap<&str, usize>,
+    mode_template_index: &HashMap<&str, usize>,
+) -> Vec<CompiledPermission> {
+    source
+        .permissions
+        .iter()
+        .enumerate()
+        .map(|(index, permission)| CompiledPermission {
+            id: PermissionId::from_index(index),
+            name: permission.id.clone(),
+            kind: permission.kind,
+            holder: ModeTemplateId::from_index(mode_template_index[permission.holder.as_str()]),
+            target: resolve_permission_target(
+                permission.kind,
+                permission.target.as_str(),
+                facility_index,
+                movement_index,
+                crossing_index,
+            ),
+            effect: permission.effect,
+        })
+        .collect()
+}
+
+/// Resolve one statement's target to the object kind its `kind` names.
+///
+/// A `nominal_direction` statement names a facility or a movement, a `lane_use`
+/// or `overtake` statement names a facility, and a `crossing` statement names a
+/// crossing. A `stop_service` statement's `bus_stop` is Increment 4, and an id
+/// that no declared object supplies is reported by validation, so both resolve
+/// to [`PermissionTarget::Undeclared`] and match no traversal.
+fn resolve_permission_target(
+    kind: PermissionKind,
+    target: &str,
+    facility_index: &HashMap<&str, usize>,
+    movement_index: &HashMap<&str, usize>,
+    crossing_index: &HashMap<&str, usize>,
+) -> PermissionTarget {
+    match kind {
+        PermissionKind::NominalDirection => {
+            if let Some(&index) = facility_index.get(target) {
+                PermissionTarget::Facility(FacilityId::from_index(index))
+            } else if let Some(&index) = movement_index.get(target) {
+                PermissionTarget::Movement(MovementId::from_index(index))
+            } else {
+                PermissionTarget::Undeclared
+            }
+        }
+        PermissionKind::LaneUse | PermissionKind::Overtake => match facility_index.get(target) {
+            Some(&index) => PermissionTarget::Facility(FacilityId::from_index(index)),
+            None => PermissionTarget::Undeclared,
+        },
+        PermissionKind::Crossing => match crossing_index.get(target) {
+            Some(&index) => PermissionTarget::Crossing(CrossingId::from_index(index)),
+            None => PermissionTarget::Undeclared,
+        },
+        PermissionKind::StopService => PermissionTarget::Undeclared,
+    }
+}
+
+/// Compile the authored clearance bands, preserving declaration order.
+///
+/// An `applies_to_modes` id that no template supplies is dropped: the band
+/// matches no traversal through it, and validation owns rejecting it.
+fn compile_clearance_bands(
+    source: &ScenarioSourceV2,
+    mode_template_index: &HashMap<&str, usize>,
+) -> Vec<CompiledClearanceBand> {
+    source
+        .clearance_bands
+        .iter()
+        .enumerate()
+        .map(|(index, band)| CompiledClearanceBand {
+            id: ClearanceBandId::from_index(index),
+            name: band.id.clone(),
+            threshold_m: band.threshold_m,
+            violation: band.violation,
+            applies_to_modes: band.applies_to_modes.as_ref().map(|modes| {
+                modes
+                    .iter()
+                    .filter_map(|mode| {
+                        mode_template_index
+                            .get(mode.as_str())
+                            .map(|&index| ModeTemplateId::from_index(index))
+                    })
+                    .collect()
+            }),
+        })
+        .collect()
 }
 
 /// Push `direction` unless it is already present, keeping authored order.
@@ -3702,6 +4846,7 @@ mod tests {
             nominal_direction: NominalDirection::Forward,
             access: vec![ModeTemplateId::from_index(0)],
             lateral_use: LateralUse::Shared,
+            passing_side: None,
             speed_policy: SpeedPolicy::unlimited(),
             outgoing: Vec::new(),
             incoming: Vec::new(),

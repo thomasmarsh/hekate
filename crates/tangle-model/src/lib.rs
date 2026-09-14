@@ -25,16 +25,19 @@ mod source;
 mod validate;
 
 pub use compiled::{
-    BoundaryId, CompiledBoundary, CompiledConflictRegion, CompiledCrossing, CompiledDemand,
-    CompiledFacility, CompiledFacilityConnector, CompiledFacilityReference, CompiledMovement,
-    CompiledPath, CompiledPedestrianDemand, CompiledPedestrianProfile, CompiledPedestrianRoute,
+    BoundaryId, ClearanceBandId, CompiledBoundary, CompiledClearanceBand, CompiledConflictRegion,
+    CompiledCrossing, CompiledDemand, CompiledFacility, CompiledFacilityAdjacency,
+    CompiledFacilityConnector, CompiledFacilityReference, CompiledMovement, CompiledPath,
+    CompiledPedestrianDemand, CompiledPedestrianProfile, CompiledPedestrianRoute,
     CompiledPedestrianRouteShare, CompiledPedestrianSignal, CompiledPedestrianSignalPhase,
-    CompiledPolygon, CompiledPortal, CompiledProfile, CompiledReferencePath, CompiledRegion,
-    CompiledRouteShare, CompiledRule, CompiledScenario, CompiledSignal, CompiledSignalHead,
-    CompiledSignalPhase, CompiledWaitingArea, ConflictRegionId, CrossingId, DemandId,
-    FacilityConnectorId, FacilityId, FacilityTraversal, IdMap, ModeTemplateId, MovementId, PathId,
-    PedestrianDemandId, PedestrianRouteId, PortalId, ProfileRange, RegionId, RouteCoordinate,
-    RuleId, SignalId, UsableLateralInterval, WaitingAreaId,
+    CompiledPermission, CompiledPolygon, CompiledPortal, CompiledProfile, CompiledReferencePath,
+    CompiledRegion, CompiledRouteShare, CompiledRule, CompiledScenario, CompiledSignal,
+    CompiledSignalHead, CompiledSignalPhase, CompiledWaitingArea, ConflictRegionId, CrossingId,
+    DemandId, DirectionSet, FacilityAdjacencyId, FacilityConnectorId, FacilityId,
+    FacilityTraversal, FacilityTraversalPolicy, IdMap, LateralTransition, ModeTemplateId,
+    MovementId, PathId, PedestrianDemandId, PedestrianRouteId, PermissionId, PermissionTarget,
+    PortalId, ProfileRange, RegionId, RouteCoordinate, RuleId, SignalId, TraversalTransitions,
+    UsableLateralInterval, WaitingAreaId,
 };
 pub use components::{
     AgentAccess, AgentBehaviorProfile, AgentBody, AgentComponents, AgentCore, AgentFamily,
@@ -44,7 +47,7 @@ pub use components::{
     TransitOccupancy,
 };
 pub use migrate::{MIGRATION_VERSION, migrate_v1_to_v2, to_canonical_v2_json};
-pub use mode_template::{CompiledModeTemplate, compile_mode_template};
+pub use mode_template::{CompiledLateralPolicy, CompiledModeTemplate, compile_mode_template};
 pub use schema::{
     scenario_schema, scenario_schema_json, scenario_schema_v1, scenario_schema_v1_json,
 };

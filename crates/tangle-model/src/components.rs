@@ -611,7 +611,8 @@ pub enum AgentLifecycle {
 /// A family reads only the parameters it uses, so walking agents carry no
 /// following time gap and wheeled agents carry no walking-specific value. The
 /// narrow wheeled family (a capsule that steers) additionally carries its
-/// steering response and lateral-clearance preference; every other family
+/// steering response, lateral-clearance preference, and the lateral
+/// acceleration a free lateral maneuver is bounded by; every other family
 /// leaves those absent. Body dimensions are not here: they belong to the body
 /// component.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -623,6 +624,7 @@ pub struct AgentBehaviorProfile {
     comfortable_brake_mps2: Option<ProfileRange>,
     steering_rate_max_rad_s: Option<ProfileRange>,
     lateral_clearance_m: Option<ProfileRange>,
+    lateral_accel_max_mps2: Option<ProfileRange>,
 }
 
 impl AgentBehaviorProfile {
@@ -637,6 +639,7 @@ impl AgentBehaviorProfile {
             comfortable_brake_mps2: None,
             steering_rate_max_rad_s: None,
             lateral_clearance_m: None,
+            lateral_accel_max_mps2: None,
         }
     }
 
@@ -661,6 +664,7 @@ impl AgentBehaviorProfile {
             comfortable_brake_mps2: Some(comfortable_brake_mps2),
             steering_rate_max_rad_s: None,
             lateral_clearance_m: None,
+            lateral_accel_max_mps2: None,
         }
     }
 
@@ -684,7 +688,21 @@ impl AgentBehaviorProfile {
             comfortable_brake_mps2: Some(comfortable_brake_mps2),
             steering_rate_max_rad_s: Some(steering_rate_max_rad_s),
             lateral_clearance_m: Some(lateral_clearance_m),
+            lateral_accel_max_mps2: None,
         }
+    }
+
+    /// This profile with the mode's maximum lateral acceleration attached.
+    ///
+    /// The parameter is the `lateral_accel_max_mps2` a lateral-capable mode
+    /// declares; a mode without free lateral motion attaches none, so the
+    /// Increment 0 and Increment 1 profile sets are unchanged.
+    pub const fn with_lateral_accel_max_mps2(
+        mut self,
+        lateral_accel_max_mps2: ProfileRange,
+    ) -> Self {
+        self.lateral_accel_max_mps2 = Some(lateral_accel_max_mps2);
+        self
     }
 
     /// Desired free-flow speed distribution in metres per second.
@@ -722,6 +740,12 @@ impl AgentBehaviorProfile {
     /// metres, present only for a narrow wheeled agent.
     pub fn lateral_clearance_m(&self) -> Option<ProfileRange> {
         self.lateral_clearance_m
+    }
+
+    /// Maximum lateral acceleration distribution in metres per second squared,
+    /// present only for a lateral-capable mode that declares it.
+    pub fn lateral_accel_max_mps2(&self) -> Option<ProfileRange> {
+        self.lateral_accel_max_mps2
     }
 }
 
