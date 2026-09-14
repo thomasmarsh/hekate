@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T02:25:47Z
+updated: 2026-09-14T02:49:03Z
 summary: Build continuous lateral motion, clearance prediction, and deterministic gap claims.
-next: [[TAS-090-predict-maneuver-corridors-and-clearance]]
+next: [[TAS-091-resolve-gap-claims-and-maneuver-transitions]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].

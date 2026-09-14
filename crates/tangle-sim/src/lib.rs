@@ -45,6 +45,7 @@ mod metrics;
 mod narrow;
 pub mod pedestrian;
 mod pedestrian_compliance;
+pub mod prediction;
 mod profile;
 mod query;
 mod rng;
@@ -76,6 +77,11 @@ pub use narrow::NarrowProfile;
 pub use pedestrian::{PedestrianWaypoint, PedestrianZone};
 pub use pedestrian_compliance::{
     PedestrianComplianceDecision, PedestrianComplianceReason, PedestrianSignalAction,
+};
+pub use prediction::{
+    ClearanceFact, CorridorSample, DEFAULT_SUBDIVISIONS, LimitingObject, MAX_PREDICTION_STEPS,
+    ManeuverInputs, ManeuverPrediction, PredictedBody, PredictedClearances, PredictionVerdict,
+    predict_maneuver_corridor,
 };
 pub use profile::{PedestrianProfile, VehicleProfile};
 pub use query::{
