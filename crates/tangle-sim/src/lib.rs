@@ -94,8 +94,8 @@ pub use snapshot::{
     AgentSample, BodySegmentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail,
 };
 pub use stage::{
-    LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge, ManeuverState, ManeuverTransition,
-    SETTLE_TOLERANCE_M,
+    LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge, ManeuverReason, ManeuverState,
+    ManeuverTransition, PassSide, SETTLE_TOLERANCE_M,
 };
 pub use steering::{
     BoundedSteering, LATERAL_APPROACH_S, LateralCorridor, MIN_SPEED_FOR_LATERAL_BOUND_MPS,

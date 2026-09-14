@@ -324,11 +324,12 @@
 //! steering state, which it does not express.
 
 use rand_chacha::ChaCha20Rng;
-use tangle_model::{AgentBody, CompiledModeTemplate};
+use tangle_model::{AgentBody, CompiledModeTemplate, PassingSide};
 
 use crate::control::{self, Constraint};
 use crate::profile::VehicleProfile;
 use crate::rng::uniform01;
+use crate::stage::PassSide;
 
 /// A sampled physical and behavior profile for one narrow wheeled agent.
 ///
@@ -452,6 +453,31 @@ pub(crate) fn sample_narrow_profile(
             .lateral_accel_max_mps2()
             .map(|range| range.sample(uniform01(profile_rng))),
         compliance: profile.compliance().sample(uniform01(compliance_rng)),
+    }
+}
+
+/// Resolve the side a within-facility pass or overtake displaces toward.
+///
+/// `left_clearance_m` and `right_clearance_m` are the ordinary predictor's
+/// predicted minimum swept clearances of a candidate target placed on the
+/// positive- and negative-`d` side respectively, in the maneuvering agent's own
+/// travel frame. A facility that authors `left` or `right` fixes the side from
+/// policy alone, so the clearances are unread; `most_clearance` takes the
+/// strictly greater predicted clearance, and an exact tie resolves to
+/// [`PassSide::Left`], exactly as `docs/schema-v2-contract.md` *Increment 2
+/// additions* fixes. The rule reads the authored policy and measured geometry,
+/// never a mode or template id.
+pub fn pass_side(policy: PassingSide, left_clearance_m: f64, right_clearance_m: f64) -> PassSide {
+    match policy {
+        PassingSide::Left => PassSide::Left,
+        PassingSide::Right => PassSide::Right,
+        PassingSide::MostClearance => {
+            if left_clearance_m >= right_clearance_m {
+                PassSide::Left
+            } else {
+                PassSide::Right
+            }
+        }
     }
 }
 
@@ -667,5 +693,29 @@ mod tests {
     #[test]
     fn the_narrow_model_reports_a_stable_name() {
         assert_eq!(IdmNarrowWheeledController.name(), "idm-narrow");
+    }
+
+    /// The side a pass selects: a `left`/`right` policy fixes it from the
+    /// authored policy alone, and `most_clearance` takes the greater predicted
+    /// clearance with an exact tie resolving to `left`.
+    #[test]
+    fn the_pass_side_reads_policy_then_geometry_with_a_left_tie() {
+        assert_eq!(pass_side(PassingSide::Left, 0.1, 5.0), PassSide::Left);
+        assert_eq!(pass_side(PassingSide::Right, 5.0, 0.1), PassSide::Right);
+        assert_eq!(
+            pass_side(PassingSide::MostClearance, 1.0, 0.5),
+            PassSide::Left,
+            "the greater left clearance wins"
+        );
+        assert_eq!(
+            pass_side(PassingSide::MostClearance, 0.5, 1.0),
+            PassSide::Right,
+            "the greater right clearance wins"
+        );
+        assert_eq!(
+            pass_side(PassingSide::MostClearance, 0.5, 0.5),
+            PassSide::Left,
+            "an exact tie resolves to left"
+        );
     }
 }

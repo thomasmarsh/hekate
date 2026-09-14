@@ -220,6 +220,83 @@ impl ManeuverAbortReason {
     }
 }
 
+/// Why a lateral maneuver was selected, or why eligibility rejected one.
+///
+/// `docs/schema-v2-contract.md` *Increment 2 events and metrics* fixes the
+/// closed `ManeuverReason` code set covering eligibility rejections and
+/// terminations. This type carries the eligibility and selection codes a
+/// tactical leaf produces — the reason recorded on an `attempted` edge and the
+/// inspectable reason a rejected precondition reports. The termination codes of
+/// a maneuver already in flight are the [`ManeuverAbortReason`] codes; the
+/// event surface maps both enums into the one closed event set, so no code is
+/// spelled differently here. No public event is emitted from this module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ManeuverReason {
+    /// Selection: a visible slower leader ahead is the obstacle the pass
+    /// displaces around.
+    SlowerLeader,
+    /// Rejection: the mode's compiled tactics carry no `Pass` capability.
+    Capability,
+    /// Rejection: an applicable `overtake` statement prohibits passing, or the
+    /// facility offers no lateral maneuver target.
+    NoPermission,
+    /// Rejection: no visible slower leader, or no route benefit from passing
+    /// one, or the leader is beyond the maneuver reach.
+    NoBenefit,
+    /// Rejection: the facility is too narrow for the pass on the selected side.
+    InsufficientWidth,
+    /// Rejection: the mode declares no lateral target clearance or horizon, or
+    /// the candidate corridor predicts infeasible over the horizon.
+    NoCorridor,
+}
+
+impl ManeuverReason {
+    /// Stable lowercase label, the contract's code.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SlowerLeader => "slower_leader",
+            Self::Capability => "capability",
+            Self::NoPermission => "no_permission",
+            Self::NoBenefit => "no_benefit",
+            Self::InsufficientWidth => "insufficient_width",
+            Self::NoCorridor => "no_corridor",
+        }
+    }
+}
+
+/// The side a within-facility pass or overtake displaces toward, resolved into
+/// the maneuvering agent's own travel frame.
+///
+/// This is the resolved form of a facility's authored
+/// `lateral_policy.passing_side`: `left` is the positive-`d` side in the agent's
+/// travel frame and `right` the negative-`d` side, so the side an agent claims
+/// never changes with the reference path's own vertex order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PassSide {
+    /// The positive-`d` side in the agent's travel frame.
+    Left,
+    /// The negative-`d` side in the agent's travel frame.
+    Right,
+}
+
+impl PassSide {
+    /// The sign of the offset the side names in the agent's own travel frame.
+    pub const fn sign(self) -> f64 {
+        match self {
+            Self::Left => 1.0,
+            Self::Right => -1.0,
+        }
+    }
+
+    /// Stable lowercase label for diagnostics and later event emission.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
 /// One recorded edge of one agent's maneuver lifecycle.
 ///
 /// Exactly one record is produced per state transition, in a deterministic
@@ -828,5 +905,27 @@ mod tests {
             assert_eq!(reason.label(), label);
         }
         assert_eq!(SETTLE_TOLERANCE_M, 1e-3);
+    }
+
+    /// Every eligibility reason and both resolved sides carry the contract's
+    /// stable code, so a later event surface names them without a second
+    /// spelling.
+    #[test]
+    fn eligibility_reasons_and_sides_have_stable_labels() {
+        let reasons = [
+            (ManeuverReason::SlowerLeader, "slower_leader"),
+            (ManeuverReason::Capability, "capability"),
+            (ManeuverReason::NoPermission, "no_permission"),
+            (ManeuverReason::NoBenefit, "no_benefit"),
+            (ManeuverReason::InsufficientWidth, "insufficient_width"),
+            (ManeuverReason::NoCorridor, "no_corridor"),
+        ];
+        for (reason, label) in reasons {
+            assert_eq!(reason.label(), label);
+        }
+        assert_eq!(PassSide::Left.sign(), 1.0);
+        assert_eq!(PassSide::Right.sign(), -1.0);
+        assert_eq!(PassSide::Left.label(), "left");
+        assert_eq!(PassSide::Right.label(), "right");
     }
 }

@@ -7,14 +7,15 @@
 
 use glam::DVec2;
 use tangle_model::{
-    BodyKind, CompiledReferencePath, CrossingId, FacilityId, MovementId, PathId, PedestrianRouteId,
+    BodyKind, CompiledReferencePath, CrossingId, FacilityId, ModeTemplateId, MovementId, PathId,
+    PedestrianRouteId,
 };
 
 use crate::compliance::ComplianceDecision;
 use crate::narrow::NarrowProfile;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
-use crate::stage::{LateralManeuverRequest, ManeuverCorridor, ManeuverState};
+use crate::stage::{LateralManeuverRequest, ManeuverCorridor, ManeuverReason, ManeuverState};
 use crate::steering::BoundedSteering;
 use crate::time::SimTime;
 
@@ -82,6 +83,10 @@ impl AgentId {
 /// no route state and keep their current output.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RouteState {
+    /// The mode template the agent was spawned from, so a tactical leaf can
+    /// read the mode's compiled capabilities and traversal policy without ever
+    /// naming a mode id.
+    pub(crate) mode_template: ModeTemplateId,
     /// The facility whose compiled reference the coordinates are measured on.
     pub(crate) facility: FacilityId,
     /// Arc length along the facility reference in metres.
@@ -135,6 +140,12 @@ pub(crate) struct RouteState {
     /// settle tolerance of its return target, or `None` while it is away from
     /// it.
     pub(crate) settled_since: Option<SimTime>,
+    /// The most recent narrow pass eligibility outcome for this agent: the
+    /// selection reason ([`ManeuverReason::SlowerLeader`]) when the tactic
+    /// recorded an intent, or the precondition that rejected the pass. `None`
+    /// until the agent is first evaluated; it is inspectable through
+    /// [`crate::Simulation`] and is not written to any output artifact here.
+    pub(crate) pass_reason: Option<ManeuverReason>,
 }
 
 impl RouteState {
@@ -147,6 +158,7 @@ impl RouteState {
     /// travelling forward has a positive offset, and the same body travelling
     /// in reverse has the negated one.
     pub(crate) fn project(
+        mode_template: ModeTemplateId,
         facility: FacilityId,
         geometry: &CompiledReferencePath,
         position: DVec2,
@@ -157,6 +169,7 @@ impl RouteState {
         let coordinate = geometry.project(position);
         let d_m = coordinate.d() * direction;
         Self {
+            mode_template,
             facility,
             s_m: coordinate.s(),
             d_m,
@@ -175,6 +188,7 @@ impl RouteState {
             braking: false,
             hold_since: None,
             settled_since: None,
+            pass_reason: None,
         }
     }
 
@@ -425,6 +439,7 @@ mod tests {
         let reference = straight_reference();
         let left_of_forward = DVec2::new(10.0, 1.5);
         let forward = RouteState::project(
+            ModeTemplateId::from_index(0),
             FacilityId::from_index(0),
             &reference,
             left_of_forward,
@@ -436,6 +451,7 @@ mod tests {
         assert!((forward.d_m - 1.5).abs() < 1e-12);
 
         let reverse = RouteState::project(
+            ModeTemplateId::from_index(0),
             FacilityId::from_index(0),
             &reference,
             left_of_forward,
@@ -454,6 +470,7 @@ mod tests {
     fn projection_carries_the_maneuver_policy_and_follows() {
         let reference = straight_reference();
         let mut state = RouteState::project(
+            ModeTemplateId::from_index(0),
             FacilityId::from_index(3),
             &reference,
             DVec2::new(4.0, 0.25),
@@ -484,6 +501,7 @@ mod tests {
         store.push(init(0.0));
         store.push(AgentInit {
             route_state: Some(RouteState::project(
+                ModeTemplateId::from_index(0),
                 FacilityId::from_index(1),
                 &reference,
                 DVec2::new(5.0, 0.0),
@@ -524,6 +542,7 @@ mod tests {
         for (offset, state) in states.into_iter().enumerate() {
             assert_eq!(ManeuverState::from_label(state.label()), Some(state));
             let mut route = RouteState::project(
+                ModeTemplateId::from_index(0),
                 FacilityId::from_index(0),
                 &reference,
                 DVec2::new(offset as f64, 0.0),
