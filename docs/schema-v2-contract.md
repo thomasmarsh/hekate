@@ -1230,8 +1230,14 @@ transition targets are:
 The handoff itself is fixed at exactly one geometric point per transition kind,
 so no observer sees a change at two different times:
 
-- a lateral handoff occurs when the agent's body centre crosses the lateral
-  boundary between the two bands;
+- a lateral handoff occurs when the agent's body centre crosses the compiled
+  shared boundary between the two bands: `CompiledFacilityAdjacency::shared_boundary_midpoint`
+  is the world midpoint of the longest collinear segment the two facility regions
+  share, and `CompiledFacilityAdjacency::shared_boundary_offset` gives that
+  boundary's signed lateral offset from either band's reference path in the
+  band's own travel frame, so a consumer reads the destination band's usable
+  interval in the source band's frame from one compiled geometric datum rather
+  than the source band's half-width;
 - a connector handoff occurs when the agent's body centre reaches the compiled
   connector coincidence within `CONNECTOR_CONTINUITY_TOLERANCE_M`.
 

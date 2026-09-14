@@ -2774,12 +2774,14 @@ fn validate_facility_connectors(source: &ScenarioSourceV2, diagnostics: &mut Vec
 ///
 /// A shared boundary is what "the bands touch along a stretch of positive
 /// length" means: two rings touching at a single corner share no segment and
-/// return `None`.
-fn shared_boundary_midpoint(a: &[PointSource], b: &[PointSource]) -> Option<PointSource> {
+/// return `None`. Validation and compilation call this one implementation: the
+/// compiler reuses it to derive the compiled shared boundary of a side-by-side
+/// adjacency, so the two never disagree on what touching means.
+pub(crate) fn shared_boundary_midpoint(a: &[DVec2], b: &[DVec2]) -> Option<DVec2> {
     if a.len() < 3 || b.len() < 3 {
         return None;
     }
-    let mut best: Option<(f64, PointSource)> = None;
+    let mut best: Option<(f64, DVec2)> = None;
     for index in 0..a.len() {
         let a0 = a[index];
         let a1 = a[(index + 1) % a.len()];
@@ -2808,13 +2810,7 @@ fn shared_boundary_midpoint(a: &[PointSource], b: &[PointSource]) -> Option<Poin
             }
             if best.as_ref().is_none_or(|(longest, _)| overlap > *longest) {
                 let mid = 0.5 * (low + high);
-                best = Some((
-                    overlap,
-                    PointSource {
-                        x: a0.x + dx * mid,
-                        y: a0.y + dy * mid,
-                    },
-                ));
+                best = Some((overlap, a0 + (a1 - a0) * mid));
             }
         }
     }
@@ -2824,13 +2820,9 @@ fn shared_boundary_midpoint(a: &[PointSource], b: &[PointSource]) -> Option<Poin
 /// The side of `reference`'s forward direction on which a world point lies, or
 /// `None` when the point sits on the centerline within
 /// [`ADJACENCY_TOLERANCE_M`].
-fn reference_side_of(
-    reference: &CompiledReferencePath,
-    point: PointSource,
-) -> Option<AdjacencySide> {
-    let world = DVec2::new(point.x, point.y);
-    let s = reference.project(world).s();
-    let signed = (world - reference.position_at(s)).dot(reference.normal_at(s));
+fn reference_side_of(reference: &CompiledReferencePath, point: DVec2) -> Option<AdjacencySide> {
+    let s = reference.project(point).s();
+    let signed = (point - reference.position_at(s)).dot(reference.normal_at(s));
     if signed > ADJACENCY_TOLERANCE_M {
         Some(AdjacencySide::Left)
     } else if signed < -ADJACENCY_TOLERANCE_M {
@@ -2919,8 +2911,17 @@ fn validate_facility_adjacencies(source: &ScenarioSourceV2, diagnostics: &mut Ve
         let (Some(first_region), Some(second_region)) = (first_region, second_region) else {
             continue;
         };
-        let Some(midpoint) = shared_boundary_midpoint(&first_region.points, &second_region.points)
-        else {
+        let first_ring: Vec<DVec2> = first_region
+            .points
+            .iter()
+            .map(|point| DVec2::new(point.x, point.y))
+            .collect();
+        let second_ring: Vec<DVec2> = second_region
+            .points
+            .iter()
+            .map(|point| DVec2::new(point.x, point.y))
+            .collect();
+        let Some(midpoint) = shared_boundary_midpoint(&first_ring, &second_ring) else {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::FacilityAdjacencyDisjoint,
                 object.clone(),
@@ -3864,5 +3865,35 @@ mod tests {
         assert!(facility_curvature_diagnostics("west", &gentle, &modes).is_empty());
         let straight = CompiledReferencePath::from_polyline(&[DVec2::ZERO, DVec2::new(80.0, 0.0)]);
         assert!(facility_curvature_diagnostics("west", &straight, &modes).is_empty());
+    }
+
+    #[test]
+    fn shared_boundary_midpoint_needs_a_segment_not_a_corner() {
+        let left = [
+            DVec2::new(0.0, 0.0),
+            DVec2::new(10.0, 0.0),
+            DVec2::new(10.0, 10.0),
+            DVec2::new(0.0, 10.0),
+        ];
+        // A ring sharing only the corner `(10, 10)` yields no coordinate.
+        let corner = [
+            DVec2::new(10.0, 10.0),
+            DVec2::new(20.0, 10.0),
+            DVec2::new(20.0, 20.0),
+            DVec2::new(10.0, 20.0),
+        ];
+        assert_eq!(shared_boundary_midpoint(&left, &corner), None);
+
+        // A ring sharing the edge `x = 10` yields its midpoint.
+        let right = [
+            DVec2::new(10.0, 0.0),
+            DVec2::new(20.0, 0.0),
+            DVec2::new(20.0, 10.0),
+            DVec2::new(10.0, 10.0),
+        ];
+        assert_eq!(
+            shared_boundary_midpoint(&left, &right),
+            Some(DVec2::new(10.0, 5.0))
+        );
     }
 }

@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T11:19:57Z
+updated: 2026-09-14T11:43:47Z
 summary: Integrate narrow passing, motor overtaking, and safe lane or facility transitions.
-next: [[TAS-112-compile-the-adjacency-shared-boundary-lateral-co]]
+next: [[TAS-095-complete-lane-transitions-and-safe-aborts]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].

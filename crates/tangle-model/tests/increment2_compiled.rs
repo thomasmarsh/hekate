@@ -12,11 +12,13 @@
 //! Validation of the same shapes is a separate leaf (TAS-086), so every fixture
 //! here authors policy `validate_v2` already accepts.
 
+use glam::DVec2;
 use tangle_model::{
     AdjacencySide, ClearanceBandId, CompiledModeTemplate, CompiledScenario, CrossingId,
-    DirectionSet, FacilityAdjacencyId, FacilityConnectorId, FacilityId, LateralUse, ModeTemplateId,
-    MovementDirection, MovementId, PassingSide, PermissionEffect, PermissionId, PermissionKind,
-    PermissionTarget, compile_mode_template, parse_scenario_source, parse_scenario_source_v2,
+    DiagnosticCode, DirectionSet, FacilityAdjacencyId, FacilityConnectorId, FacilityId, LateralUse,
+    ModeTemplateId, MovementDirection, MovementId, PassingSide, PermissionEffect, PermissionId,
+    PermissionKind, PermissionTarget, compile_mode_template, parse_scenario_source,
+    parse_scenario_source_v2,
 };
 
 /// A version-2 document whose facilities cover a forward, a reverse, and an
@@ -235,6 +237,126 @@ const INCREMENT_2: &str = r#"{
         wrong_way: { min_time_saving_s: 10.0, max_opposing_density_per_km: 40.0,
             urgency: 0.5 },
     },
+}"#;
+
+/// A version-2 document whose two side-by-side bands follow a curved pair of
+/// reference paths and share a curved boundary.
+///
+/// Each band is a half-annulus approximated by chords: `inner_band` spans
+/// radius 3–4 m and `outer_band` radius 4–5 m, so the two share the mid arc at
+/// radius 4 m. Their references are the concentric chordal polylines at radius
+/// 3.5 m and 4.5 m. The longest collinear segment the bands share is one mid
+/// arc chord, whose midpoint is not the straight `width_m / 2` offset a runtime
+/// half-width approximation would report.
+const CURVED: &str = r#"{
+    schema_version: 2,
+    id: 'curved_pair_compiled',
+    coordinate_system: { x: 'east_m', y: 'north_m' },
+    paths: [
+        { id: 'inner_curve', points: [
+            { x: 3.5, y: 0.0 }, { x: 2.4749, y: 2.4749 }, { x: 0.0, y: 3.5 },
+            { x: -2.4749, y: 2.4749 }, { x: -3.5, y: 0.0 } ] },
+        { id: 'outer_curve', points: [
+            { x: 4.5, y: 0.0 }, { x: 3.1820, y: 3.1820 }, { x: 0.0, y: 4.5 },
+            { x: -3.1820, y: 3.1820 }, { x: -4.5, y: 0.0 } ] },
+    ],
+    portals: [],
+    regions: [
+        { id: 'inner_band', points: [
+            { x: 3.0, y: 0.0 }, { x: 2.1213, y: 2.1213 }, { x: 0.0, y: 3.0 },
+            { x: -2.1213, y: 2.1213 }, { x: -3.0, y: 0.0 },
+            { x: -4.0, y: 0.0 }, { x: -2.8284, y: 2.8284 }, { x: 0.0, y: 4.0 },
+            { x: 2.8284, y: 2.8284 }, { x: 4.0, y: 0.0 } ] },
+        { id: 'outer_band', points: [
+            { x: 4.0, y: 0.0 }, { x: 2.8284, y: 2.8284 }, { x: 0.0, y: 4.0 },
+            { x: -2.8284, y: 2.8284 }, { x: -4.0, y: 0.0 },
+            { x: -5.0, y: 0.0 }, { x: -3.5355, y: 3.5355 }, { x: 0.0, y: 5.0 },
+            { x: 3.5355, y: 3.5355 }, { x: 5.0, y: 0.0 } ] },
+    ],
+    mode_templates: [
+        {
+            id: 'cycle',
+            body: { kind: 'capsule', length_m: { min: 1.6, max: 1.6 },
+                radius_m: { min: 0.3, max: 0.3 } },
+            motion: 'single_body_wheeled',
+            tactics: [ 'follow', 'stop', 'yield' ],
+            access: { facility_kinds: [ 'facility' ] },
+            occupancy: 'operator_only',
+            profiles: {
+                speed_mps: { min: 4.0, max: 4.0 },
+                max_accel_mps2: { min: 1.0, max: 1.0 },
+                comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+                time_gap_s: { min: 1.0, max: 1.0 },
+                steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+                lateral_clearance_m: { min: 0.1, max: 0.1 },
+                compliance: { min: 1.0, max: 1.0 },
+            },
+        },
+    ],
+    facilities: [
+        { id: 'inner_lane', region: 'inner_band', reference_path: 'inner_curve',
+            width_m: 1.0, nominal_direction: 'forward', access: { modes: [ 'cycle' ] },
+            lateral_use: 'shared', speed_policy: { limit_mps: null } },
+        { id: 'outer_lane', region: 'outer_band', reference_path: 'outer_curve',
+            width_m: 1.0, nominal_direction: 'forward', access: { modes: [ 'cycle' ] },
+            lateral_use: 'shared', speed_policy: { limit_mps: null } },
+    ],
+    facility_adjacencies: [
+        { id: 'curved_pair', first: 'inner_lane', second: 'outer_lane', side: 'right' },
+    ],
+}"#;
+
+/// A version-2 document whose two bands touch only at the single corner
+/// `(10, 10)`: a shared point is not a shared boundary of positive length, so
+/// the adjacency yields no coordinate and validation rejects the document.
+const CORNER: &str = r#"{
+    schema_version: 2,
+    id: 'corner_touch_compiled',
+    coordinate_system: { x: 'east_m', y: 'north_m' },
+    paths: [
+        { id: 'left_guide', points: [ { x: 0.0, y: 5.0 }, { x: 10.0, y: 5.0 } ] },
+        { id: 'right_guide', points: [ { x: 15.0, y: 10.0 }, { x: 15.0, y: 20.0 } ] },
+    ],
+    portals: [],
+    regions: [
+        { id: 'left_band', points: [
+            { x: 0.0, y: 0.0 }, { x: 10.0, y: 0.0 },
+            { x: 10.0, y: 10.0 }, { x: 0.0, y: 10.0 } ] },
+        { id: 'right_band', points: [
+            { x: 10.0, y: 10.0 }, { x: 20.0, y: 10.0 },
+            { x: 20.0, y: 20.0 }, { x: 10.0, y: 20.0 } ] },
+    ],
+    mode_templates: [
+        {
+            id: 'cycle',
+            body: { kind: 'capsule', length_m: { min: 1.6, max: 1.6 },
+                radius_m: { min: 0.35, max: 0.35 } },
+            motion: 'single_body_wheeled',
+            tactics: [ 'follow', 'stop', 'yield' ],
+            access: { facility_kinds: [ 'facility' ] },
+            occupancy: 'operator_only',
+            profiles: {
+                speed_mps: { min: 4.0, max: 4.0 },
+                max_accel_mps2: { min: 1.0, max: 1.0 },
+                comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+                time_gap_s: { min: 1.0, max: 1.0 },
+                steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+                lateral_clearance_m: { min: 0.3, max: 0.3 },
+                compliance: { min: 1.0, max: 1.0 },
+            },
+        },
+    ],
+    facilities: [
+        { id: 'left_lane', region: 'left_band', reference_path: 'left_guide',
+            width_m: 3.0, nominal_direction: 'forward', access: { modes: [ 'cycle' ] },
+            lateral_use: 'shared', speed_policy: { limit_mps: null } },
+        { id: 'right_lane', region: 'right_band', reference_path: 'right_guide',
+            width_m: 3.0, nominal_direction: 'forward', access: { modes: [ 'cycle' ] },
+            lateral_use: 'shared', speed_policy: { limit_mps: null } },
+    ],
+    facility_adjacencies: [
+        { id: 'corner_only', first: 'left_lane', second: 'right_lane', side: 'left' },
+    ],
 }"#;
 
 /// A version-2 document whose Increment 2 policy names objects no fixture
@@ -901,6 +1023,116 @@ fn compiles_lateral_and_longitudinal_transition_targets() {
             .expect("the facility exists")
             .physically_possible_directions(),
         [MovementDirection::Forward, MovementDirection::Reverse]
+    );
+}
+
+#[test]
+fn compiles_the_shared_boundary_of_a_straight_parallel_pair() {
+    let scenario = increment_2();
+    let eastbound = facility_id(&scenario, "bikeway_eastbound");
+    let westbound = facility_id(&scenario, "bikeway_westbound");
+    let adjacency = scenario
+        .facility_adjacency(FacilityAdjacencyId::from_index(0))
+        .expect("bikeway_lanes exists");
+
+    // The two 3 m bands meet on `y = -1.5` from `x = 0` to `x = 120`, so the
+    // longest shared segment's midpoint is the middle of that edge.
+    assert_eq!(adjacency.shared_boundary_midpoint(), DVec2::new(60.0, -1.5));
+    // The boundary is half a band width to the right of each band's own
+    // reference: the eastbound reference is `y = 0`, the westbound `y = -3`.
+    for band in [eastbound, westbound] {
+        assert_eq!(
+            adjacency.shared_boundary_offset(band, MovementDirection::Forward),
+            Some(-1.5)
+        );
+        assert_eq!(
+            adjacency.shared_boundary_offset(band, MovementDirection::Reverse),
+            Some(1.5)
+        );
+    }
+    // The offset sign agrees with the compiled crossing side in the agent's own
+    // travel frame: left of travel is positive `d`, right of travel negative.
+    for band in [eastbound, westbound] {
+        for direction in [MovementDirection::Forward, MovementDirection::Reverse] {
+            let side = adjacency
+                .transition(band, direction)
+                .expect("the band is one side of the adjacency")
+                .side();
+            let offset = adjacency
+                .shared_boundary_offset(band, direction)
+                .expect("the band is one side of the adjacency");
+            assert_eq!(
+                side,
+                if offset > 0.0 {
+                    AdjacencySide::Left
+                } else {
+                    AdjacencySide::Right
+                }
+            );
+        }
+    }
+    // A facility that is not one of the two bands has no boundary offset.
+    assert_eq!(
+        adjacency.shared_boundary_offset(
+            facility_id(&scenario, "road_eastbound"),
+            MovementDirection::Forward
+        ),
+        None
+    );
+}
+
+#[test]
+fn compiles_the_shared_boundary_of_a_curved_pair() {
+    let source = parse_scenario_source_v2(CURVED).expect("the document parses");
+    let scenario =
+        CompiledScenario::compile_v2(source).expect("the document validates and compiles");
+    let inner = facility_id(&scenario, "inner_lane");
+    let outer = facility_id(&scenario, "outer_lane");
+    let adjacency = scenario
+        .facility_adjacency(FacilityAdjacencyId::from_index(0))
+        .expect("curved_pair exists");
+
+    // The longest shared mid-arc chord runs from `(-4, 0)` to `(-2.8284,
+    // 2.8284)`, so the boundary sits at its midpoint.
+    let midpoint = adjacency.shared_boundary_midpoint();
+    let chord_midpoint = (DVec2::new(-4.0, 0.0) + DVec2::new(-2.8284, 2.8284)) * 0.5;
+    assert!((midpoint - chord_midpoint).length() < 1e-12);
+
+    // Each band's boundary offset is the midpoint's projection onto that band's
+    // own reference in its travel frame. The chordal references are not parallel
+    // to the shared chord, so the distance is the curved 0.462 m, not the
+    // straight `width_m / 2` half width of 0.5 m a runtime approximation reports.
+    for (band, name) in [(inner, "inner_lane"), (outer, "outer_lane")] {
+        let reference = scenario
+            .facility(band)
+            .unwrap_or_else(|| panic!("'{name}' exists"))
+            .reference()
+            .expect("the band declares a reference path")
+            .geometry();
+        let expected = reference.project(midpoint).d();
+        assert!((expected.abs() - 0.4619).abs() < 1e-3);
+        assert!((expected.abs() - 0.5).abs() > 0.01);
+        let forward = adjacency
+            .shared_boundary_offset(band, MovementDirection::Forward)
+            .expect("the band is one side of the adjacency");
+        let reverse = adjacency
+            .shared_boundary_offset(band, MovementDirection::Reverse)
+            .expect("the band is one side of the adjacency");
+        assert!((forward - expected).abs() < 1e-12);
+        assert!((reverse + expected).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn a_corner_only_touch_yields_no_boundary_and_is_rejected() {
+    let source = parse_scenario_source_v2(CORNER).expect("the document parses");
+    let diagnostics = CompiledScenario::compile_v2(source)
+        .expect_err("a corner-only touch shares no boundary, so the document is rejected");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::FacilityAdjacencyDisjoint),
+        "expected the disjoint-adjacency diagnostic, got {diagnostics:?}"
     );
 }
 

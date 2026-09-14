@@ -18,8 +18,9 @@ use crate::source::{
     AdjacencySide, CommitPolicySource, DemandChoiceSource, DemandSource, DemandSpawnSource,
     LateralUse, ManeuverPolicySource, ModeBodySource, ModeTemplateSource, MovementDirection,
     MovementSource, PassingSide, PathEnd, PedestrianDemandSource, PedestrianProfileSource,
-    PermissionEffect, PermissionKind, PopulationSource, ProfileRangeSource, ProfileSource,
-    RuleKind, ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource, WrongWayPolicySource,
+    PermissionEffect, PermissionKind, PolygonSource, PopulationSource, ProfileRangeSource,
+    ProfileSource, RuleKind, ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource,
+    WrongWayPolicySource,
 };
 use crate::validate::{Diagnostic, validate, validate_v2};
 
@@ -1489,7 +1490,9 @@ impl LateralTransition {
 /// is the side of `first` on which `second` lies in `first`'s authored forward
 /// direction; the resolved transitions map it into each band's own travel frame
 /// and name the destination traversal whose reference tangent agrees with the
-/// agent's travel.
+/// agent's travel. The compiled
+/// [shared boundary](Self::shared_boundary_midpoint) fixes where the agent's
+/// body centre crosses between the two bands.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledFacilityAdjacency {
     id: FacilityAdjacencyId,
@@ -1500,6 +1503,13 @@ pub struct CompiledFacilityAdjacency {
     /// The resolved transition from each band and direction, indexed
     /// `[band: first, second][direction: forward, reverse]`.
     transitions: [[LateralTransition; 2]; 2],
+    /// World midpoint of the longest collinear segment the two bands' regions
+    /// share, which is where an agent's body centre crosses between them.
+    boundary_midpoint: DVec2,
+    /// The shared boundary's signed lateral offset from each band's reference
+    /// path in that band's own travel frame, indexed
+    /// `[band: first, second][direction: forward, reverse]`.
+    boundary_offsets: [[f64; 2]; 2],
 }
 
 impl CompiledFacilityAdjacency {
@@ -1544,6 +1554,37 @@ impl CompiledFacilityAdjacency {
             return None;
         };
         Some(self.transitions[band][direction_index(direction)])
+    }
+
+    /// World midpoint of the shared boundary between the two bands: the
+    /// midpoint of the longest collinear segment their regions share, which is
+    /// where the contract's lateral handoff fires.
+    pub fn shared_boundary_midpoint(&self) -> DVec2 {
+        self.boundary_midpoint
+    }
+
+    /// The signed lateral offset of the shared boundary from `facility`'s
+    /// reference path in `facility`'s own travel frame for `direction`, or
+    /// `None` when `facility` is not one of the two bands.
+    ///
+    /// `d` is positive to the left of the direction of travel, so a consumer
+    /// expresses the other band's usable interval in this band's frame by
+    /// shifting it by the difference of the two bands' boundary offsets. This
+    /// is the compiled cross-band offset the runtime otherwise approximates
+    /// with the source band's half-width.
+    pub fn shared_boundary_offset(
+        &self,
+        facility: FacilityId,
+        direction: MovementDirection,
+    ) -> Option<f64> {
+        let band = if facility == self.first {
+            0
+        } else if facility == self.second {
+            1
+        } else {
+            return None;
+        };
+        Some(self.boundary_offsets[band][direction_index(direction)])
     }
 }
 
@@ -2735,8 +2776,9 @@ impl CompiledScenario {
             index_by_id(source.crossings.iter().map(|crossing| crossing.id.as_str()));
         let facilities = compile_facilities(&source, &mode_template_index);
         let facility_connectors = compile_facility_connectors(&source);
+        let regions = compile_regions(&source.regions);
         let facility_adjacencies =
-            compile_facility_adjacencies(&source, &facilities, &facility_index);
+            compile_facility_adjacencies(&source, &facilities, &regions, &facility_index);
         let facilities =
             attach_facility_topology(facilities, &facility_connectors, &facility_adjacencies);
         let traversal_transitions = compile_traversal_transitions(
@@ -2843,16 +2885,7 @@ impl CompiledScenario {
             })
             .collect();
 
-        let regions: Vec<CompiledRegion> = source
-            .regions
-            .iter()
-            .enumerate()
-            .map(|(index, region)| CompiledRegion {
-                id: RegionId::from_index(index),
-                name: region.id.clone(),
-                polygon: CompiledPolygon::new(points_of(&region.points)),
-            })
-            .collect();
+        let regions = compile_regions(&source.regions);
 
         let movements: Vec<CompiledMovement> = source
             .movements
@@ -3510,6 +3543,24 @@ fn compile_mode_templates(
     }
 }
 
+/// Compile the authored regions into dense polygon rings.
+///
+/// Compilation and validation both read region geometry as world-vector rings;
+/// the adjacency derivation projects the shared boundary onto the bands'
+/// references, so the polygons are compiled before the adjacencies that read
+/// them.
+fn compile_regions(regions: &[PolygonSource]) -> Vec<CompiledRegion> {
+    regions
+        .iter()
+        .enumerate()
+        .map(|(index, region)| CompiledRegion {
+            id: RegionId::from_index(index),
+            name: region.id.clone(),
+            polygon: CompiledPolygon::new(points_of(&region.points)),
+        })
+        .collect()
+}
+
 /// Compile the version-2 facilities into their reference-path geometry.
 ///
 /// A facility with a `reference_path` gets a compiled [`CompiledReferencePath`]
@@ -3595,6 +3646,7 @@ fn compile_facility_connectors(source: &ScenarioSourceV2) -> Vec<CompiledFacilit
 fn compile_facility_adjacencies(
     source: &ScenarioSourceV2,
     facilities: &[CompiledFacility],
+    regions: &[CompiledRegion],
     facility_index: &HashMap<&str, usize>,
 ) -> Vec<CompiledFacilityAdjacency> {
     let mut compiled = Vec::with_capacity(source.facility_adjacencies.len());
@@ -3610,6 +3662,20 @@ fn compile_facility_adjacencies(
         let (Some(first_reference), Some(second_reference)) = (
             facilities[first.index()].reference(),
             facilities[second.index()].reference(),
+        ) else {
+            continue;
+        };
+        // The bands are the two facility regions. A pair whose regions touch at
+        // a corner alone shares no boundary of positive length, so the same
+        // derivation validation uses finds nothing and the adjacency is
+        // dropped, exactly as validation rejects it.
+        let Some(boundary_midpoint) = crate::validate::shared_boundary_midpoint(
+            regions[facilities[first.index()].region().index()]
+                .polygon()
+                .ring(),
+            regions[facilities[second.index()].region().index()]
+                .polygon()
+                .ring(),
         ) else {
             continue;
         };
@@ -3667,9 +3733,26 @@ fn compile_facility_adjacencies(
                 [first_forward, first_reverse],
                 [second_forward, second_reverse],
             ],
+            boundary_midpoint,
+            boundary_offsets: [
+                reference_boundary_offsets(first_reference.geometry(), boundary_midpoint),
+                reference_boundary_offsets(second_reference.geometry(), boundary_midpoint),
+            ],
         });
     }
     compiled
+}
+
+/// The shared boundary's signed lateral offset from `reference`'s path in that
+/// reference's travel frame for each direction, indexed by
+/// [`direction_index`].
+///
+/// The lateral offset is positive to the left of the reference's authored
+/// direction, so the reverse traversal, whose direction of travel is opposite,
+/// reads its negation.
+fn reference_boundary_offsets(reference: &CompiledReferencePath, midpoint: DVec2) -> [f64; 2] {
+    let d = reference.project(midpoint).d();
+    [d, -d]
 }
 
 /// The direction of `neighbour`'s reference whose tangent agrees with `facility`'s
