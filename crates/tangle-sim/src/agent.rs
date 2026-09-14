@@ -133,6 +133,17 @@ pub(crate) struct RouteState {
     /// clearance loss this step: decelerate within the profile's comfortable
     /// braking and never accelerate.
     pub(crate) braking: bool,
+    /// Whether the ordinary predictor holds the return leg's target obstructed
+    /// this step, so the agent holds the offset it occupies instead of steering
+    /// back into the body the return corridor is not clear of.
+    ///
+    /// Set every step from the ordinary predictor's verdict on the candidate
+    /// motion toward `pre_maneuver_offset_m` under the compiled usable
+    /// interval, exactly as the committed leg's response is read from the same
+    /// predictor. It is only meaningful while the maneuver is `returning` or
+    /// `aborted`: the return cannot settle inside a corridor the predictor does
+    /// not clear.
+    pub(crate) return_blocked: bool,
     /// Simulation time the committed maneuver began holding at or below its
     /// target clearance, or `None` while it is not holding.
     pub(crate) hold_since: Option<SimTime>,
@@ -200,6 +211,7 @@ impl RouteState {
             pre_maneuver_offset_m: d_m,
             state_since: None,
             braking: false,
+            return_blocked: false,
             hold_since: None,
             settled_since: None,
             entering_facility: false,

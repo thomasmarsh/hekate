@@ -26,8 +26,8 @@ use glam::DVec2;
 use tangle_model::{CompiledScenario, FacilityId, MovementDirection, parse_scenario_source_v2};
 use tangle_sim::{
     AgentId, AgentSample, FacilityTransitionRecord, LateralManeuverRequest, ManeuverAbortReason,
-    ManeuverState, RouteStateSample, RunConfig, Simulation, SnapshotDetail, StepOutput,
-    TransitionKind,
+    ManeuverEdge, ManeuverState, RouteStateSample, RunConfig, Simulation, SnapshotDetail,
+    StepOutput, TransitionKind,
 };
 
 /// The default 0.05 s fixed step.
@@ -443,6 +443,304 @@ fn crossing_hazard_scenario(source_through: bool) -> String {
 }}
 "#
     )
+}
+
+/// The target offset a rider in the return-obstruction fixture steers toward:
+/// inside the 3.0 m band's usable corridor for its body and clearance.
+/// The target offset a rider in the return-obstruction fixture steers toward:
+/// inside the 3.0 m band's usable corridor for its body and clearance.
+const RETURN_TARGET_M: f64 = 0.5;
+
+/// The rider mode of the return-obstruction fixture: the same capsule as the
+/// other fixtures, with a target clearance small enough that the slower lane
+/// the rider passes out of and the oncoming lane it returns across both bind
+/// inside one band.
+const RETURN_RIDER_MODE: &str = r#"
+    {
+      id: 'rider',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield', 'pass' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 6.0, max: 6.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+      lateral: { target_clearance_m: 0.5, horizon_s: 2.0 },
+    }"#;
+
+/// The slower body of the return-obstruction fixture: a capsule that declares no
+/// lateral maneuver, so it is never a maneuver candidate and only ever enters a
+/// rider's prediction as a predicted body.
+const RETURN_COMPANION_MODE: &str = r#"
+    {
+      id: 'companion',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 1.0, max: 1.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 0.2, max: 0.2 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    }"#;
+
+/// The return-obstruction fixture: a lateral-capable rider stream on a compiled
+/// bikeway, a slower stream on a parallel lane the rider passes, and an oncoming
+/// stream on a second parallel lane the rider meets after the pass.
+///
+/// Every body rides a path of its own, so no companion is ever a leader and none
+/// displaces the rider: the only way the rider can read one is through the
+/// maneuver's ordinary prediction. The slower lane lies 2.0 m to the rider's
+/// right, outside the corridor the rider returns across, and the oncoming lane
+/// lies 1.0 m to its right, inside it, so the return is clear until the rider
+/// reaches the oncoming lane's stretch and clear again once it has left it.
+fn return_obstruction_scenario() -> String {
+    format!(
+        r#"{{
+  schema_version: 2,
+  id: 'return_obstruction_v2',
+  coordinate_system: {{ x: 'east_m', y: 'north_m' }},
+  paths: [
+    {{ id: 'guide', points: [ {{ x: 0.0, y: 0.0 }}, {{ x: 600.0, y: 0.0 }} ] }},
+    {{ id: 'slow_lane', points: [ {{ x: 40.0, y: -2.0 }}, {{ x: 640.0, y: -2.0 }} ] }},
+    {{ id: 'oncoming_lane', points: [ {{ x: 100.0, y: -1.0 }}, {{ x: 160.0, y: -1.0 }} ] }},
+  ],
+  portals: [
+    {{ id: 'entry', path: 'guide', end: 'start', width_m: 3.0 }},
+    {{ id: 'exit', path: 'guide', end: 'end', width_m: 3.0 }},
+    {{ id: 'slow_entry', path: 'slow_lane', end: 'start', width_m: 3.0 }},
+    {{ id: 'slow_exit', path: 'slow_lane', end: 'end', width_m: 3.0 }},
+    {{ id: 'onc_entry', path: 'oncoming_lane', end: 'end', width_m: 3.0 }},
+    {{ id: 'onc_exit', path: 'oncoming_lane', end: 'start', width_m: 3.0 }},
+  ],
+  boundaries: [
+    {{ id: 'world', points: [
+      {{ x: -10.0, y: -10.0 }}, {{ x: 650.0, y: -10.0 }},
+      {{ x: 650.0, y: 10.0 }}, {{ x: -10.0, y: 10.0 }},
+    ] }},
+  ],
+  regions: [
+    {{ id: 'band', points: [
+      {{ x: 0.0, y: -1.5 }}, {{ x: 600.0, y: -1.5 }},
+      {{ x: 600.0, y: 1.5 }}, {{ x: 0.0, y: 1.5 }},
+    ] }},
+  ],
+  facilities: [
+    {{ id: 'bikeway', region: 'band', reference_path: 'guide',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: {{ modes: [ 'rider' ] }}, lateral_use: 'shared',
+      lateral_policy: {{ passing_side: 'left' }},
+      speed_policy: {{ limit_mps: null }} }},
+  ],
+  movements: [
+    {{ id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+      direction: 'forward' }},
+    {{ id: 'slow_through', from: 'slow_entry', to: 'slow_exit',
+      path: 'slow_lane', priority: 0, direction: 'forward' }},
+    {{ id: 'onc_through', from: 'onc_entry', to: 'onc_exit',
+      path: 'oncoming_lane', priority: 0, direction: 'reverse' }},
+  ],
+  mode_templates: [ {RETURN_RIDER_MODE}, {RETURN_COMPANION_MODE} ],
+  maneuver_policy: {{
+    commit: {{ min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 }},
+  }},
+  demand: [
+    {{ id: 'rider_inflow', mode: 'rider',
+      spawn: {{ rate: {{
+        portal: 'entry',
+        rate_per_hour: 3600.0,
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'through', weight: 1.0 }} ] }},
+      }} }} }},
+    {{ id: 'slow_inflow', mode: 'companion',
+      spawn: {{ rate: {{
+        portal: 'slow_entry',
+        rate_per_hour: 180.0,
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'slow_through', weight: 1.0 }} ] }},
+      }} }} }},
+    {{ id: 'oncoming_inflow', mode: 'companion',
+      spawn: {{ rate: {{
+        portal: 'onc_entry',
+        rate_per_hour: 360.0,
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'onc_through', weight: 1.0 }} ] }},
+      }} }} }},
+  ],
+}}
+"#
+    )
+}
+
+/// One agent's compiled guide path, arc-length progress, and world position.
+struct Placement {
+    id: AgentId,
+    path: usize,
+    s_m: f64,
+    x_m: f64,
+}
+
+/// The placed agents with a compiled guide path, in spawn order.
+fn placements(sim: &Simulation) -> Vec<Placement> {
+    sim.snapshot(SnapshotDetail::Full)
+        .agents()
+        .iter()
+        .filter_map(|sample| {
+            let motion = sample.motion.as_ref()?;
+            Some(Placement {
+                id: sample.id,
+                path: motion.path.index(),
+                s_m: motion.path_distance_m,
+                x_m: sample.position.x,
+            })
+        })
+        .collect()
+}
+
+/// The stretch of the fixture the oncoming stream occupies, so the test can name
+/// where the rider's return is obstructed and where it is clear again.
+const ONCOMING_ZONE_M: std::ops::RangeInclusive<f64> = 100.0..=160.0;
+
+/// Step until a lateral-capable rider has a slower body 10..=13 m ahead on the
+/// slower lane, so its committed leg predicts clear and the pass it completes
+/// carries it far enough to displace before it returns.
+///
+/// Returns the rider and the slower body it passes.
+fn rider_before_a_slow_body(sim: &mut Simulation) -> Option<(AgentId, AgentId)> {
+    for _ in 0..900 {
+        sim.step();
+        let placed = placements(sim);
+        let frame = sim.snapshot(SnapshotDetail::Full);
+        for rider in placed.iter().filter(|agent| agent.path == 0) {
+            if route_state(frame.agents(), rider.id)
+                .and_then(|route| route.target_clearance_m)
+                .is_none()
+            {
+                continue;
+            }
+            let slow = placed
+                .iter()
+                .filter(|agent| agent.path == 1)
+                .find(|agent| (10.0..=13.0).contains(&(agent.s_m - rider.s_m)));
+            if let Some(slow) = slow {
+                return Some((rider.id, slow.id));
+            }
+        }
+    }
+    None
+}
+
+/// A returning rider whose return corridor an oncoming body occupies holds the
+/// offset it occupies instead of settling into `following`: the documented
+/// return-obstruction policy, driven through the public seam.
+///
+/// The rider passes a slower body, completes the maneuver, and returns to its
+/// own offset — until its return corridor reaches the oncoming stream, whose
+/// bodies keep the prediction's swept clearance below the target. It holds
+/// through that stretch and settles only once it has left it. No step exceeds
+/// the mode's motion limit and no step needs a kernel position cap.
+#[test]
+fn a_returning_riders_obstructed_target_holds() {
+    let mut sim = build(&return_obstruction_scenario());
+    let (rider, slow) =
+        rider_before_a_slow_body(&mut sim).expect("a rider approaches a slower body");
+    assert!(sim.request_lateral_maneuver(
+        rider,
+        LateralManeuverRequest {
+            target_offset_m: RETURN_TARGET_M,
+            passed_body: slow,
+            target_facility: None,
+        },
+    ));
+
+    let mut edges: Vec<(ManeuverState, ManeuverState, ManeuverEdge)> = Vec::new();
+    let mut returning = false;
+    let mut obstructed_steps = 0;
+    let mut settled_in_the_zone = false;
+    let mut followed = false;
+    let mut max_step_m: f64 = 0.0;
+    let mut previous: Option<DVec2> = None;
+    for _ in 0..900 {
+        let output = sim.step();
+        edges.extend(
+            output
+                .transitions()
+                .iter()
+                .filter(|transition| transition.agent == rider)
+                .map(|transition| (transition.from, transition.to, transition.edge)),
+        );
+        let frame = sim.snapshot(SnapshotDetail::Full);
+        let placed = placements(&sim);
+        let Some(sample) = frame.agents().iter().find(|sample| sample.id == rider) else {
+            break;
+        };
+        if let Some(before) = previous {
+            max_step_m = max_step_m.max((sample.position - before).length());
+        }
+        previous = Some(sample.position);
+        let state = route_state(frame.agents(), rider).expect("the rider carries route state");
+        if state.maneuver_state == ManeuverState::Returning && state.d_m.abs() > 0.1 {
+            returning = true;
+        }
+        // The oncoming body the prediction can reach: one within the maneuver
+        // horizon of the rider, on the lane inside its return corridor.
+        let approaching = placed
+            .iter()
+            .filter(|agent| agent.path == 2)
+            .map(|agent| agent.x_m - sample.position.x)
+            .any(|gap| (0.0..=12.0).contains(&gap));
+        if approaching {
+            if state.maneuver_state != ManeuverState::Returning {
+                settled_in_the_zone = true;
+            } else {
+                obstructed_steps += 1;
+            }
+        }
+        if state.maneuver_state == ManeuverState::Following
+            && ONCOMING_ZONE_M.contains(&sample.position.x)
+        {
+            settled_in_the_zone = true;
+        }
+        if state.maneuver_state == ManeuverState::Following && sample.position.x > 170.0 {
+            followed = true;
+        }
+    }
+    assert!(returning, "the rider completes the pass and returns");
+    assert!(
+        obstructed_steps >= 20,
+        "an oncoming body occupies the return corridor for a stretch: {obstructed_steps} steps"
+    );
+    assert!(
+        !settled_in_the_zone,
+        "a return whose corridor is occupied never settles into following: {edges:?}"
+    );
+    assert!(
+        followed,
+        "the return settles once the rider has left the oncoming stretch"
+    );
+    assert!(
+        max_step_m <= 6.0 * DT + 1e-6,
+        "no rider teleported: max step {max_step_m} m"
+    );
+    assert_eq!(sim.emergency_cap_steps(), 0);
 }
 
 /// Step until two riders are alive, returning them in ascending id order.

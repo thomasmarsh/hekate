@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T12:23:57Z
+updated: 2026-09-14T13:02:43Z
 summary: Complete configured lane or facility transitions with bounded abort, braking, and return.
-next: Detect a body obstructing the return leg's target and hold or re-decide for it per the documented policy.
+next: Implement the cross-facility return leg so a change of lane that crossed out returns to the source facility.
 ---
 
 Parent [[TAS-092-passing-and-lane-transition-behavior]].
@@ -33,16 +33,15 @@ bounded hold, brake, abort, return, or explicit forbidden-boundary fact.
 
 Depends on [[TAS-094-enable-motor-vehicle-overtaking-of-narrow-users]] at context_rev 1.
 Depends on [[TAS-112-compile-the-adjacency-shared-boundary-lateral-co]] at context_rev 1.
-Owns
-facility-transition integration, safe-abort behavior, and focused tests. Do not
-define event payloads, close-pass aggregation, or acceptance scenarios.
+Owns facility-transition integration, safe-abort behavior, and focused tests.
+Do not define event payloads, close-pass aggregation, or acceptance scenarios.
 
 # Result
 
 Partial: both facility handoffs, the forbidden-boundary fact, the compiled
-shared-boundary crossing, and the cross-facility committed hazard matrix have
-landed with a focused suite; the return leg, its obstruction policy, and the
-current+destination leader/follower constraints do not fit this session, so
+shared-boundary crossing, the cross-facility committed hazard matrix, and the
+return-obstruction policy have landed with a focused suite; the cross-facility
+return leg and the current+destination leader/follower constraints remain, so
 TAS-095 stays `active` with the `next` above.
 
 ## This session (TAS-112 unblocked the outbound hazard matrix)
@@ -72,13 +71,28 @@ trajectory version changed, and no golden, baseline, or schema was regenerated.
   `a_closed_destination_band_edge_aborts_the_outbound_leg`,
   `a_destination_band_body_aborts_the_outbound_leg`.
 
-## Previously landed (prior session)
+## This session (continued): return-leg obstruction
 
-Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
-`crates/tangle-sim/tests/lane_transitions.rs` (new, 7 tests);
-`crates/tangle-sim/tests/maneuver_lifecycle.rs` (compile-forced closure: the new
-`LateralManeuverRequest::target_facility` field). No public event is emitted
-(TAS-100 owns that).
+Files: `crates/tangle-sim/src/sim.rs`, `agent.rs`;
+`crates/tangle-sim/tests/lane_transitions.rs` (11 -> 12 tests) plus two crate
+unit tests. No version or artifact changed.
+
+- **Return obstruction** (`RouteState.return_blocked`,
+  `Simulation::return_leg_obstructed`): while a maneuver is `returning` or
+  `aborted`, the return target (`pre_maneuver_offset_m`) is evaluated with the
+  ordinary predictor over the compiled usable interval; a body whose progress
+  interval overlaps the return corridor leaves the swept clearance below the
+  mode's target clearance, so the agent holds the offset it occupies instead of
+  steering into it, and settles to `following` only once the corridor clears.
+  Unit tests `a_blocked_return_leg_holds_and_re_decides_until_the_corridor_clears`
+  and `a_blocked_aborted_leg_holds_until_the_corridor_clears`, and integration
+  test `a_returning_riders_obstructed_target_holds`.
+
+## Previously landed (prior sessions)
+
+Files: `crates/tangle-sim/src/sim.rs`, `prediction.rs`, `agent.rs`, `lib.rs`;
+`crates/tangle-sim/tests/lane_transitions.rs`. No event or trajectory version
+changed, and no golden, baseline, or schema was regenerated.
 
 - **Connector handoff** (`Simulation::handoff_connector`): at the compiled
   connector coincidence (`CONNECTOR_CONTINUITY_TOLERANCE_M`) route and facility
@@ -119,7 +133,9 @@ Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
   disappearance (`a_disappearing_target_aborts_the_maneuver`). Boundary closure
   now aborts the outbound leg
   (`a_closed_destination_band_edge_aborts_the_outbound_leg`) and a destination
-  body aborts it (`a_destination_band_body_aborts_the_outbound_leg`).
+  body aborts it (`a_destination_band_body_aborts_the_outbound_leg`). Return
+  obstruction holds and re-decides
+  (`a_returning_riders_obstructed_target_holds`, plus the two crate unit tests).
 - Forbidden boundary:
   `a_forbidden_lane_change_is_prevented_with_the_boundary_reason`.
 - Focused suite: adjacent-lane change, connector handoff, forbidden crossing,
@@ -129,9 +145,6 @@ Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
 
 ## Remaining scope (the `next`)
 
-- **Return obstruction**: `returning` and `aborted` still steer only under the
-  corridor bound; a body obstructing the return target is not detected, so the
-  maneuver neither holds nor re-decides for it.
 - **Cross-facility return leg**: the change of lane is outbound-only — the agent
   remains on the destination. A pass out into an adjacent band and back is not
   implemented.
@@ -141,8 +154,8 @@ Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
 
 ## Validation
 
-`cargo test -p tangle-sim` (190 lib + 11 `lane_transitions` + all suites, 358
-total), `cargo test --workspace` (866 passed, 0 failed),
+`cargo test -p tangle-sim` (192 lib + 12 `lane_transitions` + all suites, 361
+total), `cargo test --workspace` (869 passed, 0 failed),
 `cargo clippy --workspace --all-targets --all-features -- -D warnings` (clean),
 `cargo fmt --all --check` (clean), and `scripts/check-dependency-direction.sh`
 (`dependency direction OK`) all pass.

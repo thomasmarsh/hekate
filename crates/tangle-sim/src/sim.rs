@@ -1235,11 +1235,21 @@ impl Simulation {
                     continue;
                 }
             };
+            // A return leg whose target the ordinary predictor does not clear
+            // holds: the agent keeps the offset it occupies and re-decides from
+            // the next step's bodies, rather than steering back into the body
+            // that obstructs the offset it would return to. It settles only once
+            // the same prediction clears the return corridor again, and a return
+            // that has nowhere left to move — the agent already sits at its target
+            // — completes instead of deadlocking in the maneuver.
             let at_target = (state.d_m - state.pre_maneuver_offset_m).abs() <= SETTLE_TOLERANCE_M;
             if !at_target {
+                let obstructed =
+                    !state.entering_facility && self.return_leg_obstructed(index, &state, &batch);
                 plans.push(ManeuverPlan {
                     index,
                     state: RouteState {
+                        return_blocked: obstructed,
                         settled_since: None,
                         ..state
                     },
@@ -1252,6 +1262,7 @@ impl Simulation {
                 plans.push(ManeuverPlan {
                     index,
                     state: RouteState {
+                        return_blocked: false,
                         settled_since: Some(since),
                         ..state
                     },
@@ -1270,6 +1281,7 @@ impl Simulation {
                     passed_body: None,
                     state_since: None,
                     braking: false,
+                    return_blocked: false,
                     hold_since: None,
                     settled_since: None,
                     ..state
@@ -1735,6 +1747,26 @@ impl Simulation {
             Some(bounds) => predict_crossing_corridor(inputs, bounds, &others),
             None => predict_maneuver_corridor(inputs, &others),
         })
+    }
+
+    /// Whether a body obstructs the return leg's target, so a `returning` or
+    /// `aborted` maneuver holds rather than steering back into it.
+    ///
+    /// The check is the ordinary predictor's own verdict on the candidate motion
+    /// the return leg integrates — the compiled bounded-steering envelope
+    /// steering from the current pose to `pre_maneuver_offset_m` under the
+    /// facility's compiled usable interval — so no second geometry path decides
+    /// it. A body whose progress interval overlaps the return corridor, or the
+    /// pre-maneuver offset itself, leaves the swept clearance below the mode's
+    /// target clearance over the horizon and holds the return.
+    fn return_leg_obstructed(
+        &self,
+        index: usize,
+        state: &RouteState,
+        batch: &ManeuverBatch<'_>,
+    ) -> bool {
+        self.predict_maneuver(index, state.pre_maneuver_offset_m, batch)
+            .is_some_and(|prediction| !prediction.is_feasible())
     }
 
     /// Fix one agent's lateral target and candidate corridor, or report why the
@@ -3257,12 +3289,19 @@ impl Simulation {
     /// boundary — a `returning` or `aborted` one steers back to the offset the
     /// agent held before the attempt, and a `preparing` or `following` agent
     /// displaces nothing at all: a preparing maneuver has fixed a target but has
-    /// not been granted a corridor for it.
+    /// not been granted a corridor for it. A return leg the ordinary predictor
+    /// holds obstructed steers to the offset the agent already occupies
+    /// instead, so it holds its place rather than displacing into the body the
+    /// return corridor is not clear of.
     fn lateral_request(&self, index: usize) -> Option<f64> {
         let state = self.agents.route_state.get(index).copied().flatten()?;
         match state.maneuver {
             ManeuverState::Committed => self.committed_lateral_target(index, &state),
-            ManeuverState::Returning | ManeuverState::Aborted => Some(state.pre_maneuver_offset_m),
+            ManeuverState::Returning | ManeuverState::Aborted => Some(if state.return_blocked {
+                state.d_m
+            } else {
+                state.pre_maneuver_offset_m
+            }),
             ManeuverState::Following | ManeuverState::Preparing => None,
         }
     }
@@ -5384,6 +5423,7 @@ mod tests {
         {{ id: 'guide', points: [ {{ x: 0.0, y: 0.0 }}, {{ x: 200.0, y: 0.0 }} ] }},
         {{ id: 'passed_lane', points: [ {{ x: 0.0, y: -2.4 }}, {{ x: 200.0, y: -2.4 }} ] }},
         {{ id: 'hazard_lane', points: [ {{ x: 0.0, y: 1.6 }}, {{ x: 200.0, y: 1.6 }} ] }},
+        {{ id: 'return_lane', points: [ {{ x: 0.0, y: -0.7 }}, {{ x: 200.0, y: -0.7 }} ] }},
       ],
       portals: [
         {{ id: 'entry', path: 'guide', end: 'start', width_m: 3.0 }},
@@ -5542,13 +5582,30 @@ mod tests {
     /// hazard test observes the maneuver's own response rather than a following
     /// constraint.
     fn push_obstacle(sim: &mut Simulation, lane: usize, distance_m: f64, radius_m: f64) -> AgentId {
+        push_travelling_obstacle(sim, lane, distance_m, radius_m, 0.0)
+    }
+
+    /// Place a circular body of radius `radius_m` at `distance_m` on a parallel
+    /// lane, travelling at `speed_mps` in the lane's own direction.
+    ///
+    /// A body that holds station alongside the rider keeps its clearance against
+    /// the rider's predicted corridor for the whole horizon, so a return-leg
+    /// obstruction is a stable state to observe rather than one the rider's own
+    /// travel races past.
+    fn push_travelling_obstacle(
+        sim: &mut Simulation,
+        lane: usize,
+        distance_m: f64,
+        radius_m: f64,
+        speed_mps: f64,
+    ) -> AgentId {
         let path_id = PathId::from_index(lane);
         let path = sim.scenario.path(path_id).expect("the lane").clone();
         sim.agents.push(AgentInit {
             mode: AgentMode::Pedestrian,
             path: path_id,
             distance_m,
-            speed_mps: 0.0,
+            speed_mps,
             position: path.position_at(distance_m),
             heading_rad: path.heading_at(distance_m),
             body_length_m: radius_m * 2.0,
@@ -5610,6 +5667,12 @@ mod tests {
     /// in the lateral space the corridor needs, at a clearance set by its
     /// radius.
     const HAZARD_LANE: usize = 2;
+
+    /// The fixture's parallel lane 0.7 m to the rider's right: a body there
+    /// overlaps the progress interval of a rider returning to its own offset at
+    /// a clearance below the 0.75 m target, and clears the corridor a rider
+    /// committed to the 0.3 m target occupies.
+    const RETURN_LANE: usize = 3;
 
     /// A radius on `HAZARD_LANE` whose closest approach to the corridor leaves a
     /// clearance below the 0.75 m target and above the 0.25 m policy minimum:
@@ -6005,6 +6068,162 @@ mod tests {
             aborted_at.is_some_and(|step| step < 20),
             "the hold times out within its window: {aborted_at:?}"
         );
+    }
+
+    /// A returning rider whose return corridor a body occupies holds at the
+    /// offset it occupies — the ordinary predictor's own verdict on the return
+    /// target, not a second geometry path — and re-decides from each step's
+    /// bodies. It never settles while the corridor stays blocked, and it returns
+    /// to its own offset once the same prediction clears again.
+    #[test]
+    fn a_blocked_return_leg_holds_and_re_decides_until_the_corridor_clears() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        // The passed obstacle is a stationary body ahead on the parallel lane to
+        // the rider's right, so the maneuver stays committed until the rider has
+        // displaced and cleared it.
+        let passed = push_obstacle(&mut sim, PASSED_LANE, 64.0, 0.5);
+        assert!(request_maneuver(&mut sim, rider, passed));
+
+        let mut returning = false;
+        for _ in 0..80 {
+            sim.step();
+            if rider_state(&sim, rider).maneuver == ManeuverState::Returning {
+                returning = true;
+                break;
+            }
+        }
+        assert!(
+            returning,
+            "the committed rider clears the passed body and returns"
+        );
+        let displaced_m = rider_state(&sim, rider).d_m;
+        assert!(
+            displaced_m > 0.05,
+            "the committed rider has displaced before the return: {displaced_m}"
+        );
+
+        // A body holds station in the return corridor: it travels at the rider's
+        // own speed, so the clearance the predictor reads over the horizon does
+        // not open as the rider travels, and the return stays blocked.
+        let distance_m = sim.agents.distance_m[rider.index()];
+        let obstruction = push_travelling_obstacle(&mut sim, RETURN_LANE, distance_m, 0.2, 6.0);
+
+        let mut edges = Vec::new();
+        for step in 0..80 {
+            let output = sim.step();
+            edges.extend(step_edges(output.transitions()));
+            let state = rider_state(&sim, rider);
+            assert_eq!(
+                state.maneuver,
+                ManeuverState::Returning,
+                "a blocked return never settles"
+            );
+            assert!(state.return_blocked, "the predictor holds the return");
+            assert!(
+                (state.d_m - displaced_m).abs() < 0.02,
+                "a blocked return holds the offset it occupies, at {} not {displaced_m}",
+                state.d_m
+            );
+            if step == 0 {
+                assert!(
+                    state
+                        .predicted_min_clearance_m
+                        .expect("the committed prediction is kept")
+                        > 0.75,
+                    "the committed leg's clearance was fine, so the hold is the return leg's"
+                );
+            }
+        }
+        assert!(
+            edges.is_empty(),
+            "a held return records no transition: {edges:?}"
+        );
+        assert_eq!(sim.emergency_cap_steps(), 0);
+
+        // The obstruction leaves the world: the same prediction clears and the
+        // rider returns to the offset it held before the attempt.
+        sim.agents.alive[obstruction.index()] = false;
+        let mut followed = false;
+        for _ in 0..400 {
+            sim.step();
+            if rider_state(&sim, rider).maneuver == ManeuverState::Following {
+                followed = true;
+                break;
+            }
+        }
+        assert!(followed, "a cleared return completes at the rider's offset");
+        let state = rider_state(&sim, rider);
+        assert!((state.d_m - state.pre_maneuver_offset_m).abs() <= SETTLE_TOLERANCE_M);
+        assert!(!state.return_blocked);
+        assert_eq!(state.maneuver, ManeuverState::Following);
+    }
+
+    /// An aborted rider that had displaced holds the offset it occupies while a
+    /// body obstructs its return to the pre-maneuver offset, and returns once
+    /// the corridor clears: the same policy on the `aborted` leg.
+    #[test]
+    fn a_blocked_aborted_leg_holds_until_the_corridor_clears() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        // The passed obstacle is far ahead on the parallel lane to the rider's
+        // right, so the completion guard never holds and the maneuver stays
+        // committed while the rider displaces.
+        let passed = push_obstacle(&mut sim, PASSED_LANE, 100.0, 0.5);
+        assert!(request_maneuver(&mut sim, rider, passed));
+        sim.step();
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Committed]);
+        for _ in 0..20 {
+            sim.step();
+        }
+        let displaced_m = rider_state(&sim, rider).d_m;
+        assert!(
+            displaced_m > 0.05,
+            "the committed rider displaces before the abort: {displaced_m}"
+        );
+
+        // A committed clearance loss aborts the maneuver.
+        let hazard_m = sim.agents.distance_m[rider.index()] + 6.0;
+        push_obstacle(&mut sim, HAZARD_LANE, hazard_m, LOST_OBSTACLE_RADIUS_M);
+        let output = sim.step();
+        assert_eq!(
+            edge_for(output.transitions(), rider),
+            Some(ManeuverEdge::Aborted)
+        );
+        assert_eq!(
+            reason_for(output.transitions(), rider),
+            Some(ManeuverAbortReason::ClearanceLost)
+        );
+        assert_eq!(rider_state(&sim, rider).maneuver, ManeuverState::Aborted);
+
+        // A body holds station in the corridor the rider would return through.
+        let distance_m = sim.agents.distance_m[rider.index()];
+        let obstruction = push_travelling_obstacle(&mut sim, RETURN_LANE, distance_m, 0.2, 6.0);
+        for _ in 0..40 {
+            let output = sim.step();
+            assert!(
+                output.transitions().is_empty(),
+                "a blocked abort records no transition"
+            );
+            let state = rider_state(&sim, rider);
+            assert_eq!(state.maneuver, ManeuverState::Aborted);
+            assert!(state.return_blocked, "the aborted leg holds its offset");
+            assert!((state.d_m - displaced_m).abs() < 0.02);
+        }
+        assert_eq!(sim.emergency_cap_steps(), 0);
+
+        sim.agents.alive[obstruction.index()] = false;
+        let mut followed = false;
+        for _ in 0..400 {
+            sim.step();
+            if rider_state(&sim, rider).maneuver == ManeuverState::Following {
+                followed = true;
+                break;
+            }
+        }
+        assert!(followed, "a cleared abort returns to following");
+        assert!(!rider_state(&sim, rider).return_blocked);
     }
 
     /// A winner that loses clearance never hands its corridor to another
