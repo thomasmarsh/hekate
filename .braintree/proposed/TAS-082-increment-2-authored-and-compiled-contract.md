@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T00:50:52Z
 summary: Fix and implement the Increment 2 authored and compiled policy contract.
-next: [[TAS-083-define-the-increment-2-schema-and-semantics]]
+next: [[TAS-084-parse-increment-2-lateral-and-rule-source-shapes]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].
