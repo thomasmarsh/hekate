@@ -49,20 +49,22 @@ pub use schema::{
     scenario_schema, scenario_schema_json, scenario_schema_v1, scenario_schema_v1_json,
 };
 pub use source::{
-    AccessSource, ConflictRegionSource, CoordinateSystem, CrossingSource, DemandChoiceSource,
-    DemandPopulationSpawnSource, DemandRateSpawnSource, DemandSource, DemandSourceV2,
-    DemandSpawnSource, DocumentReadError, FacilityAccessSource, FacilityConnectorEndSource,
-    FacilityConnectorSource, FacilityDirection, FacilityKind, FacilitySource, LateralUse,
-    MIN_SUPPORTED_SCHEMA_VERSION, ModeBodySource, ModeTemplateSource, MotionKind,
-    MovementDirection, MovementSource, MovementSourceV2, OccupancyKind, ParseError, PathEnd,
-    PathSource, PedestrianDemandSource, PedestrianProfileSource, PedestrianRouteShareSource,
+    AccessSource, AdjacencySide, ClearanceBandSource, CommitPolicySource, ConflictRegionSource,
+    CoordinateSystem, CrossingSource, DemandChoiceSource, DemandPopulationSpawnSource,
+    DemandRateSpawnSource, DemandSource, DemandSourceV2, DemandSpawnSource, DocumentReadError,
+    FacilityAccessSource, FacilityAdjacencySource, FacilityConnectorEndSource,
+    FacilityConnectorSource, FacilityDirection, FacilityKind, FacilityLateralPolicySource,
+    FacilitySource, LateralUse, MIN_SUPPORTED_SCHEMA_VERSION, ManeuverPolicySource, ModeBodySource,
+    ModeLateralSource, ModeTemplateSource, MotionKind, MovementDirection, MovementSource,
+    MovementSourceV2, OccupancyKind, ParseError, PassingSide, PathEnd, PathSource,
+    PedestrianDemandSource, PedestrianProfileSource, PedestrianRouteShareSource,
     PedestrianRouteSource, PedestrianSignalPhaseSource, PedestrianSignalSource, PermissionEffect,
     PermissionKind, PermissionSource, PointSource, PolygonSource, PopulationSource, PortalSource,
     ProfileRangeSource, ProfileSource, READABLE_SCHEMA_VERSIONS, RouteShareSource, RuleKind,
     RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioDocument, ScenarioSource, ScenarioSourceV2,
     SignalColor, SignalHeadSource, SignalPhaseSource, SignalSource, SignalStateSource,
     SpeedLimitMps, SpeedPolicySource, TacticKind, TimeIntervalSource, WaitingAreaSource,
-    parse_scenario_document, parse_scenario_source, parse_scenario_source_v2,
+    WrongWayPolicySource, parse_scenario_document, parse_scenario_source, parse_scenario_source_v2,
 };
 pub use validate::{Diagnostic, DiagnosticCode, validate, validate_v2};
 

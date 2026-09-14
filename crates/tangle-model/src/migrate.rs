@@ -70,7 +70,10 @@ pub fn migrate_v1_to_v2(source: &ScenarioSource) -> ScenarioSourceV2 {
         ],
         facilities: Vec::new(),
         facility_connectors: Vec::new(),
+        facility_adjacencies: Vec::new(),
         permissions: Vec::new(),
+        clearance_bands: Vec::new(),
+        maneuver_policy: None,
         demand: migrate_demand(source, population_in_use),
     }
 }
@@ -154,6 +157,8 @@ fn passenger_car_template(source: &ScenarioSource, population_in_use: bool) -> M
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles,
+        // Increment 2: a migrated document authors no lateral maneuver.
+        lateral: None,
     }
 }
 
@@ -184,6 +189,8 @@ fn pedestrian_template(source: &ScenarioSource) -> ModeTemplateSource {
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles,
+        // Increment 2: a migrated document authors no lateral maneuver.
+        lateral: None,
     }
 }
 

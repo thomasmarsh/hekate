@@ -57,6 +57,7 @@ fn passenger_car_template() -> ModeTemplateSource {
             ("time_gap_s", 1.0, 2.0),
             ("compliance", 1.0, 1.0),
         ]),
+        lateral: None,
     }
 }
 
@@ -80,6 +81,7 @@ fn pedestrian_template() -> ModeTemplateSource {
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles: profiles(&[("speed_mps", 1.0, 1.6), ("compliance", 1.0, 1.0)]),
+        lateral: None,
     }
 }
 
@@ -374,6 +376,7 @@ fn the_compiler_rejects_an_impossible_source_combination_naming_the_template() {
         },
         occupancy: OccupancyKind::OperatorOnly,
         profiles: profiles(&[("speed_mps", 1.0, 1.6), ("compliance", 1.0, 1.0)]),
+        lateral: None,
     };
     let error = compile_mode_template(&template).expect_err("a box cannot walk");
     assert_eq!(error.len(), 1);

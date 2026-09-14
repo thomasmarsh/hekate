@@ -217,7 +217,7 @@ pub fn compile_mode_template(
         .tactics
         .iter()
         .copied()
-        .map(compiled_tactic)
+        .flat_map(compiled_tactics)
         .collect();
     let access = compiled_access(&template.access);
     let occupancy = compiled_occupancy(template.occupancy);
@@ -277,13 +277,27 @@ pub(crate) fn compiled_motion(motion: MotionKind) -> AgentMotion {
     }
 }
 
-/// Map an authored tactic onto its compiled tactical capability.
-fn compiled_tactic(tactic: TacticKind) -> TacticalCapability {
-    match tactic {
+/// Map an authored tactic onto the compiled tactical capabilities it compiles.
+///
+/// `change_lane` and `pass` also compile
+/// [`TacticalCapability::ChooseLateralPosition`], the capability the compiled
+/// lateral position selection reads; a template that declares neither compiles
+/// exactly the Increment 1 capability set, so an Increment 0 or Increment 1
+/// template compiles unchanged.
+fn compiled_tactics(tactic: TacticKind) -> impl Iterator<Item = TacticalCapability> {
+    let capability = match tactic {
         TacticKind::Follow => TacticalCapability::Follow,
         TacticKind::Stop => TacticalCapability::Stop,
         TacticKind::Yield => TacticalCapability::Yield,
-    }
+        TacticKind::ChangeLane => TacticalCapability::ChangeLane,
+        TacticKind::Overtake => TacticalCapability::Overtake,
+        TacticKind::Pass => TacticalCapability::Pass,
+        TacticKind::ReverseDirection => TacticalCapability::ReverseNominalDirection,
+    };
+    let chooses_lateral_position = matches!(tactic, TacticKind::ChangeLane | TacticKind::Pass);
+    [capability]
+        .into_iter()
+        .chain(chooses_lateral_position.then_some(TacticalCapability::ChooseLateralPosition))
 }
 
 /// Map an authored access onto its compiled access component.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ScenarioSourceV2",
-  "description": "A version-2 scenario document.\n\nVersion 2 replaces the version-1 `profiles`/`pedestrian_profiles`,\n`population`, `demand`, and `pedestrian_demand` fields with `mode_templates`\nand a mode-tagged `demand`, and makes each movement's `direction` explicit.\nThe Increment 1 additive arrays `facilities`, `facility_connectors`, and\n`permissions` extend it in place. Every other version-1 field is carried\nforward unchanged.",
+  "description": "A version-2 scenario document.\n\nVersion 2 replaces the version-1 `profiles`/`pedestrian_profiles`,\n`population`, `demand`, and `pedestrian_demand` fields with `mode_templates`\nand a mode-tagged `demand`, and makes each movement's `direction` explicit.\nThe Increment 1 additive arrays `facilities`, `facility_connectors`, and\n`permissions` extend it in place, and Increment 2 adds\n`facility_adjacencies`, `clearance_bands`, and `maneuver_policy` the same\nway. Every other version-1 field is carried forward unchanged.",
   "type": "object",
   "properties": {
     "boundaries": {
@@ -10,6 +10,13 @@
       "default": [],
       "items": {
         "$ref": "#/$defs/PolygonSource"
+      }
+    },
+    "clearance_bands": {
+      "description": "Scenario-scoped clearance-band definitions, declared in strictly\nincreasing thresholds. Additive Increment 2 array; omitted or empty\nmeans close-pass observations carry no band durations or violations.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ClearanceBandSource"
       }
     },
     "conflict_regions": {
@@ -47,6 +54,13 @@
         "$ref": "#/$defs/FacilitySource"
       }
     },
+    "facility_adjacencies": {
+      "description": "Side-by-side facility pairs that permit a lateral transition between\nthem. Additive Increment 2 array; omitted or empty means no lateral\ntransitions exist.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FacilityAdjacencySource"
+      }
+    },
     "facility_connectors": {
       "description": "Directed connectors joining two facility traversals. Additive\nIncrement 1 array.",
       "type": "array",
@@ -57,6 +71,17 @@
     "id": {
       "description": "Stable scenario identifier recorded in run provenance.",
       "type": "string"
+    },
+    "maneuver_policy": {
+      "description": "Scenario-scoped commit and wrong-way policy. Additive Increment 2\nobject; omitted means no lateral tactic or wrong-way decision is\nauthored.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManeuverPolicySource"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "mode_templates": {
       "description": "Named, validated mode bundles; demand references them by id.",
@@ -188,6 +213,77 @@
       "additionalProperties": false,
       "required": [
         "facility_kinds"
+      ]
+    },
+    "AdjacencySide": {
+      "description": "Side of the `first` facility on which the `second` lies, measured in\n`first`'s authored forward direction.",
+      "oneOf": [
+        {
+          "description": "The positive-`d` side of `first`'s authored forward direction.",
+          "type": "string",
+          "const": "left"
+        },
+        {
+          "description": "The negative-`d` side of `first`'s authored forward direction.",
+          "type": "string",
+          "const": "right"
+        }
+      ]
+    },
+    "ClearanceBandSource": {
+      "description": "One scenario-scoped clearance band: a labeled body-to-body signed surface\nclearance threshold.\n\nBands are metric definitions for the scenario that authors them, never\nuniversal declarations of safety. A band accumulates the duration during\nwhich the observed clearance is below its `threshold_m`, so bands declared\nin strictly increasing threshold nest.",
+      "type": "object",
+      "properties": {
+        "applies_to_modes": {
+          "description": "Mode-template ids the band applies to. An absent field means the band\napplies to every mode pair; a present list must be non-empty, so an\nauthored empty list is distinguishable from an omitted one.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "description": "Stable id, unique across all authored objects.",
+          "type": "string"
+        },
+        "threshold_m": {
+          "description": "Signed surface clearance threshold the band defines, in metres.",
+          "type": "number",
+          "format": "double"
+        },
+        "violation": {
+          "description": "Whether a pass below `threshold_m` is recorded as a lateral-displacement\nviolation in this scenario.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "threshold_m",
+        "violation"
+      ]
+    },
+    "CommitPolicySource": {
+      "description": "The unsafe-commit and commitment-loss policy of a version-2 scenario.\n\nEvery field is required once `commit` is present; nothing defaults.",
+      "type": "object",
+      "properties": {
+        "hold_timeout_s": {
+          "description": "How long a `preparing` maneuver may wait for a granted claim, and how\nlong a `committed` maneuver may hold at or below its target clearance\nwaiting for the corridor to reopen, before it aborts. Seconds.",
+          "type": "number",
+          "format": "double"
+        },
+        "min_predicted_clearance_m": {
+          "description": "Absolute floor on the predicted minimum clearance of any of the four\nclearance facts, in metres; a committed maneuver whose predicted\nclearance falls below it aborts.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "min_predicted_clearance_m",
+        "hold_timeout_s"
       ]
     },
     "ConflictRegionSource": {
@@ -450,6 +546,35 @@
         "modes"
       ]
     },
+    "FacilityAdjacencySource": {
+      "description": "Two version-2 facility bands lying side by side along a shared stretch.\n\nThis is the only lateral-transition relation: a [`FacilityConnectorSource`]\nkeeps its Increment 1 meaning of an end join, and proximity alone never\ninfers a transition.",
+      "type": "object",
+      "properties": {
+        "first": {
+          "description": "Id of a declared facility.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable id, unique across all authored objects.",
+          "type": "string"
+        },
+        "second": {
+          "description": "Id of a declared facility adjacent to `first`.",
+          "type": "string"
+        },
+        "side": {
+          "description": "Side of `first` on which `second` lies, in `first`'s authored forward\ndirection (its reference path vertex order).",
+          "$ref": "#/$defs/AdjacencySide"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "first",
+        "second",
+        "side"
+      ]
+    },
     "FacilityConnectorEndSource": {
       "description": "One end of a version-2 facility connector.",
       "type": "object",
@@ -538,8 +663,22 @@
         }
       ]
     },
+    "FacilityLateralPolicySource": {
+      "description": "A version-2 facility's lateral-use policy. Additive Increment 2 object:\nomitted means the facility offers no lateral maneuver target and behaves\nexactly as in Increment 1.",
+      "type": "object",
+      "properties": {
+        "passing_side": {
+          "description": "Side on which a pass or overtake on this facility displaces.",
+          "$ref": "#/$defs/PassingSide"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "passing_side"
+      ]
+    },
     "FacilitySource": {
-      "description": "One version-2 continuous-width facility: a traversable region plus an\noptional reference path, usable width, nominal direction, mode access,\nlateral-use policy, and speed policy.",
+      "description": "One version-2 continuous-width facility: a traversable region plus an\noptional reference path, usable width, nominal direction, mode access,\nlateral-use policy, speed policy, and optional lateral-maneuver policy.",
       "type": "object",
       "properties": {
         "access": {
@@ -549,6 +688,17 @@
         "id": {
           "description": "Stable facility id, unique across all authored objects.",
           "type": "string"
+        },
+        "lateral_policy": {
+          "description": "Side a pass or overtake on this facility displaces toward. Additive\nIncrement 2 object; omitted means the facility offers no lateral\nmaneuver target, the Increment 1 behaviour.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FacilityLateralPolicySource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "lateral_use": {
           "description": "Whether the usable lateral interval is shared or centered.",
@@ -604,6 +754,35 @@
           "const": "centered"
         }
       ]
+    },
+    "ManeuverPolicySource": {
+      "description": "Scenario-scoped maneuver policy. Additive Increment 2 object: omitted means\nno lateral tactic or wrong-way decision is authored, and the document\nbehaves exactly as in Increment 1.\n\n`commit` and `wrong_way` are optional inside it, so a scenario that authors\nonly lateral tactics omits `wrong_way`, and one that authors no lateral\npolicy at all omits the whole object.",
+      "type": "object",
+      "properties": {
+        "commit": {
+          "description": "Unsafe-commit and commitment-loss policy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommitPolicySource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wrong_way": {
+          "description": "Contextual opposing-traversal decision inputs.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WrongWayPolicySource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ModeBodySource": {
       "description": "Body geometry distributions of one version-2 mode template.",
@@ -674,6 +853,27 @@
         }
       ]
     },
+    "ModeLateralSource": {
+      "description": "The lateral maneuver parameters of one version-2 mode template. Additive\nIncrement 2 object: omitted means the mode has no free lateral motion, no\nlateral maneuver is selectable, and the mode behaves exactly as in\nIncrement 1.",
+      "type": "object",
+      "properties": {
+        "horizon_s": {
+          "description": "Feasible time horizon in seconds: a candidate corridor is feasible only\nwhile it stays feasible at least this long from the decision instant.",
+          "type": "number",
+          "format": "double"
+        },
+        "target_clearance_m": {
+          "description": "Signed body-to-body surface clearance, in metres, the mode targets\nbetween its own swept envelope and the envelope of the body it is\npassing or overtaking, at the maneuver's closest approach.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target_clearance_m",
+        "horizon_s"
+      ]
+    },
     "ModeTemplateSource": {
       "description": "One version-2 mode template: a named, validated bundle of body, motion,\ntactical capability, access, occupancy, and profile distributions.",
       "type": "object",
@@ -689,6 +889,17 @@
         "id": {
           "description": "Stable template id, unique across authored objects.",
           "type": "string"
+        },
+        "lateral": {
+          "description": "The mode's own lateral maneuver parameters. Additive Increment 2 field:\nomitted means the mode has no free lateral motion and behaves exactly as\nin Increment 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModeLateralSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "motion": {
           "description": "Motion family the template uses.",
@@ -808,6 +1019,26 @@
           "description": "One operator, no passengers.",
           "type": "string",
           "const": "operator_only"
+        }
+      ]
+    },
+    "PassingSide": {
+      "description": "Side on which a within-facility pass or overtake displaces, measured in the\nmaneuvering agent's own direction of travel on the facility.",
+      "oneOf": [
+        {
+          "description": "The positive-`d` side.",
+          "type": "string",
+          "const": "left"
+        },
+        {
+          "description": "The negative-`d` side.",
+          "type": "string",
+          "const": "right"
+        },
+        {
+          "description": "The side whose usable corridor has the greater predicted minimum\nclearance; an exact tie resolves to `left`.",
+          "type": "string",
+          "const": "most_clearance"
         }
       ]
     },
@@ -1339,7 +1570,7 @@
       ]
     },
     "TacticKind": {
-      "description": "Tactical capability a version-2 mode template supports.",
+      "description": "Tactical capability a version-2 mode template supports.\n\nThe Increment 0 values `follow`, `stop`, and `yield` keep their meaning and\ntheir compiled mapping. Additive Increment 2 values `change_lane`,\n`overtake`, `pass`, and `reverse_direction` extend the same field in place,\nso a template that declares none of them compiles exactly as before.",
       "oneOf": [
         {
           "description": "Follow the agent ahead.",
@@ -1355,6 +1586,26 @@
           "description": "Yield to a conflicting movement.",
           "type": "string",
           "const": "yield"
+        },
+        {
+          "description": "Move laterally to an adjacent facility traversal.",
+          "type": "string",
+          "const": "change_lane"
+        },
+        {
+          "description": "Displace past a slower leader on the facility.",
+          "type": "string",
+          "const": "overtake"
+        },
+        {
+          "description": "Pass a slower user within the same facility.",
+          "type": "string",
+          "const": "pass"
+        },
+        {
+          "description": "Select a traversal against the applicable nominal direction.",
+          "type": "string",
+          "const": "reverse_direction"
         }
       ]
     },
@@ -1398,6 +1649,33 @@
       "required": [
         "id",
         "region"
+      ]
+    },
+    "WrongWayPolicySource": {
+      "description": "The contextual opposing-traversal decision inputs of a version-2 scenario.\n\nEvery field is required once `wrong_way` is present; nothing defaults.",
+      "type": "object",
+      "properties": {
+        "max_opposing_density_per_km": {
+          "description": "Largest density of opposing-travelling bodies, in agents per kilometre,\nobserved within the target traversal ahead for which the opposing option\nstays eligible.",
+          "type": "number",
+          "format": "double"
+        },
+        "min_time_saving_s": {
+          "description": "Minimum estimated travel-time saving, in seconds, the opposing option\nmust provide over the nominal option.",
+          "type": "number",
+          "format": "double"
+        },
+        "urgency": {
+          "description": "The scenario's willingness in `[0, 1]` to accept a violating opposing\ntraversal.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "min_time_saving_s",
+        "max_opposing_density_per_km",
+        "urgency"
       ]
     }
   }

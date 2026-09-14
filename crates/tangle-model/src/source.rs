@@ -646,6 +646,11 @@ pub enum MotionKind {
 }
 
 /// Tactical capability a version-2 mode template supports.
+///
+/// The Increment 0 values `follow`, `stop`, and `yield` keep their meaning and
+/// their compiled mapping. Additive Increment 2 values `change_lane`,
+/// `overtake`, `pass`, and `reverse_direction` extend the same field in place,
+/// so a template that declares none of them compiles exactly as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TacticKind {
@@ -655,6 +660,14 @@ pub enum TacticKind {
     Stop,
     /// Yield to a conflicting movement.
     Yield,
+    /// Move laterally to an adjacent facility traversal.
+    ChangeLane,
+    /// Displace past a slower leader on the facility.
+    Overtake,
+    /// Pass a slower user within the same facility.
+    Pass,
+    /// Select a traversal against the applicable nominal direction.
+    ReverseDirection,
 }
 
 /// Traversable object kind a version-2 mode may use.
@@ -811,9 +824,33 @@ pub struct FacilityAccessSource {
     pub modes: Vec<String>,
 }
 
+/// Side on which a within-facility pass or overtake displaces, measured in the
+/// maneuvering agent's own direction of travel on the facility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PassingSide {
+    /// The positive-`d` side.
+    Left,
+    /// The negative-`d` side.
+    Right,
+    /// The side whose usable corridor has the greater predicted minimum
+    /// clearance; an exact tie resolves to `left`.
+    MostClearance,
+}
+
+/// A version-2 facility's lateral-use policy. Additive Increment 2 object:
+/// omitted means the facility offers no lateral maneuver target and behaves
+/// exactly as in Increment 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacilityLateralPolicySource {
+    /// Side on which a pass or overtake on this facility displaces.
+    pub passing_side: PassingSide,
+}
+
 /// One version-2 continuous-width facility: a traversable region plus an
 /// optional reference path, usable width, nominal direction, mode access,
-/// lateral-use policy, and speed policy.
+/// lateral-use policy, speed policy, and optional lateral-maneuver policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FacilitySource {
@@ -834,6 +871,11 @@ pub struct FacilitySource {
     pub access: FacilityAccessSource,
     /// Whether the usable lateral interval is shared or centered.
     pub lateral_use: LateralUse,
+    /// Side a pass or overtake on this facility displaces toward. Additive
+    /// Increment 2 object; omitted means the facility offers no lateral
+    /// maneuver target, the Increment 1 behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lateral_policy: Option<FacilityLateralPolicySource>,
     /// Speed policy on the facility; a missing field is a parse error.
     pub speed_policy: SpeedPolicySource,
 }
@@ -858,6 +900,36 @@ pub struct FacilityConnectorSource {
     pub from: FacilityConnectorEndSource,
     /// Facility and traversal direction the connector enters.
     pub to: FacilityConnectorEndSource,
+}
+
+/// Side of the `first` facility on which the `second` lies, measured in
+/// `first`'s authored forward direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdjacencySide {
+    /// The positive-`d` side of `first`'s authored forward direction.
+    Left,
+    /// The negative-`d` side of `first`'s authored forward direction.
+    Right,
+}
+
+/// Two version-2 facility bands lying side by side along a shared stretch.
+///
+/// This is the only lateral-transition relation: a [`FacilityConnectorSource`]
+/// keeps its Increment 1 meaning of an end join, and proximity alone never
+/// infers a transition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacilityAdjacencySource {
+    /// Stable id, unique across all authored objects.
+    pub id: String,
+    /// Id of a declared facility.
+    pub first: String,
+    /// Id of a declared facility adjacent to `first`.
+    pub second: String,
+    /// Side of `first` on which `second` lies, in `first`'s authored forward
+    /// direction (its reference path vertex order).
+    pub side: AdjacencySide,
 }
 
 /// What an authored permission or obligation statement is about.
@@ -904,12 +976,104 @@ pub struct PermissionSource {
     pub effect: PermissionEffect,
 }
 
+/// One scenario-scoped clearance band: a labeled body-to-body signed surface
+/// clearance threshold.
+///
+/// Bands are metric definitions for the scenario that authors them, never
+/// universal declarations of safety. A band accumulates the duration during
+/// which the observed clearance is below its `threshold_m`, so bands declared
+/// in strictly increasing threshold nest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClearanceBandSource {
+    /// Stable id, unique across all authored objects.
+    pub id: String,
+    /// Signed surface clearance threshold the band defines, in metres.
+    pub threshold_m: f64,
+    /// Whether a pass below `threshold_m` is recorded as a lateral-displacement
+    /// violation in this scenario.
+    pub violation: bool,
+    /// Mode-template ids the band applies to. An absent field means the band
+    /// applies to every mode pair; a present list must be non-empty, so an
+    /// authored empty list is distinguishable from an omitted one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_to_modes: Option<Vec<String>>,
+}
+
+/// The unsafe-commit and commitment-loss policy of a version-2 scenario.
+///
+/// Every field is required once `commit` is present; nothing defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CommitPolicySource {
+    /// Absolute floor on the predicted minimum clearance of any of the four
+    /// clearance facts, in metres; a committed maneuver whose predicted
+    /// clearance falls below it aborts.
+    pub min_predicted_clearance_m: f64,
+    /// How long a `preparing` maneuver may wait for a granted claim, and how
+    /// long a `committed` maneuver may hold at or below its target clearance
+    /// waiting for the corridor to reopen, before it aborts. Seconds.
+    pub hold_timeout_s: f64,
+}
+
+/// The contextual opposing-traversal decision inputs of a version-2 scenario.
+///
+/// Every field is required once `wrong_way` is present; nothing defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WrongWayPolicySource {
+    /// Minimum estimated travel-time saving, in seconds, the opposing option
+    /// must provide over the nominal option.
+    pub min_time_saving_s: f64,
+    /// Largest density of opposing-travelling bodies, in agents per kilometre,
+    /// observed within the target traversal ahead for which the opposing option
+    /// stays eligible.
+    pub max_opposing_density_per_km: f64,
+    /// The scenario's willingness in `[0, 1]` to accept a violating opposing
+    /// traversal.
+    pub urgency: f64,
+}
+
+/// Scenario-scoped maneuver policy. Additive Increment 2 object: omitted means
+/// no lateral tactic or wrong-way decision is authored, and the document
+/// behaves exactly as in Increment 1.
+///
+/// `commit` and `wrong_way` are optional inside it, so a scenario that authors
+/// only lateral tactics omits `wrong_way`, and one that authors no lateral
+/// policy at all omits the whole object.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ManeuverPolicySource {
+    /// Unsafe-commit and commitment-loss policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<CommitPolicySource>,
+    /// Contextual opposing-traversal decision inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrong_way: Option<WrongWayPolicySource>,
+}
+
 /// Occupancy of a version-2 mode template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OccupancyKind {
     /// One operator, no passengers.
     OperatorOnly,
+}
+
+/// The lateral maneuver parameters of one version-2 mode template. Additive
+/// Increment 2 object: omitted means the mode has no free lateral motion, no
+/// lateral maneuver is selectable, and the mode behaves exactly as in
+/// Increment 1.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ModeLateralSource {
+    /// Signed body-to-body surface clearance, in metres, the mode targets
+    /// between its own swept envelope and the envelope of the body it is
+    /// passing or overtaking, at the maneuver's closest approach.
+    pub target_clearance_m: f64,
+    /// Feasible time horizon in seconds: a candidate corridor is feasible only
+    /// while it stays feasible at least this long from the decision instant.
+    pub horizon_s: f64,
 }
 
 /// One version-2 mode template: a named, validated bundle of body, motion,
@@ -931,6 +1095,11 @@ pub struct ModeTemplateSource {
     pub occupancy: OccupancyKind,
     /// Profile distributions keyed by parameter name.
     pub profiles: BTreeMap<String, ProfileRangeSource>,
+    /// The mode's own lateral maneuver parameters. Additive Increment 2 field:
+    /// omitted means the mode has no free lateral motion and behaves exactly as
+    /// in Increment 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lateral: Option<ModeLateralSource>,
 }
 
 /// The time interval of a version-2 rate demand spawn.
@@ -1012,8 +1181,9 @@ pub struct DemandSourceV2 {
 /// `population`, `demand`, and `pedestrian_demand` fields with `mode_templates`
 /// and a mode-tagged `demand`, and makes each movement's `direction` explicit.
 /// The Increment 1 additive arrays `facilities`, `facility_connectors`, and
-/// `permissions` extend it in place. Every other version-1 field is carried
-/// forward unchanged.
+/// `permissions` extend it in place, and Increment 2 adds
+/// `facility_adjacencies`, `clearance_bands`, and `maneuver_policy` the same
+/// way. Every other version-1 field is carried forward unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScenarioSourceV2 {
@@ -1042,6 +1212,11 @@ pub struct ScenarioSourceV2 {
     /// Increment 1 array.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub facility_connectors: Vec<FacilityConnectorSource>,
+    /// Side-by-side facility pairs that permit a lateral transition between
+    /// them. Additive Increment 2 array; omitted or empty means no lateral
+    /// transitions exist.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub facility_adjacencies: Vec<FacilityAdjacencySource>,
     /// Movement connectors with an explicit nominal direction.
     #[serde(default)]
     pub movements: Vec<MovementSourceV2>,
@@ -1068,6 +1243,16 @@ pub struct ScenarioSourceV2 {
     /// statements are populated in Increment 1.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<PermissionSource>,
+    /// Scenario-scoped clearance-band definitions, declared in strictly
+    /// increasing thresholds. Additive Increment 2 array; omitted or empty
+    /// means close-pass observations carry no band durations or violations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clearance_bands: Vec<ClearanceBandSource>,
+    /// Scenario-scoped commit and wrong-way policy. Additive Increment 2
+    /// object; omitted means no lateral tactic or wrong-way decision is
+    /// authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maneuver_policy: Option<ManeuverPolicySource>,
     /// Named, validated mode bundles; demand references them by id.
     #[serde(default)]
     pub mode_templates: Vec<ModeTemplateSource>,
