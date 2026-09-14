@@ -37,11 +37,11 @@
 
 use glam::DVec2;
 use tangle_model::{
-    AdjacencySide, AgentFamily, CommitPolicySource, CompiledMovement, CompiledPath,
-    CompiledPedestrianRoute, CompiledReferencePath, CompiledScenario, CrossingId, DemandId,
-    FacilityId, LateralTransition, ModeTemplateId, MovementDirection, MovementId, PassingSide,
-    PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PermissionEffect, PortalId, RuleKind,
-    SignalColor, SignalId, TacticalCapability, TraversalTransitions,
+    AdjacencySide, AgentFamily, CommitPolicySource, CompiledFacilityAdjacency, CompiledMovement,
+    CompiledPath, CompiledPedestrianRoute, CompiledReferencePath, CompiledScenario, CrossingId,
+    DemandId, FacilityId, LateralTransition, ModeTemplateId, MovementDirection, MovementId,
+    PassingSide, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PermissionEffect,
+    PortalId, RuleKind, SignalColor, SignalId, TacticalCapability, TraversalTransitions,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
@@ -58,7 +58,7 @@ use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, Ped
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
 use crate::prediction::{
     DEFAULT_SUBDIVISIONS, ManeuverInputs, ManeuverPrediction, PredictedBody,
-    predict_maneuver_corridor,
+    predict_crossing_corridor, predict_maneuver_corridor,
 };
 use crate::profile::{
     PedestrianProfile, VehicleProfile, WheeledLateralLimits, sample_pedestrian_profile,
@@ -1623,17 +1623,67 @@ impl Simulation {
             .collect()
     }
 
-    /// Predict one agent's candidate maneuver corridor and clearances from the
-    /// tick-start state, or `None` when the agent carries no bounded-steering
-    /// envelope or no compiled facility reference.
+    /// Predict one agent's within-facility candidate maneuver corridor and
+    /// clearances from the tick-start state, or `None` when the agent carries
+    /// no bounded-steering envelope or no compiled facility reference.
     fn predict_maneuver(
         &self,
         index: usize,
         target_offset_m: f64,
         batch: &ManeuverBatch<'_>,
     ) -> Option<ManeuverPrediction> {
+        let steering = self.agents.route_state[index]?.bounded_steering?;
+        self.predict_candidate(index, target_offset_m, steering, None, batch)
+    }
+
+    /// Predict the outbound leg of an in-flight cross-facility change of lane,
+    /// or `None` when its route state names no compiled crossing.
+    ///
+    /// The leg's target is the compiled shared boundary plus the mode's target
+    /// clearance in the agent's own travel frame, and its corridor is bounded by
+    /// the combined source and destination band edges, so the shared boundary it
+    /// crosses is not read as a wall while each band's far edge is. Its
+    /// bounded-steering envelope is the widening the crossing motion needs to
+    /// reach the boundary.
+    fn predict_outbound(
+        &self,
+        index: usize,
+        state: &RouteState,
+        batch: &ManeuverBatch<'_>,
+    ) -> Option<ManeuverPrediction> {
+        let target_facility = state.target_facility?;
+        let crossing = self.crossing_lateral(
+            state.facility,
+            self.agents.direction[index],
+            target_facility,
+        )?;
+        let clearance_m = state.target_clearance_m?;
+        let steering = self.steering_envelope(index)?;
+        self.predict_candidate(
+            index,
+            crossing.target_offset_m(clearance_m),
+            steering,
+            Some(crossing.band_bounds_m),
+            batch,
+        )
+    }
+
+    /// Predict one candidate maneuver: the shared body of the within-facility
+    /// and the cross-facility predictor.
+    ///
+    /// `steering` is the bounded-steering envelope the candidate motion
+    /// integrates under, and `band_bounds_m` is a crossing corridor's combined
+    /// band edges in the agent's own travel frame, or `None` for the compiled
+    /// constant-width band of the facility the agent rides.
+    fn predict_candidate(
+        &self,
+        index: usize,
+        target_offset_m: f64,
+        steering: BoundedSteering,
+        band_bounds_m: Option<[f64; 2]>,
+        batch: &ManeuverBatch<'_>,
+    ) -> Option<ManeuverPrediction> {
         let state = self.agents.route_state[index]?;
-        let steering = state.bounded_steering?;
         let geometry = self.route_geometry(index)?;
         let facility = self.scenario.facility(state.facility)?;
         // The predicted bodies are the *other* bodies: the agent's own envelope
@@ -1665,25 +1715,26 @@ impl Simulation {
             },
             circle => circle,
         };
-        Some(predict_maneuver_corridor(
-            ManeuverInputs {
-                geometry,
-                facility_width_m: facility.width_m(),
-                direction,
-                body,
-                speed_mps: self.agents.speed_mps[index],
-                target_offset_m,
-                steering,
-                target_clearance_m: state.target_clearance_m?,
-                horizon_s: state.horizon_s?,
-                // This leaf's decision cadence is the fixed step: the prediction
-                // subdivides one decision of motion. The manifest's own
-                // lateral-decision cadence arrives with the fidelity settings.
-                cadence_s: batch.dt,
-                subdivisions: DEFAULT_SUBDIVISIONS,
-            },
-            &others,
-        ))
+        let inputs = ManeuverInputs {
+            geometry,
+            facility_width_m: facility.width_m(),
+            direction,
+            body,
+            speed_mps: self.agents.speed_mps[index],
+            target_offset_m,
+            steering,
+            target_clearance_m: state.target_clearance_m?,
+            horizon_s: state.horizon_s?,
+            // This leaf's decision cadence is the fixed step: the prediction
+            // subdivides one decision of motion. The manifest's own
+            // lateral-decision cadence arrives with the fidelity settings.
+            cadence_s: batch.dt,
+            subdivisions: DEFAULT_SUBDIVISIONS,
+        };
+        Some(match band_bounds_m {
+            Some(bounds) => predict_crossing_corridor(inputs, bounds, &others),
+            None => predict_maneuver_corridor(inputs, &others),
+        })
     }
 
     /// Fix one agent's lateral target and candidate corridor, or report why the
@@ -1756,16 +1807,16 @@ impl Simulation {
     /// Fix a cross-facility change of lane's target and candidate corridor, or
     /// report why it is not admissible this step.
     ///
-    /// The compiled adjacency names the destination traversal and the crossing
-    /// side, and the destination traversal's own policy answers whether the
-    /// continuation direction is permitted — a destination it does not permit is
-    /// the contract's preventable forbidden-boundary crossing. The crossing bound
-    /// is a runtime input: `CompiledFacilityAdjacency` carries no band separation
-    /// or offset (the gap TAS-090 recorded), so the outbound motion is bounded at
-    /// the shared boundary and the destination target is validated against the
-    /// destination facility's own usable interval. The world pose stays the truth
-    /// at the handoff, where progress is the projection of the unchanged pose
-    /// onto the destination reference.
+    /// The compiled adjacency names the destination traversal, the crossing
+    /// side, and the [shared boundary](CompiledFacilityAdjacency::shared_boundary_offset)
+    /// the handoff fires on, so the crossing bound is the compiled geometric
+    /// datum rather than the source band's half-width. The destination traversal's
+    /// own policy answers whether the continuation direction is permitted — a
+    /// destination it does not permit is the contract's preventable
+    /// forbidden-boundary crossing — and the destination target is validated
+    /// against the destination facility's own usable interval. The world pose
+    /// stays the truth at the handoff, where progress is the projection of the
+    /// unchanged pose onto the destination reference.
     fn attempt_facility_transition(
         &self,
         index: usize,
@@ -1774,16 +1825,13 @@ impl Simulation {
         target_facility: FacilityId,
     ) -> Attempt {
         let direction = self.agents.direction[index];
-        let Some(transition) = lateral_transition(
-            self.scenario
-                .transitions(state.facility, movement_direction(direction)),
-            target_facility,
-        ) else {
-            // No compiled adjacency joins the current band to the target, so
-            // there is no crossing to attempt.
+        // No compiled adjacency joins the current band to the target, so there
+        // is no crossing to attempt.
+        let Some(crossing) = self.crossing_lateral(state.facility, direction, target_facility)
+        else {
             return Attempt::Infeasible;
         };
-        let destination_traversal = transition.target();
+        let destination_traversal = crossing.transition.target();
         if !self.traversal_permits(
             state.mode_template,
             destination_traversal.facility(),
@@ -1814,16 +1862,14 @@ impl Simulation {
         {
             return Attempt::Infeasible;
         }
-        let side = travel_pass_side(transition.side());
         // The claimed corridor spans the passed obstacle's footprint and the
-        // source band's usable interval extended to just past the shared
-        // boundary on the crossing side, in the facility's own frame.
+        // source band's usable interval extended to just past the compiled
+        // shared boundary on the crossing side, in the facility's own frame.
         let passed = request.passed_body.index();
         let passed_s_m = geometry.project(self.agents.position[passed]).s();
         let half_self_m = self.agents.body_length_m[index] * 0.5;
         let half_passed_m = self.agents.body_length_m[passed] * 0.5;
-        let crossing_bound =
-            side.sign() * direction * (source.width_m() * 0.5 + target_clearance_m);
+        let crossing_bound = direction * crossing.target_offset_m(target_clearance_m);
         let source_interval = source.usable_lateral_interval(envelope, target_clearance_m);
         let mut d_min_m = source_interval.d_min();
         let mut d_max_m = source_interval.d_max();
@@ -1833,8 +1879,7 @@ impl Simulation {
             d_min_m = d_min_m.min(crossing_bound);
         }
         // The predicted clearance is the destination band edge's clearance at
-        // the destination target, a geometric fact of the destination band the
-        // compiler does expose (unlike the cross-band offset).
+        // the destination target, in the destination band's own frame.
         let predicted_clearance_m =
             destination.width_m() * 0.5 - request.target_offset_m.abs() - envelope * 0.5;
         Attempt::Admissible {
@@ -1873,60 +1918,52 @@ impl Simulation {
                 batch.now,
             );
         };
-        // A cross-facility outbound leg has no within-facility prediction to
-        // read: the destination band's offset from the source is not compiled
-        // (the TAS-090 gap), so the commitment-loss response is limited to the
-        // completion edge while the crossing is in flight. The handoff itself
-        // carries the crossing, and once the agent owns the destination the
-        // ordinary predictor decides every later hazard again.
-        if state.entering_facility
-            || state
-                .target_facility
-                .is_some_and(|target| target != state.facility)
-        {
-            if self.passed_body_cleared(index, passed, target_clearance_m) {
-                return ManeuverPlan {
-                    index,
-                    state: RouteState {
-                        maneuver: ManeuverState::Returning,
-                        state_since: Some(batch.now),
-                        braking: false,
-                        hold_since: None,
-                        settled_since: None,
-                        ..state
-                    },
-                    transition: Some(ManeuverTransition {
-                        agent: AgentId::from_index(index),
-                        from: ManeuverState::Committed,
-                        to: ManeuverState::Returning,
-                        edge: ManeuverEdge::Completed,
-                        reason: None,
-                        time: batch.now,
-                    }),
-                };
+        // The leg's prediction: the ordinary within-facility corridor for a
+        // within-facility maneuver, the outbound crossing corridor while a
+        // change of lane is in flight, and none while the agent is still on the
+        // entry transient of the destination it has just been handed off to —
+        // that leg is bounded by the corridor until its body centre is inside
+        // the destination's usable interval. A crossing that no compiled
+        // adjacency carries any more has no corridor left.
+        let cross_facility = state
+            .target_facility
+            .is_some_and(|target| target != state.facility);
+        let prediction = if state.entering_facility {
+            None
+        } else if cross_facility {
+            match self.predict_outbound(index, &state, batch) {
+                Some(prediction) => Some(prediction),
+                None => {
+                    return self.abort_plan(
+                        index,
+                        state,
+                        ManeuverAbortReason::CorridorInfeasible,
+                        batch.now,
+                    );
+                }
             }
-            return ManeuverPlan {
-                index,
-                state,
-                transition: None,
-            };
-        }
-        let Some(prediction) = self.predict_maneuver(index, target_offset_m, batch) else {
-            return self.abort_plan(
-                index,
-                state,
-                ManeuverAbortReason::CorridorInfeasible,
-                batch.now,
-            );
+        } else {
+            match self.predict_maneuver(index, target_offset_m, batch) {
+                Some(prediction) => Some(prediction),
+                None => {
+                    return self.abort_plan(
+                        index,
+                        state,
+                        ManeuverAbortReason::CorridorInfeasible,
+                        batch.now,
+                    );
+                }
+            }
         };
-        let swept_m = prediction.clears.swept.clearance_m;
 
         if self.passed_body_cleared(index, passed, target_clearance_m) {
             return ManeuverPlan {
                 index,
                 state: RouteState {
                     maneuver: ManeuverState::Returning,
-                    predicted_min_clearance_m: Some(swept_m),
+                    predicted_min_clearance_m: prediction
+                        .as_ref()
+                        .map(|prediction| prediction.clears.swept.clearance_m),
                     state_since: Some(batch.now),
                     braking: false,
                     hold_since: None,
@@ -1943,6 +1980,16 @@ impl Simulation {
                 }),
             };
         }
+        // The entry transient has no prediction yet: it holds its crossing and
+        // lets the bounded entry leg carry the body centre into the destination.
+        let Some(prediction) = prediction else {
+            return ManeuverPlan {
+                index,
+                state,
+                transition: None,
+            };
+        };
+        let swept_m = prediction.clears.swept.clearance_m;
 
         // The ordered unsafe-commit response: a corridor below the policy's
         // minimum aborts; anything below the target clearance brakes within the
@@ -2942,6 +2989,71 @@ impl Simulation {
             .is_some_and(|policy| policy.permits(direction))
     }
 
+    /// The compiled adjacency joining two bands, in either authored order, or
+    /// `None` when no authored adjacency declares the pair.
+    fn facility_adjacency(
+        &self,
+        first: FacilityId,
+        second: FacilityId,
+    ) -> Option<&CompiledFacilityAdjacency> {
+        self.scenario
+            .facility_adjacencies()
+            .iter()
+            .find(|adjacency| {
+                (adjacency.first() == first && adjacency.second() == second)
+                    || (adjacency.first() == second && adjacency.second() == first)
+            })
+    }
+
+    /// The compiled geometry of one cross-facility lateral crossing from
+    /// `facility` travelling at `direction`, or `None` when no authored
+    /// adjacency joins the two bands.
+    ///
+    /// The adjacency's shared boundary is the contract's lateral handoff point:
+    /// [`CrossingLateral::boundary_offset_m`] is that boundary's signed offset
+    /// from the source reference in the agent's own travel frame, where the body
+    /// centre crosses. `shared_boundary_offset` on both bands gives the offset
+    /// between the two references, so the destination band's compiled
+    /// constant-width band lands in the source band's travel frame and the
+    /// outbound corridor's outer bounds are the two bands' combined edges with
+    /// the shared boundary between them open — one compiled geometric datum
+    /// where the source band's half-width was approximated.
+    fn crossing_lateral(
+        &self,
+        facility: FacilityId,
+        direction: f64,
+        target_facility: FacilityId,
+    ) -> Option<CrossingLateral> {
+        if target_facility == facility {
+            return None;
+        }
+        let travel = movement_direction(direction);
+        let transition =
+            lateral_transition(self.scenario.transitions(facility, travel), target_facility)?;
+        let adjacency = self.facility_adjacency(facility, target_facility)?;
+        let boundary_offset_m = adjacency.shared_boundary_offset(facility, travel)?;
+        let source = self.scenario.facility(facility)?;
+        let destination = self.scenario.facility(target_facility)?;
+        let to_direction = transition.target().direction();
+        let destination_boundary_m =
+            adjacency.shared_boundary_offset(target_facility, to_direction)?;
+        // The destination reference's offset from the source reference is the
+        // difference of the two boundary offsets, so the destination band's own
+        // constant-width band lands in the source band's travel frame.
+        let shift_m = boundary_offset_m - destination_boundary_m;
+        let source_half_m = source.width_m() * 0.5;
+        let destination_half_m = destination.width_m() * 0.5;
+        Some(CrossingLateral {
+            transition,
+            side: travel_pass_side(transition.side()),
+            boundary_offset_m,
+            band_bounds_m: [
+                (-source_half_m).min(shift_m - destination_half_m),
+                source_half_m.max(shift_m + destination_half_m),
+            ],
+        })
+    }
+
     /// The contract's connector handoff, performed when the agent has reached
     /// the leaving end of its traversal.
     ///
@@ -3022,18 +3134,18 @@ impl Simulation {
     }
 
     /// Perform the contract's lateral handoff when a committed cross-facility
-    /// change of lane's body centre has crossed the shared boundary between the
-    /// two bands.
+    /// change of lane's body centre has crossed the compiled shared boundary
+    /// between the two bands.
     ///
-    /// The compiled adjacency names the destination traversal and the crossing
-    /// side; the side is in the agent's own travel frame, so the crossing is the
-    /// body centre reaching the source band's half-width on that side. The
-    /// handoff moves route and facility ownership in one step while the world
-    /// pose is unchanged — the destination progress is the projection of that
-    /// same pose onto the destination reference, so there is no despawn, no
-    /// re-spawn, and no snap — and the maneuver continues on the destination with
-    /// its target and return offset re-expressed in the destination's own frame.
-    /// Returns `false` when no committed cross-facility maneuver is crossing.
+    /// The compiled adjacency names the destination traversal, the crossing
+    /// side, and the shared boundary, so the crossing is the body centre
+    /// reaching [`CrossingLateral::crossing_m`] on that side. The handoff moves
+    /// route and facility ownership in one step while the world pose is
+    /// unchanged — the destination progress is the projection of that same pose
+    /// onto the destination reference, so there is no despawn, no re-spawn, and
+    /// no snap — and the maneuver continues on the destination with its target
+    /// and return offset re-expressed in the destination's own frame. Returns
+    /// `false` when no committed cross-facility maneuver is crossing.
     fn handoff_lateral(&mut self, index: usize) -> bool {
         let Some(state) = self.agents.route_state[index] else {
             return false;
@@ -3048,20 +3160,18 @@ impl Simulation {
             return false;
         }
         let from_direction = movement_direction(self.agents.direction[index]);
-        let Some(transition) = lateral_transition(
-            self.scenario.transitions(state.facility, from_direction),
+        let Some(crossing) = self.crossing_lateral(
+            state.facility,
+            self.agents.direction[index],
             target_facility,
         ) else {
             return false;
         };
-        let Some(source) = self.scenario.facility(state.facility) else {
-            return false;
-        };
-        let side = travel_pass_side(transition.side());
-        if side.sign() * state.d_m < source.width_m() * 0.5 - CONNECTOR_CONTINUITY_TOLERANCE_M {
+        let side = crossing.side;
+        if side.sign() * state.d_m < crossing.crossing_m() - CONNECTOR_CONTINUITY_TOLERANCE_M {
             return false;
         }
-        let destination_traversal = transition.target();
+        let destination_traversal = crossing.transition.target();
         let Some(destination) = self.scenario.facility(destination_traversal.facility()) else {
             return false;
         };
@@ -3093,13 +3203,9 @@ impl Simulation {
         // The maneuver continues on the destination; its target is now in the
         // destination's own frame, and the return leg settles at that target
         // rather than at the source offset the destination frame cannot name.
-        next.target_facility = None;
-        next.pre_maneuver_offset_m = state.target_offset_m.unwrap_or(next.d_m);
-        self.agents.route_state[index] = Some(next);
-
-        // The maneuver continues on the destination; its target is now in the
-        // destination's own frame, and the return leg settles at that target
-        // rather than at the source offset the destination frame cannot name.
+        // The body centre is still on the shared boundary, so the entry
+        // transient holds the ordinary destination corridor back until it is
+        // inside the destination's usable interval.
         next.target_facility = None;
         next.pre_maneuver_offset_m = state.target_offset_m.unwrap_or(next.d_m);
         next.entering_facility = true;
@@ -3161,50 +3267,42 @@ impl Simulation {
         }
     }
 
-    /// The target offset a committed maneuver steers toward: the compiled
-    /// shared boundary's runtime-derived crossing bound on the outbound leg of a
-    /// cross-facility change of lane, or the fixed destination target otherwise.
+    /// The target offset a committed maneuver steers toward: just past the
+    /// compiled shared boundary on the crossing side of a cross-facility change
+    /// of lane, or the fixed destination target within one band.
     fn committed_lateral_target(&self, index: usize, state: &RouteState) -> Option<f64> {
         if let Some(target_facility) = state.target_facility
             && target_facility != state.facility
         {
-            let source = self.scenario.facility(state.facility)?;
             let clearance = state.target_clearance_m?;
-            let transition = lateral_transition(
-                self.scenario.transitions(
-                    state.facility,
-                    movement_direction(self.agents.direction[index]),
-                ),
+            let crossing = self.crossing_lateral(
+                state.facility,
+                self.agents.direction[index],
                 target_facility,
             )?;
-            let side = travel_pass_side(transition.side());
-            return Some(side.sign() * (source.width_m() * 0.5 + clearance));
+            return Some(crossing.target_offset_m(clearance));
         }
         state.target_offset_m
     }
 
     /// The compiled bounded-steering envelope of an agent this step, widened on
     /// the crossing side while it is on the outbound leg of a cross-facility
-    /// change of lane, so the bounded step may cross the shared boundary.
+    /// change of lane, so the bounded step may cross the compiled shared
+    /// boundary.
     fn steering_envelope(&self, index: usize) -> Option<BoundedSteering> {
         let state = self.agents.route_state.get(index).copied().flatten()?;
         let mut steering = state.bounded_steering?;
         if state.maneuver == ManeuverState::Committed
             && let Some(target_facility) = state.target_facility
             && target_facility != state.facility
-            && let Some(source) = self.scenario.facility(state.facility)
             && let Some(clearance) = state.target_clearance_m
-            && let Some(transition) = lateral_transition(
-                self.scenario.transitions(
-                    state.facility,
-                    movement_direction(self.agents.direction[index]),
-                ),
+            && let Some(crossing) = self.crossing_lateral(
+                state.facility,
+                self.agents.direction[index],
                 target_facility,
             )
         {
-            let side = travel_pass_side(transition.side());
-            let bound =
-                side.sign() * self.agents.direction[index] * (source.width_m() * 0.5 + clearance);
+            let bound = self.agents.direction[index] * crossing.target_offset_m(clearance);
             if bound > 0.0 {
                 steering.corridor.d_max = steering.corridor.d_max.max(bound);
             } else {
@@ -3257,6 +3355,44 @@ struct ManeuverPlan {
     index: usize,
     state: RouteState,
     transition: Option<ManeuverTransition>,
+}
+
+/// The compiled geometry of one cross-facility lateral crossing, read from the
+/// adjacency that joins the source band to the destination band.
+///
+/// Every offset is in the agent's own travel frame: `d` is positive to the left
+/// of its direction of travel. The shared boundary is the contract's lateral
+/// handoff point, and the two band bounds are the outer edges the outbound
+/// predicted corridor is limited by — the source band's far edge on one side and
+/// the destination band's far edge on the other, with the shared boundary
+/// between them open because the two compiled bands are adjacent.
+struct CrossingLateral {
+    /// The compiled lateral transition: the destination traversal that
+    /// continues the agent's travel, and the crossing side.
+    transition: LateralTransition,
+    /// The side of the crossing in the agent's own travel frame.
+    side: PassSide,
+    /// The shared boundary's signed offset from the source reference in the
+    /// agent's own travel frame.
+    boundary_offset_m: f64,
+    /// The outer edges of the two bands combined, in the agent's own travel
+    /// frame as `[low, high]`.
+    band_bounds_m: [f64; 2],
+}
+
+impl CrossingLateral {
+    /// The shared boundary's distance from the source reference on the side the
+    /// agent crosses toward.
+    fn crossing_m(&self) -> f64 {
+        self.side.sign() * self.boundary_offset_m
+    }
+
+    /// The outbound steering target in the agent's own travel frame: just past
+    /// the compiled shared boundary by the mode's target clearance, so the
+    /// bounded step reaches and crosses the handoff point.
+    fn target_offset_m(&self, clearance_m: f64) -> f64 {
+        self.side.sign() * (self.crossing_m() + clearance_m)
+    }
 }
 
 /// Why a lateral attempt is or is not admissible this step.

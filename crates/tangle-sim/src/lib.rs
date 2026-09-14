@@ -81,7 +81,7 @@ pub use pedestrian_compliance::{
 pub use prediction::{
     ClearanceFact, CorridorSample, DEFAULT_SUBDIVISIONS, LimitingObject, MAX_PREDICTION_STEPS,
     ManeuverInputs, ManeuverPrediction, PredictedBody, PredictedClearances, PredictionVerdict,
-    predict_maneuver_corridor,
+    predict_crossing_corridor, predict_maneuver_corridor,
 };
 pub use profile::{PedestrianProfile, VehicleProfile};
 pub use query::{

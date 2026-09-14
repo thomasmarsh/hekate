@@ -74,6 +74,19 @@
 //! abort decision reads. A class with no body reports no fact (`None`); the band
 //! edge is always a fact, so `swept` is always present.
 //!
+//! ## Crossing corridors
+//!
+//! A cross-facility change of lane rides two adjacent bands, so its candidate
+//! motion is bounded by the *combined* band edges rather than by the current
+//! band alone: the source band's far edge on one side and the destination
+//! band's far edge on the other, with the shared boundary between them open.
+//! [`predict_crossing_corridor`] takes those bounds, expressed in the agent's
+//! own travel frame, from the compiled facility adjacency;
+//! [`predict_maneuver_corridor`] keeps the compiled constant-width band of the
+//! facility the agent rides. The band-edge fact has the same meaning in both:
+//! the least distance from the agent's outer envelope to the bound it is
+//! approaching.
+//!
 //! ## Feasibility
 //!
 //! The candidate is feasible when every fact stays at or above the target
@@ -140,6 +153,11 @@ pub struct PredictedBody {
 }
 
 /// The compiled geometry and bounded candidate motion of one lateral maneuver.
+///
+/// The band the candidate corridor is bounded by is the caller's choice: a
+/// within-facility candidate is bounded by the compiled constant-width band of
+/// `facility_width_m`, and a cross-facility change of lane is bounded by the two
+/// bands' combined outer edges through [`predict_crossing_corridor`].
 ///
 /// See the module card for how each field enters the prediction.
 #[derive(Debug, Clone, Copy)]
@@ -262,13 +280,43 @@ impl ManeuverPrediction {
     }
 }
 
-/// Predict the corridor and clearances of one candidate lateral maneuver.
+/// Predict the corridor and clearances of one within-facility candidate lateral
+/// maneuver, bounded by the facility's compiled constant-width band.
 ///
 /// Pure and deterministic: the result is a function of `inputs` and the set of
 /// `bodies`, independent of the order the bodies are supplied in. See the
 /// module card for the model and the conservatism guarantee.
 pub fn predict_maneuver_corridor(
     inputs: ManeuverInputs<'_>,
+    bodies: &[PredictedBody],
+) -> ManeuverPrediction {
+    predict_with_band_bounds(inputs, None, bodies)
+}
+
+/// Predict the corridor and clearances of one cross-facility change of lane,
+/// bounded by the combined outer edges of the two bands it rides.
+///
+/// `band_bounds_m` is `[low, high]` in the agent's own travel frame (`d`
+/// positive to the left of its direction of travel): the source band's far edge
+/// on the side opposite the crossing and the destination band's far edge on the
+/// crossing side, with the shared boundary between the two bands open. The
+/// caller reads them from the compiled facility adjacency, so the shared
+/// boundary the handoff fires on is one compiled datum rather than the source
+/// band's half-width. Every other input, body class, clearance fact, and the
+/// conservatism guarantee is exactly [`predict_maneuver_corridor`]'s.
+pub fn predict_crossing_corridor(
+    inputs: ManeuverInputs<'_>,
+    band_bounds_m: [f64; 2],
+    bodies: &[PredictedBody],
+) -> ManeuverPrediction {
+    predict_with_band_bounds(inputs, Some(band_bounds_m), bodies)
+}
+
+/// The shared body of both entry points: the same integration, candidate
+/// collection, and fact folding, with the band edge the one substitution.
+fn predict_with_band_bounds(
+    inputs: ManeuverInputs<'_>,
+    band_bounds_m: Option<[f64; 2]>,
     bodies: &[PredictedBody],
 ) -> ManeuverPrediction {
     let (corridor, corridor_exceeded) = integrate_corridor(&inputs);
@@ -294,7 +342,7 @@ pub fn predict_maneuver_corridor(
 
     // The band edge is always a fact, and it only wins a strict minimum, so a
     // body at exactly the band-edge clearance keeps its identifier.
-    let edge = band_edge_fact(&inputs, &corridor);
+    let edge = band_edge_fact(&inputs, &corridor, band_bounds_m);
     keep_least(&mut swept, Some(edge));
     let swept = swept.expect("the band edge always supplies a swept fact");
 
@@ -564,18 +612,39 @@ fn body_fact(
     best
 }
 
-/// The band-edge clearance fact over the corridor: the least distance from the
-/// agent's outer envelope to either side of the facility band.
-fn band_edge_fact(inputs: &ManeuverInputs<'_>, corridor: &[CorridorSample]) -> ClearanceFact {
+/// The effective band-edge clearance fact over the corridor: the least distance
+/// from the agent's outer envelope to `band_bounds_m`, or to either side of the
+/// facility's compiled constant-width band when no bounds are supplied.
+///
+/// The bounds arrive in the agent's own travel frame; the geometry's own
+/// reference frame is the mirror of it, so the clearance and the closing-speed
+/// sign are read in the reference frame exactly as the symmetric case reads
+/// them.
+fn band_edge_fact(
+    inputs: &ManeuverInputs<'_>,
+    corridor: &[CorridorSample],
+    band_bounds_m: Option<[f64; 2]>,
+) -> ClearanceFact {
     let half_width = inputs.facility_width_m * 0.5;
+    let [low_m, high_m] = band_bounds_m.unwrap_or([-half_width, half_width]);
+    // The bounds mirrored into the reference frame: a reverse traveller's own
+    // left is the reference's right.
+    let (low_ref, high_ref) = if inputs.direction < 0.0 {
+        (-high_m, -low_m)
+    } else {
+        (low_m, high_m)
+    };
     let mut best: Option<ClearanceFact> = None;
     for sample in corridor {
         let coordinate = inputs.geometry.project(sample.position);
         let normal = inputs.geometry.normal_at(coordinate.s());
         let envelope = pose_body(&inputs.body, sample.position, sample.heading_rad);
-        let clearance_m = half_width - coordinate.d().abs() - half_extent_along(&envelope, normal);
+        let d_ref = coordinate.d();
+        let low_gap_m = d_ref - low_ref;
+        let high_gap_m = high_ref - d_ref;
+        let clearance_m = low_gap_m.min(high_gap_m) - half_extent_along(&envelope, normal);
         let agent_velocity = DVec2::from_angle(sample.heading_rad) * inputs.speed_mps;
-        let closing_speed_mps = if coordinate.d() < 0.0 {
+        let closing_speed_mps = if low_gap_m < high_gap_m {
             -agent_velocity.dot(normal)
         } else {
             agent_velocity.dot(normal)
@@ -943,6 +1012,108 @@ mod tests {
             LimitingObject::Agent(AgentId::from_index(0))
         );
         assert!((prediction.clears.swept.clearance_m - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_crossing_corridor_is_bounded_by_the_combined_band_edges() {
+        let geometry = straight();
+        // A wide source band and a destination band whose compiled far edge is
+        // 0.5 m from the source reference: the combined bounds are `[-5, 0.5]`,
+        // so the destination band edge is the binding wall. The within-facility
+        // read of the same hold only sees the source band's own edge.
+        let hold = ManeuverInputs {
+            facility_width_m: 10.0,
+            steering: steering(5.0),
+            speed_mps: 0.0,
+            ..inputs(&geometry, 0.0)
+        };
+        let crossing = predict_crossing_corridor(hold, [-5.0, 0.5], &[]);
+        assert_eq!(
+            crossing.verdict,
+            PredictionVerdict::Infeasible {
+                limiting: LimitingObject::BandEdge
+            }
+        );
+        // Destination edge 0.5, offset 0, envelope half width 1.0: -0.5 m.
+        assert!(
+            (crossing.clears.swept.clearance_m + 0.5).abs() < 1e-9,
+            "{}",
+            crossing.clears.swept.clearance_m
+        );
+        let within = predict_maneuver_corridor(hold, &[]);
+        // Source half width 5, offset 0, envelope half width 1.0: 4 m, feasible.
+        assert!((within.clears.swept.clearance_m - 4.0).abs() < 1e-9);
+        assert!(within.is_feasible());
+
+        // A crossing target past the compiled destination edge closes the
+        // corridor on that edge however long the horizon.
+        let crossing = predict_crossing_corridor(
+            ManeuverInputs {
+                target_offset_m: 1.8,
+                steering: BoundedSteering {
+                    limits: SteeringLimits {
+                        heading_rate_max_rad_s: 0.9,
+                        lateral_accel_max_mps2: 2.0,
+                    },
+                    corridor: LateralCorridor {
+                        d_min: -0.4,
+                        d_max: 1.8,
+                    },
+                },
+                ..hold
+            },
+            [-5.0, 0.9],
+            &[],
+        );
+        assert_eq!(
+            crossing.verdict,
+            PredictionVerdict::Infeasible {
+                limiting: LimitingObject::BandEdge
+            }
+        );
+        assert!(
+            crossing.clears.swept.clearance_m < 0.0,
+            "the destination band edge is inside the crossing corridor: {}",
+            crossing.clears.swept.clearance_m
+        );
+    }
+
+    #[test]
+    fn a_crossing_corridor_reads_a_destination_band_body_as_a_side_fact() {
+        let geometry = straight();
+        // A body one lane over, in the destination band's own frame: it overlaps
+        // the agent's progress, so it is a side body whose clearance the
+        // crossing corridor reads like any other.
+        let beside = PredictedBody {
+            id: AgentId::from_index(0),
+            shape: BodyShape::Box {
+                centre: DVec2::new(50.0, 3.0),
+                heading_rad: 0.0,
+                length_m: 4.0,
+                width_m: 2.0,
+            },
+            velocity_mps: DVec2::new(10.0, 0.0),
+        };
+        let crossing = predict_crossing_corridor(
+            ManeuverInputs {
+                target_offset_m: 1.2,
+                speed_mps: 0.0,
+                ..inputs(&geometry, 0.0)
+            },
+            [-3.0, 6.0],
+            &[beside],
+        );
+        // Holding station, the centres are 3 m apart with 1 m half widths: 1 m
+        // of surface clearance, above the 0.5 m target, so the side fact is
+        // reported and the candidate stays feasible.
+        let side = crossing.clears.side.expect("a body is alongside");
+        assert_eq!(side.object, LimitingObject::Agent(AgentId::from_index(0)));
+        assert!(
+            (side.clearance_m - 1.0).abs() < 1e-9,
+            "{}",
+            side.clearance_m
+        );
+        assert!(crossing.is_feasible());
     }
 
     #[test]

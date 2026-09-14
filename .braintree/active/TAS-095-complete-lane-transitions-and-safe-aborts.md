@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T11:43:47Z
+updated: 2026-09-14T12:23:57Z
 summary: Complete configured lane or facility transitions with bounded abort, braking, and return.
-next: Apply the committed hazard and return-obstruction policy on a change of lane's outbound and return legs.
+next: Detect a body obstructing the return leg's target and hold or re-decide for it per the documented policy.
 ---
 
 Parent [[TAS-092-passing-and-lane-transition-behavior]].
@@ -39,12 +39,40 @@ define event payloads, close-pass aggregation, or acceptance scenarios.
 
 # Result
 
-Partial: both facility handoffs, the forbidden-boundary fact, and the focused
-suite landed; the change of lane's full hazard matrix, its return leg, and the
-return-obstruction policy do not fit this session, so TAS-095 stays `active` with
-the `next` above.
+Partial: both facility handoffs, the forbidden-boundary fact, the compiled
+shared-boundary crossing, and the cross-facility committed hazard matrix have
+landed with a focused suite; the return leg, its obstruction policy, and the
+current+destination leader/follower constraints do not fit this session, so
+TAS-095 stays `active` with the `next` above.
 
-## Landed
+## This session (TAS-112 unblocked the outbound hazard matrix)
+
+Files: `crates/tangle-sim/src/sim.rs`, `prediction.rs`, `agent.rs`, `lib.rs`;
+`crates/tangle-sim/tests/lane_transitions.rs` (7 -> 11 tests). No event or
+trajectory version changed, and no golden, baseline, or schema was regenerated.
+
+- **Compiled crossing** (`Simulation::facility_adjacency`,
+  `Simulation::crossing_lateral`): reads
+  `CompiledFacilityAdjacency::shared_boundary_offset` (TAS-112) for both bands so
+  the destination band's constant-width band lands in the source band's travel
+  frame. `CrossingLateral::boundary_offset_m` is the contract's lateral handoff
+  point, and `band_bounds_m` is the two bands' combined edges with the shared
+  boundary left open between them.
+- **Committed hazard matrix** (`Simulation::predict_outbound` with
+  `prediction::predict_crossing_corridor`): the outbound leg of a change of lane
+  is predicted through the compiled crossing, so `committed_plan` brakes and
+  aborts it on a predicted front, rear, or swept hazard and on a destination
+  band-edge closure. The runtime `source.width_m() * 0.5` crossing bound is
+  replaced by the compiled boundary in `attempt_facility_transition`,
+  `committed_lateral_target`, and `steering_envelope`.
+- **Adversarial mix**: `a_lateral_incapable_mode_on_a_shared_facility_never_maneuvers`
+  runs a lateral-capable and a lateral-incapable mode on one shared facility
+  (the `resolve_maneuvers` panic FBK-031 Finding 7 names).
+- **Focused suite additions**: `the_handoff_fires_at_the_compiled_shared_boundary`,
+  `a_closed_destination_band_edge_aborts_the_outbound_leg`,
+  `a_destination_band_body_aborts_the_outbound_leg`.
+
+## Previously landed (prior session)
 
 Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
 `crates/tangle-sim/tests/lane_transitions.rs` (new, 7 tests);
@@ -60,14 +88,11 @@ Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
   `permitted` is the destination traversal policy's verdict, so a destination the
   mode may not traverse is the forbidden-boundary fact with `permitted: false`.
 - **Lateral handoff** (`Simulation::handoff_lateral`): a committed cross-facility
-  change of lane (`LateralManeuverRequest::target_facility`) crosses the shared
-  boundary between two side-by-side bands. It fires when the body centre reaches
-  the source band's half-width on the crossing side, moves ownership to the
+  change of lane (`LateralManeuverRequest::target_facility`) crosses the compiled
+  shared boundary between two side-by-side bands, moves ownership to the
   adjacency's destination traversal, and preserves the pose and the projected
-  progress. The outbound crossing is bounded by a runtime-derived crossing bound
-  because `CompiledFacilityAdjacency` carries no band separation or offset (the
-  TAS-090 gap); the entry transient uses the same runtime bound until the body
-  centre is inside the destination's usable interval.
+  progress. The entry transient is bounded by the destination corridor widened to
+  where the body centre is until it is inside the destination's usable interval.
 - **Boundary prevention** (`Simulation::attempt_facility_transition`): a
   destination traversal the applicable rule does not permit makes the claim
   infeasible with `ManeuverReason::BoundaryForbidden`, so the crossing is
@@ -82,7 +107,7 @@ Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
 - Geometric handoff, stable progress, no despawn/re-spawn/snap: met for both
   kinds (`lane_transitions.rs`
   `a_connector_hands_a_rider_off_at_its_coincidence`,
-  `an_adjacent_lane_change_hands_the_rider_off_at_the_shared_boundary`).
+  `the_handoff_fires_at_the_compiled_shared_boundary`).
 - Constraints and the ordinary spatial index see every pose: the handoff never
   moves the world pose, the per-tick spatial rebuild and leader selection are
   unchanged, and the tests bound every step to the mode's speed.
@@ -92,21 +117,18 @@ Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
   hazards (`a_committed_maneuver_brakes_within_the_comfort_bound_and_holds`,
   `a_committed_maneuver_aborts_below_the_policy_minimum`), and target
   disappearance (`a_disappearing_target_aborts_the_maneuver`). Boundary closure
-  appears as the infeasible destination in
-  `a_destination_band_too_narrow_closes_the_crossing`.
+  now aborts the outbound leg
+  (`a_closed_destination_band_edge_aborts_the_outbound_leg`) and a destination
+  body aborts it (`a_destination_band_body_aborts_the_outbound_leg`).
 - Forbidden boundary:
   `a_forbidden_lane_change_is_prevented_with_the_boundary_reason`.
 - Focused suite: adjacent-lane change, connector handoff, forbidden crossing,
   complete-and-return (`an_eligible_maneuver_completes_and_returns_to_following`),
-  and no-change without authored connectivity or lateral capability.
+  no-change without authored connectivity or lateral capability, and the
+  mixed-capability adversarial input.
 
 ## Remaining scope (the `next`)
 
-- **Cross-facility committed hazard matrix**: the outbound leg of a change of
-  lane cannot read the within-facility predictor, because the destination band's
-  offset from the source is not compiled. Until a compiled separation or offset
-  exists, `committed_plan` cannot brake or abort an outbound leg on a predicted
-  front, rear, or swept hazard, and a band-edge closure cannot abort it.
 - **Return obstruction**: `returning` and `aborted` still steer only under the
   corridor bound; a body obstructing the return target is not detected, so the
   maneuver neither holds nor re-decides for it.
@@ -119,6 +141,8 @@ Files: `crates/tangle-sim/src/sim.rs`, `stage.rs`, `agent.rs`, `lib.rs`;
 
 ## Validation
 
-`cargo test -p tangle-sim` (187 lib + 7 `lane_transitions` + all suites),
-`cargo test --workspace`, `cargo clippy --workspace --all-targets --all-features
--- -D warnings`, and `scripts/check-dependency-direction.sh` all pass.
+`cargo test -p tangle-sim` (190 lib + 11 `lane_transitions` + all suites, 358
+total), `cargo test --workspace` (866 passed, 0 failed),
+`cargo clippy --workspace --all-targets --all-features -- -D warnings` (clean),
+`cargo fmt --all --check` (clean), and `scripts/check-dependency-direction.sh`
+(`dependency direction OK`) all pass.

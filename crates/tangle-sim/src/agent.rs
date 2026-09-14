@@ -144,15 +144,14 @@ pub(crate) struct RouteState {
     /// handoff and its body centre is still outside the destination band's
     /// compiled usable interval.
     ///
-    /// A lateral crossing puts the body centre on the shared boundary, which the
-    /// destination's own usable interval (measured at the destination reference,
-    /// whose offset from the source is not compiled — the gap TAS-090 recorded)
-    /// does not contain yet. While this is set the entry leg is bounded by the
-    /// compiled adjacency's runtime-derived crossing bound rather than by the
-    /// destination corridor, and the ordinary predictor's band-edge verdict is
-    /// not applied; it clears as soon as the body centre is inside the
-    /// destination's usable interval, where the ordinary corridor and predictor
-    /// decide again.
+    /// A lateral crossing puts the body centre on the compiled shared boundary,
+    /// which the destination's own usable interval (measured against the
+    /// destination reference one compiled band offset away) does not contain
+    /// yet. While this is set the entry leg is bounded by the destination's
+    /// corridor widened to where the body centre is, and the ordinary
+    /// predictor's verdict is not applied; it clears as soon as the body centre
+    /// is inside the destination's usable interval, where the ordinary corridor
+    /// and predictor decide again.
     pub(crate) entering_facility: bool,
     /// The most recent lateral maneuver eligibility outcome for this agent: the
     /// selection reason ([`ManeuverReason::SlowerLeader`]) when the tactic
