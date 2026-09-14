@@ -25,12 +25,13 @@ use sha2::{Digest, Sha256};
 use tangle_cli::{
     BATCH_MANIFEST_FILE, BatchManifest, BatchRun, BatchSpec, CONTINUOUS_CLASS,
     CONVERGENCE_COUNT_TOLERANCE, CONVERGENCE_FILE, CONVERGENCE_TOLERANCE, CONVERGENCE_VERSION,
-    COUNT_CLASS, COUNT_UNITS, ConvergenceError, ConvergenceReport, ConvergenceVerdict, EventCounts,
-    MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricSensitivity, MetricStatus,
-    MetricTolerance, MetricValue, MovementMinima, OperationalMetrics, OperationalValues, PRESETS,
-    Preset, RunMetricsArtifact, SLICE_FAMILIES, SLICE_KEY_RUN, SamplingPolicy, ScenarioProvenance,
-    SeedBank, SeedBankReference, SliceFamily, TOLERANCE_MEASURE, TOLERANCE_RULE,
-    VERDICT_REFINEMENT, converge_batches, fidelity_ticks, read_seed_bank,
+    COUNT_CLASS, COUNT_UNITS, ClosePassMetrics, ConvergenceError, ConvergenceReport,
+    ConvergenceVerdict, EventCounts, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE,
+    MetricSensitivity, MetricStatus, MetricTolerance, MetricValue, MovementMinima,
+    OperationalMetrics, OperationalValues, PRESETS, Preset, RunMetricsArtifact, SLICE_FAMILIES,
+    SLICE_KEY_RUN, SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, SliceFamily,
+    TOLERANCE_MEASURE, TOLERANCE_RULE, VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
+    read_seed_bank,
 };
 
 /// The binary under test, built by Cargo for this integration test.
@@ -383,6 +384,7 @@ fn write_side(
                         .collect(),
                     by_movement: values.movement_operational.clone(),
                 },
+                close_pass: ClosePassMetrics::not_observed(),
             },
         );
         runs.push(BatchRun {

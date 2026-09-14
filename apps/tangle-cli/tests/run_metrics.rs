@@ -26,7 +26,7 @@ use tangle_cli::{
     EVENT_STREAM_FILE, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
     MetricValue, OperationalValues, RunDirectoryRequest, RunMetrics, RunMetricsArtifact,
     RunMetricsRecorder, SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, canonical_run_captured,
-    load_scenario_provenance, write_run_directory,
+    load_scenario_provenance, replay_run_directory, write_run_directory,
 };
 use tangle_model::{CompiledScenario, TacticKind, parse_scenario_source_v2};
 use tangle_sim::{
@@ -1073,6 +1073,24 @@ fn passing_scenario(
     overtakes: bool,
     lateral_use: &str,
 ) -> CompiledScenario {
+    let source = parse_scenario_source_v2(&passing_scenario_source(
+        motor_speed_mps,
+        narrow_speed_mps,
+        overtakes,
+        lateral_use,
+    ))
+    .expect("the document is version 2");
+    CompiledScenario::compile_v2(source).expect("the scenario compiles")
+}
+
+/// The authored source of the close-pass fixture, so a test can write it to a
+/// file and have the run directory record a scenario `replay` can re-load.
+fn passing_scenario_source(
+    motor_speed_mps: f64,
+    narrow_speed_mps: f64,
+    overtakes: bool,
+    lateral_use: &str,
+) -> String {
     let tactics = match overtakes {
         true => "'follow', 'stop', 'yield', 'overtake'",
         false => "'follow', 'stop', 'yield'",
@@ -1098,7 +1116,7 @@ fn passing_scenario(
         }
         false => "",
     };
-    let source = parse_scenario_source_v2(&format!(
+    format!(
         r#"{{
   schema_version: 2,
   id: 'close_pass_metrics',
@@ -1198,9 +1216,7 @@ fn passing_scenario(
       }} }} }},
   ],
 }}"#
-    ))
-    .expect("the document is version 2");
-    CompiledScenario::compile_v2(source).expect("the scenario compiles")
+    )
 }
 
 /// The four overtaking family counts of one run, counted from the event stream
@@ -1532,4 +1548,103 @@ fn a_centered_facility_reports_no_clearance_value() {
             .status,
         MetricStatus::NotObserved
     );
+}
+
+/// The run-directory artifact serializes the close-pass families and their
+/// dimensions: `metrics.json` carries the block the recorder captured, it parses
+/// back to the same families, and the run it describes is the run the directory
+/// replays.
+#[test]
+fn the_run_artifact_serializes_and_round_trips_the_close_pass_families() {
+    let scratch = Scratch::new("close-pass-artifact");
+    let seed = 7;
+    // The fixture is written to a file so the manifest records a scenario source
+    // `replay` can re-load and hash, exactly as `run` records a real one.
+    let source_path = scratch.path("close_pass_metrics.json5");
+    std::fs::write(
+        &source_path,
+        passing_scenario_source(9.0, 4.0, true, "shared"),
+    )
+    .expect("the fixture source is written");
+    let (scenario, provenance) = load_scenario_provenance(&source_path).expect("the fixture loads");
+    let sampling = SamplingPolicy::default();
+    let (trace, summary, trajectories, metrics) = canonical_run_captured(
+        scenario,
+        RunConfig::new(seed),
+        CLOSE_PASS_TICKS,
+        &sampling.trajectories,
+    )
+    .expect("run completes");
+    assert_eq!(
+        metrics.close_pass.run.close_pass_minimum_clearance_m.status,
+        MetricStatus::Reported,
+        "the fixture must close a pass observation, or this proves nothing"
+    );
+
+    let run_dir = scratch.path("run");
+    write_run_directory(
+        &run_dir,
+        RunDirectoryRequest {
+            scenario: &provenance,
+            seed,
+            step_s: RunConfig::new(seed).step().as_secs(),
+            sampling,
+            trace: &trace,
+            trajectories: &trajectories,
+            summary: &summary,
+            metrics: &metrics,
+        },
+    )
+    .expect("run directory is written");
+
+    // The artifact carries the block, and the dimensions metric definition v3
+    // fixes are all serialized: every mode pair, the pairwise movement bucket,
+    // the shared facility the pass happened on, and one entry per declared band.
+    let json = std::fs::read_to_string(run_dir.join(METRICS_FILE)).expect("metrics is written");
+    assert!(json.contains("\"close_pass\""));
+    let artifact = read_artifact(&run_dir);
+    assert_eq!(
+        artifact.close_pass.by_mode_pair.keys().collect::<Vec<_>>(),
+        vec![
+            "pedestrian_pedestrian",
+            "vehicle_pedestrian",
+            "vehicle_vehicle"
+        ]
+    );
+    assert!(
+        artifact
+            .close_pass
+            .by_movement
+            .contains_key("movement:through|movement:through"),
+        "the pairwise movement bucket is serialized"
+    );
+    assert!(
+        artifact
+            .close_pass
+            .by_facility
+            .contains_key("facility:road"),
+        "the facility the pass happened on is serialized"
+    );
+    assert_eq!(
+        band_durations(&artifact.close_pass.run.clearance_band_durations_s)
+            .iter()
+            .map(|(band, _)| *band)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "the band series is serialized in declaration order"
+    );
+
+    // The block survives the artifact: it is the capture the recorder made, and
+    // writing the parsed artifact again reproduces the recorded bytes exactly.
+    assert_eq!(artifact.close_pass, metrics.close_pass);
+    let mut reserialized =
+        serde_json::to_string_pretty(&artifact).expect("the artifact serializes");
+    reserialized.push('\n');
+    assert_eq!(reserialized, json);
+
+    // The directory replays: the recorded scenario source and the recorded
+    // parameters reproduce the recorded event stream, so the artifact describes
+    // a run the directory holds the evidence for.
+    let replayed = replay_run_directory(&run_dir, true).expect("the recorded run reproduces");
+    assert_eq!(replayed.bytes(), trace.bytes());
 }

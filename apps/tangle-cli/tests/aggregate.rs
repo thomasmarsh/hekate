@@ -20,12 +20,12 @@ use std::process::{Command, Output};
 use sha2::{Digest, Sha256};
 use tangle_cli::{
     AGGREGATION_FILE, AGGREGATION_VERSION, AggregateError, Aggregation, BATCH_MANIFEST_FILE,
-    BatchManifest, BatchRequest, BatchRun, BatchSpec, CONFIDENCE_LEVEL, EVENT_FAMILY_LABELS,
-    EventCounts, LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MANIFEST_FILE,
-    METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus, MetricValue,
-    MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues, RunMetricsArtifact,
-    SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch, load_scenario_provenance,
-    run_batch,
+    BatchManifest, BatchRequest, BatchRun, BatchSpec, CONFIDENCE_LEVEL, ClosePassMetrics,
+    EVENT_FAMILY_LABELS, EventCounts, LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS,
+    MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus,
+    MetricValue, MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues,
+    RunMetricsArtifact, SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch,
+    load_scenario_provenance, run_batch,
 };
 use tangle_sim::RunConfig;
 
@@ -337,6 +337,7 @@ fn write_synthetic_batch(root: &Path, seeds: &[(u64, SyntheticSeed)]) {
                         .collect(),
                     by_movement: values.operational_by_movement.clone(),
                 },
+                close_pass: ClosePassMetrics::not_observed(),
             },
         );
         runs.push(BatchRun {

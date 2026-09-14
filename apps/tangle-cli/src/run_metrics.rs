@@ -519,6 +519,33 @@ pub struct ClosePassMetrics {
     pub by_facility: BTreeMap<String, ClosePassValues>,
 }
 
+impl ClosePassMetrics {
+    /// The families of a run that closed no observation: every countable family
+    /// is `0` — an absent count is an observed zero, as metric definition v3
+    /// fixes — and every value family carries the no-observation status.
+    ///
+    /// The run bucket and the three [`ModePair`] buckets a scenario always
+    /// declares are present; the movement and facility maps are empty, because
+    /// a bucket of either exists only once a run attributes a counted record to
+    /// it and a compiled scenario is what names it.
+    pub fn not_observed() -> Self {
+        let values = || ClosePassAccumulator::default().finish(true, &[]);
+        Self {
+            run: values(),
+            by_mode_pair: [
+                ModePair::VehicleVehicle,
+                ModePair::VehiclePedestrian,
+                ModePair::PedestrianPedestrian,
+            ]
+            .into_iter()
+            .map(|pair| (pair.label().to_owned(), values()))
+            .collect(),
+            by_movement: BTreeMap::new(),
+            by_facility: BTreeMap::new(),
+        }
+    }
+}
+
 /// The overtaking and close-pass families of one bucket of metric definition
 /// v3.
 ///
@@ -642,9 +669,9 @@ pub struct RunMetrics {
     /// The overtaking and close-pass families over the run, per mode pair,
     /// movement, and facility.
     ///
-    /// The run directory's artifact is written by
-    /// [[TAS-141-surface-close-pass-metric-families]], which serializes this
-    /// block beside the others.
+    /// [`RunMetricsArtifact`] serializes this block beside the others, so the
+    /// families survive the immutable run directory and a later aggregation or
+    /// comparison reads them from there.
     pub close_pass: ClosePassMetrics,
 }
 
@@ -672,6 +699,9 @@ pub struct RunMetricsArtifact {
     /// Throughput, delay, and queue values over the run, per mode, and per
     /// movement.
     pub operational: OperationalMetrics,
+    /// The overtaking and close-pass families over the run, per mode pair,
+    /// movement, and facility.
+    pub close_pass: ClosePassMetrics,
 }
 
 impl RunMetricsArtifact {
@@ -688,6 +718,7 @@ impl RunMetricsArtifact {
             movement_minima: metrics.movement_minima.clone(),
             event_counts: metrics.event_counts.clone(),
             operational: metrics.operational.clone(),
+            close_pass: metrics.close_pass.clone(),
         }
     }
 }
@@ -1734,6 +1765,7 @@ mod tests {
                     .collect(),
                 by_movement: BTreeMap::new(),
             },
+            close_pass: ClosePassMetrics::not_observed(),
         };
         let json = serde_json::to_string_pretty(&artifact).expect("artifact serializes");
         assert!(json.contains("\"status\": \"not_applicable\""));
