@@ -95,7 +95,8 @@ pub use snapshot::{
 };
 pub use stage::{
     FacilityTransitionRecord, LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge,
-    ManeuverReason, ManeuverState, ManeuverTransition, PassSide, SETTLE_TOLERANCE_M, TransitionKind,
+    ManeuverReason, ManeuverState, ManeuverTransition, PassSide, SETTLE_TOLERANCE_M,
+    TransitionKind,
 };
 pub use steering::{
     BoundedSteering, LATERAL_APPROACH_S, LateralCorridor, MIN_SPEED_FOR_LATERAL_BOUND_MPS,

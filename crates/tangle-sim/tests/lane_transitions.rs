@@ -366,10 +366,26 @@ fn an_eligible_maneuver_completes_and_returns_to_following() {
     assert_eq!(
         edges,
         [
-            (ManeuverState::Following, ManeuverState::Preparing, ManeuverEdge::Attempted),
-            (ManeuverState::Preparing, ManeuverState::Committed, ManeuverEdge::Committed),
-            (ManeuverState::Committed, ManeuverState::Returning, ManeuverEdge::Completed),
-            (ManeuverState::Returning, ManeuverState::Following, ManeuverEdge::Completed),
+            (
+                ManeuverState::Following,
+                ManeuverState::Preparing,
+                ManeuverEdge::Attempted
+            ),
+            (
+                ManeuverState::Preparing,
+                ManeuverState::Committed,
+                ManeuverEdge::Committed
+            ),
+            (
+                ManeuverState::Committed,
+                ManeuverState::Returning,
+                ManeuverEdge::Completed
+            ),
+            (
+                ManeuverState::Returning,
+                ManeuverState::Following,
+                ManeuverEdge::Completed
+            ),
         ],
         "the full following -> preparing -> committed -> returning -> following table"
     );

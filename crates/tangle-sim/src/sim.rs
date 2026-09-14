@@ -3171,8 +3171,10 @@ impl Simulation {
             let source = self.scenario.facility(state.facility)?;
             let clearance = state.target_clearance_m?;
             let transition = lateral_transition(
-                self.scenario
-                    .transitions(state.facility, movement_direction(self.agents.direction[index])),
+                self.scenario.transitions(
+                    state.facility,
+                    movement_direction(self.agents.direction[index]),
+                ),
                 target_facility,
             )?;
             let side = travel_pass_side(transition.side());
@@ -3193,13 +3195,16 @@ impl Simulation {
             && let Some(source) = self.scenario.facility(state.facility)
             && let Some(clearance) = state.target_clearance_m
             && let Some(transition) = lateral_transition(
-                self.scenario
-                    .transitions(state.facility, movement_direction(self.agents.direction[index])),
+                self.scenario.transitions(
+                    state.facility,
+                    movement_direction(self.agents.direction[index]),
+                ),
                 target_facility,
             )
         {
             let side = travel_pass_side(transition.side());
-            let bound = side.sign() * self.agents.direction[index] * (source.width_m() * 0.5 + clearance);
+            let bound =
+                side.sign() * self.agents.direction[index] * (source.width_m() * 0.5 + clearance);
             if bound > 0.0 {
                 steering.corridor.d_max = steering.corridor.d_max.max(bound);
             } else {
