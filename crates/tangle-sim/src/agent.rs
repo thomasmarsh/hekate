@@ -14,8 +14,9 @@ use crate::compliance::ComplianceDecision;
 use crate::narrow::NarrowProfile;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
-use crate::stage::ManeuverState;
+use crate::stage::{LateralManeuverRequest, ManeuverCorridor, ManeuverState};
 use crate::steering::BoundedSteering;
+use crate::time::SimTime;
 
 /// Which mode of agent a slot holds.
 ///
@@ -107,6 +108,33 @@ pub(crate) struct RouteState {
     /// free lateral motion, so no bounded steering request is produced and the
     /// longitudinal command path is unchanged.
     pub(crate) bounded_steering: Option<BoundedSteering>,
+    /// The lateral intent a tactical leaf recorded for this agent, consumed by
+    /// the kernel's attempt guard. `None` when no maneuver is requested.
+    pub(crate) intent: Option<LateralManeuverRequest>,
+    /// The candidate corridor the current maneuver claims, fixed when the
+    /// maneuver was attempted and never revised.
+    pub(crate) corridor: Option<ManeuverCorridor>,
+    /// The passed obstacle of the current maneuver, fixed at the attempt.
+    pub(crate) passed_body: Option<AgentId>,
+    /// The signed offset the agent held when the current maneuver was
+    /// attempted: the return target of `returning` and `aborted`, in the
+    /// agent's own travel frame.
+    pub(crate) pre_maneuver_offset_m: f64,
+    /// Simulation time the current maneuver state was entered, or `None` while
+    /// the agent is `following`. A claim is sought at the decision after the
+    /// attempt, and the preparing hold timeout runs from here.
+    pub(crate) state_since: Option<SimTime>,
+    /// Whether the agent's committed maneuver must brake for a predicted
+    /// clearance loss this step: decelerate within the profile's comfortable
+    /// braking and never accelerate.
+    pub(crate) braking: bool,
+    /// Simulation time the committed maneuver began holding at or below its
+    /// target clearance, or `None` while it is not holding.
+    pub(crate) hold_since: Option<SimTime>,
+    /// Simulation time a returning or aborted maneuver last sat within the
+    /// settle tolerance of its return target, or `None` while it is away from
+    /// it.
+    pub(crate) settled_since: Option<SimTime>,
 }
 
 impl RouteState {
@@ -127,10 +155,11 @@ impl RouteState {
         horizon_s: Option<f64>,
     ) -> Self {
         let coordinate = geometry.project(position);
+        let d_m = coordinate.d() * direction;
         Self {
             facility,
             s_m: coordinate.s(),
-            d_m: coordinate.d() * direction,
+            d_m,
             maneuver: ManeuverState::Following,
             target_offset_m: None,
             target_facility: None,
@@ -138,6 +167,14 @@ impl RouteState {
             target_clearance_m,
             horizon_s,
             bounded_steering: None,
+            intent: None,
+            corridor: None,
+            passed_body: None,
+            pre_maneuver_offset_m: d_m,
+            state_since: None,
+            braking: false,
+            hold_since: None,
+            settled_since: None,
         }
     }
 

@@ -1,9 +1,9 @@
 ---
 context_rev: 2
 priority: P1
-updated: 2026-09-14T01:34:04Z
+updated: 2026-09-14T03:32:36Z
 summary: Add continuous lateral motion, passing evidence, and contextual wrong-way travel.
-next: [[TAS-087-continuous-lateral-motion-and-gap-machinery]]
+next: [[TAS-092-passing-and-lane-transition-behavior]]
 ---
 
 # Outcome

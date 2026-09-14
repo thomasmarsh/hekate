@@ -93,7 +93,10 @@ pub use sim::{InitError, RunSummary, Simulation, StepOutput};
 pub use snapshot::{
     AgentSample, BodySegmentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail,
 };
-pub use stage::ManeuverState;
+pub use stage::{
+    LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge, ManeuverState, ManeuverTransition,
+    SETTLE_TOLERANCE_M,
+};
 pub use steering::{
     BoundedSteering, LATERAL_APPROACH_S, LateralCorridor, MIN_SPEED_FOR_LATERAL_BOUND_MPS,
     SteeringLimits, SteeringRequest, SteeringStep, bounded_steering_step,

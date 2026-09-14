@@ -37,9 +37,10 @@
 
 use glam::DVec2;
 use tangle_model::{
-    AgentFamily, CompiledMovement, CompiledPath, CompiledPedestrianRoute, CompiledReferencePath,
-    CompiledScenario, CrossingId, DemandId, ModeTemplateId, MovementId, PathEnd, PathId,
-    PedestrianDemandId, PedestrianRouteId, PortalId, RuleKind, SignalColor, SignalId,
+    AgentFamily, CommitPolicySource, CompiledMovement, CompiledPath, CompiledPedestrianRoute,
+    CompiledReferencePath, CompiledScenario, CrossingId, DemandId, ModeTemplateId, MovementId,
+    PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PortalId, RuleKind, SignalColor,
+    SignalId,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
@@ -54,9 +55,14 @@ use crate::metrics::InteractionMetrics;
 use crate::narrow::{self, NarrowProfile, sample_narrow_profile};
 use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
+use crate::prediction::{
+    DEFAULT_SUBDIVISIONS, ManeuverInputs, ManeuverPrediction, PredictedBody,
+    predict_maneuver_corridor,
+};
 use crate::profile::{
     PedestrianProfile, VehicleProfile, sample_pedestrian_profile, sample_profile,
 };
+use crate::query;
 use crate::rng::{
     STREAM_COMPLIANCE, STREAM_DEMAND, STREAM_PEDESTRIAN_DEMAND, STREAM_PROFILE, derive_stream,
     uniform01,
@@ -65,9 +71,10 @@ use crate::safety::SafetyMonitor;
 use crate::signal::{self, PedestrianSignalColor, SignalRuntime};
 use crate::snapshot::{AgentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail};
 use crate::stage::{
-    AbortCondition, ManeuverState, MotionCommand, MotionControl, Observation,
-    PedestrianObservation, PhysicalAdvance, RelevantWorldQuery, Tactic, TacticReason, TacticTarget,
-    TacticalChoice, VehicleObservation,
+    AbortCondition, CorridorClaim, LateralManeuverRequest, ManeuverAbortReason, ManeuverCorridor,
+    ManeuverEdge, ManeuverState, ManeuverTransition, MotionCommand, MotionControl, Observation,
+    PedestrianObservation, PhysicalAdvance, RelevantWorldQuery, SETTLE_TOLERANCE_M, Tactic,
+    TacticReason, TacticTarget, TacticalChoice, VehicleObservation, arbitrate_claims,
 };
 use crate::steering::{
     BoundedSteering, LateralCorridor, SteeringLimits, SteeringRequest, bounded_steering_step,
@@ -128,12 +135,13 @@ pub enum InitError {
 
 /// Typed events produced by a single step.
 ///
-/// The output borrows the kernel's reused event buffer, so consuming it costs
-/// no allocation and transfers no world state.
+/// The output borrows the kernel's reused event and transition buffers, so
+/// consuming it costs no allocation and transfers no world state.
 #[derive(Debug)]
 pub struct StepOutput<'a> {
     time: SimTime,
     events: &'a [Event],
+    transitions: &'a [ManeuverTransition],
 }
 
 impl StepOutput<'_> {
@@ -145,6 +153,16 @@ impl StepOutput<'_> {
     /// Events emitted by the step, in stable agent order.
     pub fn events(&self) -> &[Event] {
         self.events
+    }
+
+    /// The maneuver state transitions the step produced, in a deterministic
+    /// order: the attempts of every agent in ascending id order, then the
+    /// committed clauses and the settle edges, then the decided claim batch.
+    ///
+    /// One record is produced per state change, so a later increment can emit
+    /// one public event per transition; no event is emitted here.
+    pub fn transitions(&self) -> &[ManeuverTransition] {
+        self.transitions
     }
 
     /// Whether the step emitted no events.
@@ -248,6 +266,11 @@ pub struct Simulation {
     /// does not allocate inside the tick loop.
     candidates: Vec<AgentId>,
     events: Vec<Event>,
+    /// The maneuver state transitions this step produced, in a deterministic
+    /// order. Cleared at the start of every tick, like [`Self::events`], and
+    /// exposed on [`StepOutput`] for the later event surface to emit; no public
+    /// event is produced here.
+    transitions: Vec<ManeuverTransition>,
     population_announced: bool,
     spawned_total: u64,
     despawned_total: u64,
@@ -388,6 +411,7 @@ impl Simulation {
             metrics: InteractionMetrics::default(),
             candidates: Vec::new(),
             events: Vec::new(),
+            transitions: Vec::new(),
             population_announced: false,
             spawned_total,
             despawned_total: 0,
@@ -411,6 +435,7 @@ impl Simulation {
         StepOutput {
             time: self.time(),
             events: &self.events,
+            transitions: &self.transitions,
         }
     }
 
@@ -763,6 +788,13 @@ impl Simulation {
         self.safety.begin_tick(&self.agents);
         self.metrics.begin_tick(&self.agents);
 
+        // The maneuver pass runs before any agent command, so every claim this
+        // step is collected from one immutable observation of the tick-start
+        // state and arbitrated as a batch: no claim can depend on the order the
+        // agents are commanded in, or on a body a later step has already moved.
+        // It is inert unless a maneuver is in flight or an intent is recorded.
+        self.resolve_maneuvers(dt);
+
         for index in 0..self.agents.len() {
             if !self.agents.alive[index] {
                 continue;
@@ -806,6 +838,690 @@ impl Simulation {
         let tactic = self.choose_tactic(index, &observation);
         let command = self.command_motion(index, &observation, &tactic, dt);
         self.advance_physics(index, observation, &command, dt);
+    }
+
+    /// Record one agent's lateral intent for the following decisions.
+    ///
+    /// This is the seam the tactical leaves supply: a leaf that decides an agent
+    /// should displace laterally — a pass, a lane change, a positioning tactic —
+    /// records the target and the passed obstacle here, and the kernel's
+    /// maneuver pass performs the whole lifecycle from the guard checks on. The
+    /// kernel decides whether the attempt is admissible, so a requester supplies
+    /// only the target and the obstacle it displaces around.
+    ///
+    /// Returns `false`, and records nothing, when the agent can never perform a
+    /// lateral maneuver: it is not alive, the passed obstacle is not another
+    /// live body, it carries no route state or no bounded-steering envelope, its
+    /// mode declares no lateral policy, or the scenario authors no
+    /// `maneuver_policy.commit` to commit under.
+    pub fn request_lateral_maneuver(
+        &mut self,
+        agent: AgentId,
+        request: LateralManeuverRequest,
+    ) -> bool {
+        if self.scenario.commit_policy().is_none() {
+            return false;
+        }
+        let index = agent.index();
+        let passed = request.passed_body.index();
+        if index >= self.agents.len()
+            || !self.agents.alive[index]
+            || request.passed_body == agent
+            || passed >= self.agents.len()
+            || !self.agents.alive[passed]
+            || !request.target_offset_m.is_finite()
+        {
+            return false;
+        }
+        let Some(state) = self.agents.route_state[index] else {
+            return false;
+        };
+        if state.bounded_steering.is_none()
+            || state.target_clearance_m.is_none()
+            || state.horizon_s.is_none()
+        {
+            return false;
+        }
+        self.agents.route_state[index] = Some(RouteState {
+            intent: Some(request),
+            ..state
+        });
+        true
+    }
+
+    /// The agent's own maneuver lifecycle state, or [`ManeuverState::Following`]
+    /// for an agent that carries no route state.
+    fn agent_maneuver_state(&self, index: usize) -> ManeuverState {
+        self.agents
+            .route_state
+            .get(index)
+            .copied()
+            .flatten()
+            .map_or(ManeuverState::Following, |state| state.maneuver)
+    }
+
+    /// The kernel's maneuver lifecycle pass: fix targets, arbitrate this step's
+    /// corridor claims as a batch, and record every state transition.
+    ///
+    /// It runs once at the start of a tick, before any agent command is
+    /// produced. Every decision reads one immutable observation — a copy of each
+    /// agent's route state and the tick-start bodies — and the decided state is
+    /// written back only after the whole batch, so no decision reads a state
+    /// another decision wrote and no claim depends on agent iteration order.
+    ///
+    /// The pass is inert unless an agent holds a maneuver in flight or has
+    /// recorded an intent, and a scenario that authors no
+    /// `maneuver_policy.commit` has no maneuver machinery at all, so a run with
+    /// no Increment 2 maneuver behaves exactly as Increment 1.
+    ///
+    /// Transitions are recorded in phase order — the attempts of every agent in
+    /// ascending id order, then the committed and settle clauses, then the
+    /// decided claim batch — so the record order is a property of the decisions
+    /// and not of where they were produced.
+    fn resolve_maneuvers(&mut self, dt: f64) {
+        self.transitions.clear();
+        let Some(commit) = self.scenario.commit_policy() else {
+            return;
+        };
+        if !self.maneuver_in_flight() {
+            return;
+        }
+
+        let now = self.time();
+        let bodies = self.predicted_bodies();
+        let batch = ManeuverBatch {
+            bodies: &bodies,
+            commit: &commit,
+            now,
+            dt,
+        };
+        let mut plans: Vec<ManeuverPlan> = Vec::new();
+        let mut claims: Vec<CorridorClaim> = Vec::new();
+
+        // Phase 1, `following -> preparing`: an intent whose guards hold fixes
+        // the target and the candidate corridor. An admitted intent is consumed;
+        // a corridor that is merely not feasible yet keeps the intent, so the
+        // agent retries at the next decision; an intent whose passed obstacle
+        // has disappeared is discarded with no transition, because the agent
+        // never prepared anything.
+        for index in 0..self.agents.len() {
+            if !self.agents.alive[index] {
+                continue;
+            }
+            let Some(state) = self.agents.route_state[index] else {
+                continue;
+            };
+            if state.maneuver != ManeuverState::Following {
+                continue;
+            }
+            let Some(request) = state.intent else {
+                continue;
+            };
+            match self.attempt_maneuver(index, &state, &request, &batch) {
+                Attempt::Admissible {
+                    corridor,
+                    predicted_clearance_m,
+                } => plans.push(ManeuverPlan {
+                    index,
+                    state: RouteState {
+                        maneuver: ManeuverState::Preparing,
+                        target_offset_m: Some(request.target_offset_m),
+                        passed_body: Some(request.passed_body),
+                        corridor: Some(corridor),
+                        predicted_min_clearance_m: Some(predicted_clearance_m),
+                        pre_maneuver_offset_m: state.d_m,
+                        state_since: Some(now),
+                        intent: None,
+                        braking: false,
+                        hold_since: None,
+                        settled_since: None,
+                        ..state
+                    },
+                    transition: Some(ManeuverTransition {
+                        agent: AgentId::from_index(index),
+                        from: ManeuverState::Following,
+                        to: ManeuverState::Preparing,
+                        edge: ManeuverEdge::Attempted,
+                        reason: None,
+                        time: now,
+                    }),
+                }),
+                Attempt::TargetLost => plans.push(ManeuverPlan {
+                    index,
+                    state: RouteState {
+                        intent: None,
+                        ..state
+                    },
+                    transition: None,
+                }),
+                Attempt::Infeasible => {}
+            }
+        }
+
+        // Phase 2: `preparing` seeks its claim at the decision after the
+        // attempt and aborts on a lost target, a timeout, or an infeasible
+        // corridor; `committed` keeps its corridor as an unbeatable claim and
+        // applies the commitment-loss policy. Both read the tick-start state.
+        for index in 0..self.agents.len() {
+            if !self.agents.alive[index] {
+                continue;
+            }
+            let Some(state) = self.agents.route_state[index] else {
+                continue;
+            };
+            let agent = AgentId::from_index(index);
+            // Only the attempt puts an agent into a maneuver state, and it
+            // requires the mode's resolved target clearance, so a live maneuver
+            // always carries one.
+            let target_clearance_m = state
+                .target_clearance_m
+                .expect("a maneuver state carries its mode's target clearance");
+            match state.maneuver {
+                ManeuverState::Preparing => {
+                    // A maneuver prepares for one decision and claims at the next,
+                    // so a claim never depends on a sibling attempt made in the
+                    // same batch.
+                    let due = state
+                        .state_since
+                        .is_some_and(|since| since.tick() < now.tick());
+                    if !due {
+                        continue;
+                    }
+                    let Some(corridor) = state.corridor else {
+                        plans.push(self.abort_plan(
+                            index,
+                            state,
+                            ManeuverAbortReason::CorridorInfeasible,
+                            now,
+                        ));
+                        continue;
+                    };
+                    let Some(passed) = state.passed_body else {
+                        plans.push(self.abort_plan(
+                            index,
+                            state,
+                            ManeuverAbortReason::TargetLost,
+                            now,
+                        ));
+                        continue;
+                    };
+                    if !self.agents.alive[passed.index()] {
+                        plans.push(self.abort_plan(
+                            index,
+                            state,
+                            ManeuverAbortReason::TargetLost,
+                            now,
+                        ));
+                        continue;
+                    }
+                    if hold_elapsed(now, state.state_since, commit.hold_timeout_s, dt) {
+                        plans.push(self.abort_plan(
+                            index,
+                            state,
+                            ManeuverAbortReason::HoldTimeout,
+                            now,
+                        ));
+                        continue;
+                    }
+                    let Some(target_offset_m) = state.target_offset_m else {
+                        plans.push(self.abort_plan(
+                            index,
+                            state,
+                            ManeuverAbortReason::CorridorInfeasible,
+                            now,
+                        ));
+                        continue;
+                    };
+                    if !self
+                        .predict_maneuver(index, target_offset_m, &batch)
+                        .is_some_and(|prediction| prediction.is_feasible())
+                    {
+                        plans.push(self.abort_plan(
+                            index,
+                            state,
+                            ManeuverAbortReason::CorridorInfeasible,
+                            now,
+                        ));
+                        continue;
+                    }
+                    claims.push(CorridorClaim {
+                        agent,
+                        corridor,
+                        entry_distance_m: CorridorClaim::entry_distance_m(
+                            &corridor,
+                            state.s_m,
+                            self.agents.direction[index],
+                        ),
+                        committed: false,
+                        target_clearance_m,
+                    });
+                }
+                ManeuverState::Committed => {
+                    let Some(corridor) = state.corridor else {
+                        plans.push(self.abort_plan(
+                            index,
+                            state,
+                            ManeuverAbortReason::CorridorInfeasible,
+                            now,
+                        ));
+                        continue;
+                    };
+                    // A committed claimant stays in the batch whatever its own
+                    // decision, so a maneuver that loses clearance this step
+                    // never hands its corridor to another claimant mid-step:
+                    // that claim is re-arbitrated at the next decision. Its own
+                    // outcome never changes its state, because an existing
+                    // commitment is never revoked.
+                    claims.push(CorridorClaim {
+                        agent,
+                        corridor,
+                        entry_distance_m: CorridorClaim::entry_distance_m(
+                            &corridor,
+                            state.s_m,
+                            self.agents.direction[index],
+                        ),
+                        committed: true,
+                        target_clearance_m,
+                    });
+                    plans.push(self.committed_plan(index, state, target_clearance_m, &batch));
+                }
+                ManeuverState::Following | ManeuverState::Returning | ManeuverState::Aborted => {}
+            }
+        }
+
+        // Phase 3: the settle edges. `returning` and `aborted` steer back to the
+        // offset the agent held before the attempt — a returning target that is
+        // always inside the usable corridor, because the agent occupied it — and
+        // only return to `following` once that offset has held for a decision.
+        for index in 0..self.agents.len() {
+            if !self.agents.alive[index] {
+                continue;
+            }
+            let Some(state) = self.agents.route_state[index] else {
+                continue;
+            };
+            let edge = match state.maneuver {
+                ManeuverState::Returning => ManeuverEdge::Completed,
+                ManeuverState::Aborted => ManeuverEdge::Aborted,
+                ManeuverState::Following | ManeuverState::Preparing | ManeuverState::Committed => {
+                    continue;
+                }
+            };
+            let at_target = (state.d_m - state.pre_maneuver_offset_m).abs() <= SETTLE_TOLERANCE_M;
+            if !at_target {
+                plans.push(ManeuverPlan {
+                    index,
+                    state: RouteState {
+                        settled_since: None,
+                        ..state
+                    },
+                    transition: None,
+                });
+                continue;
+            }
+            let since = state.settled_since.unwrap_or(now);
+            if since.tick() >= now.tick() {
+                plans.push(ManeuverPlan {
+                    index,
+                    state: RouteState {
+                        settled_since: Some(since),
+                        ..state
+                    },
+                    transition: None,
+                });
+                continue;
+            }
+            plans.push(ManeuverPlan {
+                index,
+                state: RouteState {
+                    maneuver: ManeuverState::Following,
+                    target_offset_m: None,
+                    target_facility: None,
+                    predicted_min_clearance_m: None,
+                    corridor: None,
+                    passed_body: None,
+                    state_since: None,
+                    braking: false,
+                    hold_since: None,
+                    settled_since: None,
+                    ..state
+                },
+                transition: Some(ManeuverTransition {
+                    agent: AgentId::from_index(index),
+                    from: state.maneuver,
+                    to: ManeuverState::Following,
+                    edge,
+                    reason: None,
+                    time: now,
+                }),
+            });
+        }
+
+        // Phase 4: the batch. Claims are arbitrated once, and only the decided
+        // outcomes move a `preparing` maneuver; a claim that loses aborts with
+        // the documented reason.
+        for outcome in arbitrate_claims(&claims) {
+            let index = outcome.agent.index();
+            let Some(state) = self.agents.route_state[index] else {
+                continue;
+            };
+            if state.maneuver != ManeuverState::Preparing {
+                continue;
+            }
+            if outcome.granted {
+                plans.push(ManeuverPlan {
+                    index,
+                    state: RouteState {
+                        maneuver: ManeuverState::Committed,
+                        state_since: Some(now),
+                        braking: false,
+                        hold_since: None,
+                        ..state
+                    },
+                    transition: Some(ManeuverTransition {
+                        agent: outcome.agent,
+                        from: ManeuverState::Preparing,
+                        to: ManeuverState::Committed,
+                        edge: ManeuverEdge::Committed,
+                        reason: None,
+                        time: now,
+                    }),
+                });
+            } else {
+                plans.push(self.abort_plan(index, state, ManeuverAbortReason::ClaimRejected, now));
+            }
+        }
+
+        // Apply the batch. Nothing above read a state another decision wrote, so
+        // the result is a pure function of the tick-start observation and the
+        // batch, and every decided transition is recorded exactly once.
+        for plan in plans {
+            self.agents.route_state[plan.index] = Some(plan.state);
+            if let Some(transition) = plan.transition {
+                self.transitions.push(transition);
+            }
+        }
+    }
+
+    /// Whether any live agent holds a maneuver or a recorded intent, so the
+    /// maneuver pass has a decision to make.
+    fn maneuver_in_flight(&self) -> bool {
+        (0..self.agents.len()).any(|index| {
+            self.agents.alive[index]
+                && self.agents.route_state[index].is_some_and(|state| {
+                    state.maneuver != ManeuverState::Following || state.intent.is_some()
+                })
+        })
+    }
+
+    /// The tick-start bodies every prediction of this step reads, in ascending
+    /// [`AgentId`] order.
+    ///
+    /// A wheeled body faces its reference tangent, so its travel sign turns that
+    /// facing into the direction of travel; a walking body's heading is already
+    /// its travel heading. Each velocity is held constant over the horizon, as
+    /// [`PredictedBody`] documents.
+    fn predicted_bodies(&self) -> Vec<PredictedBody> {
+        (0..self.agents.len())
+            .filter(|&index| self.agents.alive[index])
+            .map(|index| {
+                let travel_sign = match self.agents.mode[index] {
+                    AgentMode::Vehicle => self.agents.direction[index],
+                    AgentMode::Pedestrian => 1.0,
+                };
+                PredictedBody {
+                    id: AgentId::from_index(index),
+                    shape: query::agent_body(&self.agents, index),
+                    velocity_mps: DVec2::from_angle(self.agents.heading_rad[index])
+                        * (self.agents.speed_mps[index] * travel_sign),
+                }
+            })
+            .collect()
+    }
+
+    /// Predict one agent's candidate maneuver corridor and clearances from the
+    /// tick-start state, or `None` when the agent carries no bounded-steering
+    /// envelope or no compiled facility reference.
+    fn predict_maneuver(
+        &self,
+        index: usize,
+        target_offset_m: f64,
+        batch: &ManeuverBatch<'_>,
+    ) -> Option<ManeuverPrediction> {
+        let state = self.agents.route_state[index]?;
+        let steering = state.bounded_steering?;
+        let geometry = self.route_geometry(index)?;
+        let facility = self.scenario.facility(state.facility)?;
+        // The predicted bodies are the *other* bodies: the agent's own envelope
+        // is the candidate motion's start, never one of its obstacles.
+        let agent = AgentId::from_index(index);
+        let others: Vec<PredictedBody> = batch
+            .bodies
+            .iter()
+            .copied()
+            .filter(|body| body.id != agent)
+            .collect();
+        Some(predict_maneuver_corridor(
+            ManeuverInputs {
+                geometry,
+                facility_width_m: facility.width_m(),
+                direction: self.agents.direction[index],
+                body: query::agent_body(&self.agents, index),
+                speed_mps: self.agents.speed_mps[index],
+                target_offset_m,
+                steering,
+                target_clearance_m: state.target_clearance_m?,
+                horizon_s: state.horizon_s?,
+                // This leaf's decision cadence is the fixed step: the prediction
+                // subdivides one decision of motion. The manifest's own
+                // lateral-decision cadence arrives with the fidelity settings.
+                cadence_s: batch.dt,
+                subdivisions: DEFAULT_SUBDIVISIONS,
+            },
+            &others,
+        ))
+    }
+
+    /// Fix one agent's lateral target and candidate corridor, or report why the
+    /// attempt is not admissible this step.
+    fn attempt_maneuver(
+        &self,
+        index: usize,
+        state: &RouteState,
+        request: &LateralManeuverRequest,
+        batch: &ManeuverBatch<'_>,
+    ) -> Attempt {
+        let passed = request.passed_body.index();
+        if passed >= self.agents.len() || !self.agents.alive[passed] {
+            return Attempt::TargetLost;
+        }
+        let Some(prediction) = self.predict_maneuver(index, request.target_offset_m, batch) else {
+            return Attempt::Infeasible;
+        };
+        // The candidate corridor exists only when the predicted motion is
+        // feasible: the target is inside the usable corridor and the bounded
+        // motion never leaves it, which is the prediction's own verdict.
+        if !prediction.is_feasible() {
+            return Attempt::Infeasible;
+        }
+        let Some(geometry) = self.route_geometry(index) else {
+            return Attempt::Infeasible;
+        };
+        let direction = self.agents.direction[index];
+        // `predict_maneuver` above already resolved the mode's policy, so both
+        // values exist here.
+        let Some(target_clearance_m) = state.target_clearance_m else {
+            return Attempt::Infeasible;
+        };
+        // The claimed corridor is the space the maneuver needs: the passed
+        // obstacle's footprint plus both bodies' half lengths and the target
+        // clearance along the reference, and the predicted corridor's lateral
+        // band in the facility's own frame, widened by the same clearance.
+        let mirror = if direction < 0.0 { -1.0 } else { 1.0 };
+        let mut d_min_m = f64::INFINITY;
+        let mut d_max_m = f64::NEG_INFINITY;
+        for sample in &prediction.corridor {
+            let d_m = sample.d_m * mirror;
+            d_min_m = d_min_m.min(d_m);
+            d_max_m = d_max_m.max(d_m);
+        }
+        let passed_s_m = geometry.project(self.agents.position[passed]).s();
+        let half_self_m = self.agents.body_length_m[index] * 0.5;
+        let half_passed_m = self.agents.body_length_m[passed] * 0.5;
+        let corridor = ManeuverCorridor {
+            facility: state.facility,
+            s_min_m: passed_s_m - half_passed_m - half_self_m - target_clearance_m,
+            s_max_m: passed_s_m + half_passed_m + half_self_m + target_clearance_m,
+            d_min_m: d_min_m - target_clearance_m,
+            d_max_m: d_max_m + target_clearance_m,
+        };
+        Attempt::Admissible {
+            corridor,
+            predicted_clearance_m: prediction.clears.swept.clearance_m,
+        }
+    }
+
+    /// The planned update for one committed agent: the completion edge when the
+    /// passed obstacle is cleared, the documented brake/hold/abort response when
+    /// predicted clearance is lost, or no change at all.
+    fn committed_plan(
+        &self,
+        index: usize,
+        state: RouteState,
+        target_clearance_m: f64,
+        batch: &ManeuverBatch<'_>,
+    ) -> ManeuverPlan {
+        let Some(passed) = state.passed_body else {
+            return self.abort_plan(index, state, ManeuverAbortReason::TargetLost, batch.now);
+        };
+        if passed.index() >= self.agents.len() || !self.agents.alive[passed.index()] {
+            return self.abort_plan(index, state, ManeuverAbortReason::TargetLost, batch.now);
+        }
+        let Some(target_offset_m) = state.target_offset_m else {
+            return self.abort_plan(
+                index,
+                state,
+                ManeuverAbortReason::CorridorInfeasible,
+                batch.now,
+            );
+        };
+        let Some(prediction) = self.predict_maneuver(index, target_offset_m, batch) else {
+            return self.abort_plan(
+                index,
+                state,
+                ManeuverAbortReason::CorridorInfeasible,
+                batch.now,
+            );
+        };
+        let swept_m = prediction.clears.swept.clearance_m;
+
+        if self.passed_body_cleared(index, passed, target_clearance_m) {
+            return ManeuverPlan {
+                index,
+                state: RouteState {
+                    maneuver: ManeuverState::Returning,
+                    predicted_min_clearance_m: Some(swept_m),
+                    state_since: Some(batch.now),
+                    braking: false,
+                    hold_since: None,
+                    settled_since: None,
+                    ..state
+                },
+                transition: Some(ManeuverTransition {
+                    agent: AgentId::from_index(index),
+                    from: ManeuverState::Committed,
+                    to: ManeuverState::Returning,
+                    edge: ManeuverEdge::Completed,
+                    reason: None,
+                    time: batch.now,
+                }),
+            };
+        }
+
+        // The ordered unsafe-commit response: a corridor below the policy's
+        // minimum aborts; anything below the target clearance brakes within the
+        // comfortable braking and holds, at most for the hold timeout; anything
+        // at or above the target continues and clears the hold.
+        if swept_m < batch.commit.min_predicted_clearance_m {
+            return self.abort_plan(index, state, ManeuverAbortReason::ClearanceLost, batch.now);
+        }
+        if !prediction.is_feasible() || swept_m <= target_clearance_m {
+            let since = state.hold_since.unwrap_or(batch.now);
+            if hold_elapsed(
+                batch.now,
+                Some(since),
+                batch.commit.hold_timeout_s,
+                batch.dt,
+            ) {
+                return self.abort_plan(index, state, ManeuverAbortReason::HoldTimeout, batch.now);
+            }
+            return ManeuverPlan {
+                index,
+                state: RouteState {
+                    predicted_min_clearance_m: Some(swept_m),
+                    braking: true,
+                    hold_since: Some(since),
+                    ..state
+                },
+                transition: None,
+            };
+        }
+        ManeuverPlan {
+            index,
+            state: RouteState {
+                predicted_min_clearance_m: Some(swept_m),
+                braking: false,
+                hold_since: None,
+                ..state
+            },
+            transition: None,
+        }
+    }
+
+    /// Whether the agent's rear envelope point is at least `target_clearance_m`
+    /// ahead of the passed body's front envelope along its travel direction, so
+    /// the passed obstacle is cleared.
+    fn passed_body_cleared(&self, index: usize, passed: AgentId, target_clearance_m: f64) -> bool {
+        let Some(geometry) = self.route_geometry(index) else {
+            return false;
+        };
+        let direction = self.agents.direction[index];
+        let agent_s_m = geometry.project(self.agents.position[index]).s();
+        let passed_s_m = geometry.project(self.agents.position[passed.index()]).s();
+        let rear_m = agent_s_m - direction * self.agents.body_length_m[index] * 0.5;
+        let front_m = passed_s_m + direction * self.agents.body_length_m[passed.index()] * 0.5;
+        direction * (rear_m - front_m) >= target_clearance_m
+    }
+
+    /// The planned `-> aborted` edge for one agent: the maneuver ends without
+    /// reaching its target, and the agent steers back to the offset it held
+    /// before the attempt.
+    fn abort_plan(
+        &self,
+        index: usize,
+        state: RouteState,
+        reason: ManeuverAbortReason,
+        now: SimTime,
+    ) -> ManeuverPlan {
+        ManeuverPlan {
+            index,
+            state: RouteState {
+                maneuver: ManeuverState::Aborted,
+                state_since: Some(now),
+                braking: false,
+                hold_since: None,
+                settled_since: None,
+                ..state
+            },
+            transition: Some(ManeuverTransition {
+                agent: AgentId::from_index(index),
+                from: state.maneuver,
+                to: ManeuverState::Aborted,
+                edge: ManeuverEdge::Aborted,
+                reason: Some(reason),
+                time: now,
+            }),
+        }
     }
 
     /// Move a pedestrian's waypoint cursor past every waypoint it has reached.
@@ -1679,17 +2395,22 @@ impl Simulation {
             .map(|reference| reference.geometry())
     }
 
-    /// An agent's fixed lateral target offset, when a maneuver has requested one.
+    /// An agent's lateral steering target for this step, when its maneuver
+    /// displaces it.
     ///
     /// The target is the tactical stage's request; this leaf only integrates it
-    /// under the compiled limits and never selects it.
+    /// under the compiled limits and never selects it. A `committed` maneuver
+    /// steers toward its fixed target, a `returning` or `aborted` one steers back
+    /// to the offset the agent held before the attempt, and a `preparing` or
+    /// `following` agent displaces nothing at all: a preparing maneuver has fixed
+    /// a target but has not been granted a corridor for it.
     fn lateral_request(&self, index: usize) -> Option<f64> {
-        self.agents
-            .route_state
-            .get(index)
-            .copied()
-            .flatten()
-            .and_then(|state| state.target_offset_m)
+        let state = self.agents.route_state.get(index).copied().flatten()?;
+        match state.maneuver {
+            ManeuverState::Committed => state.target_offset_m,
+            ManeuverState::Returning | ManeuverState::Aborted => Some(state.pre_maneuver_offset_m),
+            ManeuverState::Following | ManeuverState::Preparing => None,
+        }
     }
 }
 
@@ -1711,6 +2432,52 @@ impl RelevantWorldQuery for Simulation {
             self.query_vehicle_world(index)
         }
     }
+}
+
+/// One planned maneuver state change, applied after the whole batch has been
+/// decided.
+///
+/// A plan is a pure function of the tick-start observation, so holding the
+/// updates until the batch ends is what keeps a decision from reading a state
+/// another decision wrote. `transition` is `None` for a state change that is not
+/// a lifecycle transition, such as dropping an intent whose target has gone.
+struct ManeuverPlan {
+    index: usize,
+    state: RouteState,
+    transition: Option<ManeuverTransition>,
+}
+
+/// Why a lateral attempt is or is not admissible this step.
+enum Attempt {
+    /// The target and the candidate corridor are fixed; the maneuver prepares.
+    Admissible {
+        /// The corridor the maneuver claims, fixed from here on.
+        corridor: ManeuverCorridor,
+        /// Predicted minimum swept clearance over the prediction horizon, in
+        /// metres.
+        predicted_clearance_m: f64,
+    },
+    /// The passed obstacle has disappeared, so there is nothing to attempt.
+    TargetLost,
+    /// The candidate corridor is not feasible right now. The intent is kept and
+    /// retried at the next decision, which is how a maneuver waits for a gap.
+    Infeasible,
+}
+
+/// The batch-wide inputs every maneuver decision of one step reads: the
+/// tick-start bodies, the scenario's commit policy, and the step's time and
+/// length.
+struct ManeuverBatch<'a> {
+    bodies: &'a [PredictedBody],
+    commit: &'a CommitPolicySource,
+    now: SimTime,
+    dt: f64,
+}
+
+/// Whether `timeout_s` has elapsed at `now` since `since`, measured in whole
+/// ticks of the fixed step so the comparison is exact and never wall-clock.
+fn hold_elapsed(now: SimTime, since: Option<SimTime>, timeout_s: f64, dt: f64) -> bool {
+    since.is_some_and(|since| now.tick().saturating_sub(since.tick()) as f64 * dt >= timeout_s)
 }
 
 impl Simulation {
@@ -1807,35 +2574,36 @@ impl Simulation {
 
 impl TacticalChoice for Simulation {
     /// Stage 2: record the one maneuver the agent executes this step.
-    fn choose_tactic(&self, _index: usize, observation: &Observation) -> Tactic {
-        let (reason, target, maneuver_state, abort) = match observation {
+    ///
+    /// The tactic's maneuver state is the agent's own lateral-maneuver state: a
+    /// longitudinal tactic never claims a lateral maneuver, so a free-flowing,
+    /// following, stopping, yielding, or waypoint-seeking agent is `following`
+    /// unless the kernel's maneuver pass holds it in another state.
+    fn choose_tactic(&self, index: usize, observation: &Observation) -> Tactic {
+        let (reason, target, abort) = match observation {
             Observation::Vehicle(vehicle) => {
                 if vehicle.stop_line.is_some() {
                     (
                         TacticReason::StopLine,
                         TacticTarget::StopLine,
-                        ManeuverState::Committed,
                         AbortCondition::ConstraintClears,
                     )
                 } else if let Some((crossing, _)) = vehicle.crossing_yield {
                     (
                         TacticReason::YieldCrossing,
                         TacticTarget::Crossing(crossing),
-                        ManeuverState::Committed,
                         AbortCondition::ConstraintClears,
                     )
                 } else if let Some((leader, _)) = vehicle.leader {
                     (
                         TacticReason::Follow,
                         TacticTarget::Leader(leader),
-                        ManeuverState::Preparing,
                         AbortCondition::ConstraintClears,
                     )
                 } else {
                     (
                         TacticReason::FreeFlow,
                         TacticTarget::Route,
-                        ManeuverState::Preparing,
                         AbortCondition::RouteComplete,
                     )
                 }
@@ -1851,21 +2619,18 @@ impl TacticalChoice for Simulation {
                     (
                         TacticReason::SignalWait,
                         target,
-                        ManeuverState::Committed,
                         AbortCondition::ConstraintClears,
                     )
                 } else if let Some(target) = pedestrian.target {
                     (
                         TacticReason::SeekWaypoint,
                         TacticTarget::Waypoint(target),
-                        ManeuverState::Preparing,
                         AbortCondition::WaypointReached,
                     )
                 } else {
                     (
                         TacticReason::SeekWaypoint,
                         TacticTarget::Route,
-                        ManeuverState::Preparing,
                         AbortCondition::RouteComplete,
                     )
                 }
@@ -1874,7 +2639,7 @@ impl TacticalChoice for Simulation {
         Tactic {
             reason,
             target,
-            maneuver_state,
+            maneuver_state: self.agent_maneuver_state(index),
             abort,
             started_at: self.time(),
         }
@@ -1965,6 +2730,18 @@ impl MotionControl for Simulation {
                 if new_speed < comfort_floor - 1e-9 {
                     self.emergency_cap_steps += 1;
                 }
+
+                // The unsafe-commit policy's brake response: a committed maneuver
+                // that lost predicted clearance decelerates within the profile's
+                // comfortable braking and never accelerates. The cap is exactly
+                // the comfort envelope, so it is not an emergency cap and no
+                // maneuver ever leans on the kernel's position caps.
+                let new_speed = if self.agents.route_state[index].is_some_and(|state| state.braking)
+                {
+                    new_speed.min(comfort_floor)
+                } else {
+                    new_speed
+                };
 
                 // A fixed lateral target turns this step into a bounded steering
                 // step. The longitudinal speed above has already applied the
@@ -2794,7 +3571,9 @@ mod tests {
     }
 
     /// Stage 1 and stage 2 on a vehicle: the query selects the leader, and the
-    /// tactic records a follow with its target and lifecycle fields.
+    /// tactic records a follow with its target and lifecycle fields. The
+    /// maneuver state is the agent's own, and a longitudinal tactic is not a
+    /// lateral maneuver, so it stays `following`.
     #[test]
     fn the_query_and_tactic_stages_select_the_vehicle_leader() {
         let mut sim = walking_sim(1);
@@ -2818,14 +3597,15 @@ mod tests {
         let tactic = sim.choose_tactic(0, &observation);
         assert_eq!(tactic.reason, TacticReason::Follow);
         assert_eq!(tactic.target, TacticTarget::Leader(AgentId::from_index(1)));
-        assert_eq!(tactic.maneuver_state, ManeuverState::Preparing);
+        assert_eq!(tactic.maneuver_state, ManeuverState::Following);
         assert_eq!(tactic.abort, AbortCondition::ConstraintClears);
         assert_eq!(tactic.started_at, sim.time());
     }
 
     /// Stage 2 and stage 3 on an observation that carries a required stop: the
-    /// tactic is the committed stop-line maneuver, and the motion stage bounds
-    /// the command to the stop-line cap the kernel selected.
+    /// tactic is the stop-line maneuver, and the motion stage bounds the command
+    /// to the stop-line cap the kernel selected. A stop is a longitudinal tactic
+    /// the agent holds, not a committed lateral maneuver.
     #[test]
     fn the_tactic_stage_commits_the_stop_line_maneuver() {
         let mut sim = walking_sim(1);
@@ -2850,7 +3630,7 @@ mod tests {
         let tactic = sim.choose_tactic(0, &observation);
         assert_eq!(tactic.reason, TacticReason::StopLine);
         assert_eq!(tactic.target, TacticTarget::StopLine);
-        assert_eq!(tactic.maneuver_state, ManeuverState::Committed);
+        assert_eq!(tactic.maneuver_state, ManeuverState::Following);
         assert_eq!(tactic.abort, AbortCondition::ConstraintClears);
         assert_eq!(tactic.started_at, sim.time());
 
@@ -2973,7 +3753,7 @@ mod tests {
         let tactic = sim.choose_tactic(index, &observation);
         assert_eq!(tactic.reason, TacticReason::SeekWaypoint);
         assert_eq!(tactic.target, TacticTarget::Waypoint(target));
-        assert_eq!(tactic.maneuver_state, ManeuverState::Preparing);
+        assert_eq!(tactic.maneuver_state, ManeuverState::Following);
         assert_eq!(tactic.abort, AbortCondition::WaypointReached);
 
         let command = sim.command_motion(index, &observation, &tactic, dt);
@@ -3305,6 +4085,10 @@ mod tests {
             state.bounded_steering.is_some(),
             "the rider carries a bounded-steering envelope"
         );
+        // A committed maneuver is the state that steers toward a fixed target;
+        // this stage-level test drives the steering step directly rather than
+        // through the claim batch.
+        state.maneuver = ManeuverState::Committed;
         state.target_offset_m = Some(0.6);
         sim.agents.route_state[index] = Some(state);
 
@@ -3346,6 +4130,722 @@ mod tests {
         assert!(
             previous_d > 0.3,
             "the bounded request made continuous progress, at {previous_d} m"
+        );
+    }
+
+    /// A version-2 bikeway with the given commit policy, no demand, and no
+    /// population, so a maneuver test places exactly the riders it needs and
+    /// nothing else moves.
+    ///
+    /// Its horizon is 2.0 s, so a rider's predicted corridor reaches 12 m ahead
+    /// at the mode's 6.0 m/s: a body beyond that is a candidate but never a
+    /// clearance fact at a corridor sample.
+    fn bikeway_v2(min_predicted_clearance_m: f64, hold_timeout_s: f64) -> String {
+        format!(
+            r#"
+    {{
+      schema_version: 2,
+      id: 'maneuver_v2',
+      coordinate_system: {{ x: 'east_m', y: 'north_m' }},
+      paths: [
+        {{ id: 'guide', points: [ {{ x: 0.0, y: 0.0 }}, {{ x: 200.0, y: 0.0 }} ] }},
+        {{ id: 'passed_lane', points: [ {{ x: 0.0, y: -2.4 }}, {{ x: 200.0, y: -2.4 }} ] }},
+        {{ id: 'hazard_lane', points: [ {{ x: 0.0, y: 1.6 }}, {{ x: 200.0, y: 1.6 }} ] }},
+      ],
+      portals: [
+        {{ id: 'entry', path: 'guide', end: 'start', width_m: 3.0 }},
+        {{ id: 'exit', path: 'guide', end: 'end', width_m: 3.0 }},
+      ],
+      boundaries: [
+        {{ id: 'world', points: [
+          {{ x: -10.0, y: -10.0 }}, {{ x: 210.0, y: -10.0 }},
+          {{ x: 210.0, y: 10.0 }}, {{ x: -10.0, y: 10.0 }},
+        ] }},
+      ],
+      regions: [
+        {{ id: 'band', points: [
+          {{ x: 0.0, y: -1.5 }}, {{ x: 200.0, y: -1.5 }},
+          {{ x: 200.0, y: 1.5 }}, {{ x: 0.0, y: 1.5 }},
+        ] }},
+      ],
+      facilities: [
+        {{ id: 'bikeway', region: 'band', reference_path: 'guide',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: {{ modes: [ 'rider' ] }}, lateral_use: 'shared',
+          lateral_policy: {{ passing_side: 'left' }},
+          speed_policy: {{ limit_mps: null }} }},
+      ],
+      movements: [
+        {{ id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+          direction: 'forward' }},
+      ],
+      mode_templates: [
+        {{
+          id: 'rider',
+          body: {{ kind: 'capsule', length_m: {{ min: 1.8, max: 1.8 }},
+            radius_m: {{ min: 0.35, max: 0.35 }} }},
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield', 'pass' ],
+          access: {{ facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: {{ limit_mps: null }} }},
+          occupancy: 'operator_only',
+          profiles: {{
+            speed_mps: {{ min: 6.0, max: 6.0 }},
+            max_accel_mps2: {{ min: 1.2, max: 1.2 }},
+            comfortable_brake_mps2: {{ min: 2.0, max: 2.0 }},
+            time_gap_s: {{ min: 1.0, max: 1.0 }},
+            steering_rate_max_rad_s: {{ min: 0.9, max: 0.9 }},
+            lateral_accel_max_mps2: {{ min: 2.0, max: 2.0 }},
+            lateral_clearance_m: {{ min: 0.3, max: 0.3 }},
+            compliance: {{ min: 1.0, max: 1.0 }},
+          }},
+          lateral: {{ target_clearance_m: 0.75, horizon_s: 2.0 }},
+        }},
+      ],
+      permissions: [],
+      maneuver_policy: {{
+        commit: {{
+          min_predicted_clearance_m: {min_predicted_clearance_m},
+          hold_timeout_s: {hold_timeout_s},
+        }},
+      }},
+      demand: [
+        {{ id: 'none', mode: 'rider',
+          spawn: {{ population: {{ path: 'guide', count: 0, speed_mps: 6.0, spacing_m: 20.0 }} }} }},
+      ],
+    }}
+    "#
+        )
+    }
+
+    /// Build the maneuver fixture at the given commit policy.
+    fn rider_sim(min_predicted_clearance_m: f64, hold_timeout_s: f64) -> Simulation {
+        let source =
+            parse_scenario_source_v2(&bikeway_v2(min_predicted_clearance_m, hold_timeout_s))
+                .expect("the document is version 2");
+        let scenario = CompiledScenario::compile_v2(source).expect("the scenario compiles");
+        Simulation::new(scenario, RunConfig::new(0)).expect("the simulation builds")
+    }
+
+    /// The fixture's rider mode template. The fixture authors exactly one, so
+    /// its dense identifier is the first index.
+    fn rider_mode(sim: &Simulation) -> ModeTemplateId {
+        let templates = sim.scenario().mode_templates();
+        assert_eq!(templates.len(), 1, "the fixture authors one mode");
+        assert_eq!(templates[0].family(), Some(AgentFamily::WheeledCapsule));
+        ModeTemplateId::from_index(0)
+    }
+
+    /// The narrow profile the fixture's template authors.
+    fn rider_narrow() -> NarrowProfile {
+        NarrowProfile {
+            desired_speed_mps: 6.0,
+            length_m: 1.8,
+            radius_m: 0.35,
+            time_gap_s: 1.0,
+            max_accel_mps2: 1.2,
+            comfortable_brake_mps2: 2.0,
+            steering_rate_max_rad_s: 0.9,
+            lateral_clearance_m: 0.3,
+            lateral_accel_max_mps2: Some(2.0),
+            compliance: 1.0,
+        }
+    }
+
+    /// The rider body at `distance_m` and offset `d_m` on the guide path.
+    fn rider_body(sim: &Simulation, distance_m: f64, d_m: f64) -> (DVec2, f64) {
+        let path = sim
+            .scenario
+            .path(PathId::from_index(0))
+            .expect("the guide path");
+        let heading_rad = path.heading_at(distance_m);
+        let normal = DVec2::from_angle(heading_rad + std::f64::consts::FRAC_PI_2);
+        (path.position_at(distance_m) + normal * d_m, heading_rad)
+    }
+
+    /// Place one rider at `distance_m` on the guide path, offset `d_m` to the
+    /// left, through the real spawn projection: its route state carries the
+    /// compiled facility's own corridor, target clearance, and horizon.
+    fn push_rider(sim: &mut Simulation, distance_m: f64, d_m: f64) -> AgentId {
+        let path_id = PathId::from_index(0);
+        let (position, heading_rad) = rider_body(sim, distance_m, d_m);
+        let narrow = rider_narrow();
+        let route_state = sim
+            .route_state_for(rider_mode(sim), path_id, position, 1.0, Some(narrow))
+            .expect("the rider mode steers on the compiled facility");
+        sim.agents.push(AgentInit {
+            mode: AgentMode::Vehicle,
+            path: path_id,
+            distance_m,
+            speed_mps: narrow.desired_speed_mps,
+            position,
+            heading_rad,
+            body_length_m: narrow.length_m,
+            body_width_m: narrow.body_width_m(),
+            direction: 1.0,
+            movement: Some(MovementId::from_index(0)),
+            profile: Some(narrow.vehicle_profile()),
+            narrow_profile: Some(narrow),
+            pedestrian_route: None,
+            pedestrian_profile: None,
+            route_state: Some(route_state),
+        })
+    }
+
+    /// Place a stationary circular body of radius `radius_m` at `distance_m` on
+    /// a parallel lane.
+    ///
+    /// A body on the guide path would be re-projected onto its reference by the
+    /// Increment 1 longitudinal advance and lose any lateral offset, so a
+    /// fixture body that has to keep a lane offset rides its own parallel lane.
+    /// The lane also keeps the body out of the rider's leader selection, so a
+    /// hazard test observes the maneuver's own response rather than a following
+    /// constraint.
+    fn push_obstacle(sim: &mut Simulation, lane: usize, distance_m: f64, radius_m: f64) -> AgentId {
+        let path_id = PathId::from_index(lane);
+        let path = sim.scenario.path(path_id).expect("the lane").clone();
+        sim.agents.push(AgentInit {
+            mode: AgentMode::Pedestrian,
+            path: path_id,
+            distance_m,
+            speed_mps: 0.0,
+            position: path.position_at(distance_m),
+            heading_rad: path.heading_at(distance_m),
+            body_length_m: radius_m * 2.0,
+            body_width_m: radius_m * 2.0,
+            direction: 1.0,
+            movement: None,
+            profile: None,
+            narrow_profile: None,
+            pedestrian_route: None,
+            pedestrian_profile: None,
+            route_state: None,
+        })
+    }
+
+    /// One rider's route state.
+    fn rider_state(sim: &Simulation, agent: AgentId) -> RouteState {
+        sim.agents.route_state[agent.index()].expect("the rider carries route state")
+    }
+
+    /// The edges of one step's recorded transitions, in order.
+    fn step_edges(transitions: &[ManeuverTransition]) -> Vec<ManeuverEdge> {
+        transitions
+            .iter()
+            .map(|transition| transition.edge)
+            .collect()
+    }
+
+    /// The edge an agent's transition took, or `None` when the step produced no
+    /// transition for it.
+    fn edge_for(transitions: &[ManeuverTransition], agent: AgentId) -> Option<ManeuverEdge> {
+        transitions
+            .iter()
+            .find(|transition| transition.agent == agent)
+            .map(|transition| transition.edge)
+    }
+
+    /// The abort reason recorded for an agent, when the step aborted it.
+    fn reason_for(
+        transitions: &[ManeuverTransition],
+        agent: AgentId,
+    ) -> Option<ManeuverAbortReason> {
+        transitions
+            .iter()
+            .find(|transition| transition.agent == agent)
+            .and_then(|transition| transition.reason)
+    }
+
+    /// The target offset every maneuver test steers toward: inside the usable
+    /// corridor of the fixture's 3.0 m band and above its band-edge clearance
+    /// for the 0.75 m target clearance.
+    const MANEUVER_TARGET_M: f64 = 0.3;
+
+    /// The fixture's parallel lane 2.4 m to the rider's right. A body there
+    /// clears a corridor reaching `MANEUVER_TARGET_M` at the 0.75 m target
+    /// clearance, so it can be the obstacle a maneuver passes.
+    const PASSED_LANE: usize = 1;
+
+    /// The fixture's parallel lane 1.6 m to the rider's left. A body there lies
+    /// in the lateral space the corridor needs, at a clearance set by its
+    /// radius.
+    const HAZARD_LANE: usize = 2;
+
+    /// A radius on `HAZARD_LANE` whose closest approach to the corridor leaves a
+    /// clearance below the 0.75 m target and above the 0.25 m policy minimum:
+    /// the brake-and-hold window.
+    const HOLD_OBSTACLE_RADIUS_M: f64 = 0.5;
+
+    /// A radius on `HAZARD_LANE` whose closest approach falls below the policy
+    /// minimum.
+    const LOST_OBSTACLE_RADIUS_M: f64 = 0.95;
+
+    /// A requested maneuver: the rider and the body it has already passed.
+    fn request_maneuver(sim: &mut Simulation, rider: AgentId, passed_body: AgentId) -> bool {
+        sim.request_lateral_maneuver(
+            rider,
+            LateralManeuverRequest {
+                target_offset_m: MANEUVER_TARGET_M,
+                passed_body,
+            },
+        )
+    }
+
+    /// The whole legal transition table, end to end: `following` enters
+    /// `preparing` only once a target and a candidate corridor are fixed,
+    /// `preparing` commits only after its claim is granted, the committed rider
+    /// returns once the passed obstacle is cleared, and `returning` reaches
+    /// `following` back at its own offset. Each edge is recorded once.
+    #[test]
+    fn a_maneuver_follows_the_legal_transition_table_to_following() {
+        let mut sim = rider_sim(0.25, 2.0);
+        // The passed obstacle is behind the rider, so the completion guard — the
+        // rider's rear envelope at least the target clearance ahead of the
+        // obstacle's front — already holds once the claim is granted.
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        let passed = push_rider(&mut sim, 50.0, 0.0);
+        assert!(request_maneuver(&mut sim, rider, passed));
+
+        // `following -> preparing` fixes the target and the corridor, and
+        // displaces nothing: a maneuver prepares before it is granted anything.
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Attempted]);
+        let state = rider_state(&sim, rider);
+        assert_eq!(state.maneuver, ManeuverState::Preparing);
+        assert_eq!(state.target_offset_m, Some(MANEUVER_TARGET_M));
+        assert_eq!(state.passed_body, Some(passed));
+        assert!(state.corridor.is_some());
+        assert!(state.predicted_min_clearance_m.expect("predicted") > 0.75);
+        let offset_m = state.d_m;
+        assert!(offset_m.abs() < 1e-9, "preparing displaces nothing");
+
+        // A claim is sought at the decision after the attempt, so the rider
+        // commits on the next step.
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Committed]);
+        assert_eq!(rider_state(&sim, rider).maneuver, ManeuverState::Committed);
+
+        // The target is fixed: the committed rider steers toward it and no
+        // command moves the stored target.
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Completed]);
+        assert_eq!(rider_state(&sim, rider).maneuver, ManeuverState::Returning);
+        assert!(
+            rider_state(&sim, rider).d_m > offset_m,
+            "the rider displaces"
+        );
+
+        // `returning -> following` only once the rider is back at the offset it
+        // held before the attempt.
+        let mut edges = Vec::new();
+        for _ in 0..600 {
+            let output = sim.step();
+            edges.extend(step_edges(output.transitions()));
+            if rider_state(&sim, rider).maneuver == ManeuverState::Following {
+                break;
+            }
+        }
+        assert_eq!(edges, [ManeuverEdge::Completed]);
+        let state = rider_state(&sim, rider);
+        assert_eq!(state.maneuver, ManeuverState::Following);
+        assert!(
+            (state.d_m - offset_m).abs() <= SETTLE_TOLERANCE_M,
+            "the rider returns to its own offset, at {}",
+            state.d_m
+        );
+        assert_eq!(state.target_offset_m, None);
+        assert_eq!(state.passed_body, None);
+        assert_eq!(state.corridor, None);
+        assert_eq!(state.predicted_min_clearance_m, None);
+        assert_eq!(sim.emergency_cap_steps(), 0);
+    }
+
+    /// Two riders claiming the same corridor are decided as a batch: the winner
+    /// commits and the loser aborts with the documented rejection reason,
+    /// without displacing at all.
+    #[test]
+    fn a_losing_claimant_aborts_with_the_rejected_reason() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let passed = push_rider(&mut sim, 80.0, 0.0);
+        let near = push_rider(&mut sim, 60.0, 0.0);
+        let far = push_rider(&mut sim, 54.0, 0.0);
+        assert!(request_maneuver(&mut sim, far, passed));
+        assert!(request_maneuver(&mut sim, near, passed));
+
+        let output = sim.step();
+        assert_eq!(
+            step_edges(output.transitions()),
+            [ManeuverEdge::Attempted, ManeuverEdge::Attempted]
+        );
+        let output = sim.step();
+        assert_eq!(
+            edge_for(output.transitions(), near),
+            Some(ManeuverEdge::Committed)
+        );
+        assert_eq!(
+            edge_for(output.transitions(), far),
+            Some(ManeuverEdge::Aborted)
+        );
+        assert_eq!(
+            reason_for(output.transitions(), far),
+            Some(ManeuverAbortReason::ClaimRejected)
+        );
+        assert_eq!(rider_state(&sim, near).maneuver, ManeuverState::Committed);
+        assert_eq!(rider_state(&sim, far).maneuver, ManeuverState::Aborted);
+        assert!(
+            rider_state(&sim, far).d_m.abs() < 1e-9,
+            "a rejected claimant never displaced"
+        );
+    }
+
+    /// The batch does not depend on the order the requests were recorded in:
+    /// the same claimant wins whichever order the intents arrive in.
+    #[test]
+    fn a_batch_is_decided_independently_of_request_order() {
+        let run = |reverse: bool| {
+            let mut sim = rider_sim(0.25, 2.0);
+            let passed = push_rider(&mut sim, 80.0, 0.0);
+            let near = push_rider(&mut sim, 60.0, 0.0);
+            let far = push_rider(&mut sim, 54.0, 0.0);
+            let requests = if reverse { [far, near] } else { [near, far] };
+            for rider in requests {
+                assert!(request_maneuver(&mut sim, rider, passed));
+            }
+            for _ in 0..2 {
+                sim.step();
+            }
+            (
+                rider_state(&sim, near).maneuver,
+                rider_state(&sim, far).maneuver,
+            )
+        };
+        assert_eq!(
+            run(false),
+            (ManeuverState::Committed, ManeuverState::Aborted)
+        );
+        assert_eq!(run(false), run(true));
+    }
+
+    /// A same-gap tie — two claims for the same corridor at the same remaining
+    /// distance — is decided by the stable agent id, the third clause of the
+    /// winner key, whichever way the claims are discovered.
+    #[test]
+    fn a_same_gap_tie_is_won_by_the_lower_agent_id() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let passed = push_rider(&mut sim, 80.0, 0.0);
+        let first = push_rider(&mut sim, 60.0, 0.0);
+        let second = push_rider(&mut sim, 54.0, 0.0);
+        // Construct the exact tie directly: the same corridor and the same
+        // remaining distance, in `preparing` and due at this decision.
+        let corridor = ManeuverCorridor {
+            facility: tangle_model::FacilityId::from_index(0),
+            s_min_m: 70.0,
+            s_max_m: 90.0,
+            d_min_m: -0.75,
+            d_max_m: 1.05,
+        };
+        for rider in [first, second] {
+            let mut state = rider_state(&sim, rider);
+            state.maneuver = ManeuverState::Preparing;
+            state.corridor = Some(corridor);
+            state.target_offset_m = Some(MANEUVER_TARGET_M);
+            state.passed_body = Some(passed);
+            state.state_since = Some(SimTime::from_tick(0, DEFAULT_STEP));
+            sim.agents.route_state[rider.index()] = Some(state);
+        }
+
+        let output = sim.step();
+        assert_eq!(
+            edge_for(output.transitions(), first),
+            Some(ManeuverEdge::Committed)
+        );
+        assert_eq!(
+            edge_for(output.transitions(), second),
+            Some(ManeuverEdge::Aborted)
+        );
+        assert_eq!(
+            reason_for(output.transitions(), second),
+            Some(ManeuverAbortReason::ClaimRejected)
+        );
+    }
+
+    /// A commit policy with no recorded intent and no maneuver in flight changes
+    /// nothing: every agent stays `following`, no target is fixed, and no
+    /// transition is recorded.
+    #[test]
+    fn a_maneuver_policy_with_no_intent_changes_nothing() {
+        let mut sim = rider_sim(0.25, 2.0);
+        push_rider(&mut sim, 60.0, 0.0);
+        push_rider(&mut sim, 80.0, 0.0);
+        for _ in 0..40 {
+            let output = sim.step();
+            assert!(
+                output.transitions().is_empty(),
+                "no maneuver was attempted, so no transition exists"
+            );
+        }
+        for index in 0..sim.agents.len() {
+            let state = sim.agents.route_state[index].expect("route state");
+            assert_eq!(state.maneuver, ManeuverState::Following);
+            assert_eq!(state.target_offset_m, None);
+            assert_eq!(state.predicted_min_clearance_m, None);
+        }
+    }
+
+    /// A target that disappears ends the maneuver deterministically with the
+    /// documented reason, and the rider returns to `following` at its own
+    /// offset.
+    #[test]
+    fn a_disappearing_target_aborts_the_maneuver() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        let passed = push_rider(&mut sim, 80.0, 0.0);
+        assert!(request_maneuver(&mut sim, rider, passed));
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Attempted]);
+
+        // The passed body leaves the world before the claim is decided.
+        sim.agents.alive[passed.index()] = false;
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Aborted]);
+        assert_eq!(
+            reason_for(output.transitions(), rider),
+            Some(ManeuverAbortReason::TargetLost)
+        );
+        assert_eq!(rider_state(&sim, rider).maneuver, ManeuverState::Aborted);
+
+        let mut back_to_following = false;
+        for _ in 0..40 {
+            sim.step();
+            if rider_state(&sim, rider).maneuver == ManeuverState::Following {
+                back_to_following = true;
+                break;
+            }
+        }
+        assert!(
+            back_to_following,
+            "an aborted maneuver returns to following"
+        );
+    }
+
+    /// A hold timeout shorter than one decision cadence aborts a preparing
+    /// maneuver at the next decision, before the claim can be sought: the
+    /// documented timeout transition, and never an implicit fallback.
+    #[test]
+    fn a_preparing_hold_timeout_aborts_the_maneuver() {
+        let mut sim = rider_sim(0.25, 0.01);
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        let passed = push_rider(&mut sim, 80.0, 0.0);
+        assert!(request_maneuver(&mut sim, rider, passed));
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Attempted]);
+
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Aborted]);
+        assert_eq!(
+            reason_for(output.transitions(), rider),
+            Some(ManeuverAbortReason::HoldTimeout)
+        );
+        let state = rider_state(&sim, rider);
+        assert_eq!(state.maneuver, ManeuverState::Aborted);
+        assert_eq!(state.target_offset_m, Some(MANEUVER_TARGET_M));
+    }
+
+    /// Commit a rider and keep it committed: the passed obstacle is a stationary
+    /// body 4 m ahead of it on the parallel lane to its right, so the completion
+    /// guard does not hold and the predicted corridor stays feasible.
+    /// Returns the rider and the obstacle it is passing.
+    fn committed_rider(sim: &mut Simulation) -> (AgentId, AgentId) {
+        let rider = push_rider(sim, 60.0, 0.0);
+        let passed = push_obstacle(sim, PASSED_LANE, 64.0, 0.5);
+        assert!(request_maneuver(sim, rider, passed));
+        sim.step();
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Committed]);
+        (rider, passed)
+    }
+
+    /// A committed maneuver whose predicted clearance drops to the target
+    /// clearance brakes within the profile's comfortable braking and holds: it
+    /// never accelerates, it aborts nothing, and the brake is not an emergency
+    /// cap.
+    #[test]
+    fn a_committed_maneuver_brakes_within_the_comfort_bound_and_holds() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let (rider, _passed) = committed_rider(&mut sim);
+        // A stationary obstacle in the lateral space the corridor needs, inside
+        // the prediction horizon: the closest approach leaves a clearance below
+        // the 0.75 m target and above the 0.25 m policy minimum.
+        let distance_m = sim.agents.distance_m[rider.index()] + 6.0;
+        push_obstacle(&mut sim, HAZARD_LANE, distance_m, HOLD_OBSTACLE_RADIUS_M);
+
+        let speed_before = sim.agents.speed_mps[rider.index()];
+        let output = sim.step();
+        assert!(
+            output.transitions().is_empty(),
+            "a brake holds the maneuver instead of ending it"
+        );
+        let state = rider_state(&sim, rider);
+        assert_eq!(state.maneuver, ManeuverState::Committed);
+        assert!(state.braking, "the committed maneuver brakes");
+        assert!(state.hold_since.is_some(), "and starts its hold");
+        let clearance_m = state
+            .predicted_min_clearance_m
+            .expect("predicted clearance");
+        assert!(
+            (0.25..0.75).contains(&clearance_m),
+            "the hold sits between the policy minimum and the target: {clearance_m}"
+        );
+
+        let profile = sim.agents.profile[rider.index()].expect("a rider profile");
+        let speed_after = sim.agents.speed_mps[rider.index()];
+        let dt = sim.config().step().as_secs();
+        let floor = speed_before - profile.comfortable_brake_mps2 * dt;
+        assert!(
+            speed_after <= speed_before + 1e-12,
+            "a braking maneuver never accelerates"
+        );
+        assert!(
+            speed_after >= floor - 1e-9,
+            "the brake stays within the comfortable braking: {speed_after} < {floor}"
+        );
+        assert_eq!(
+            sim.emergency_cap_steps(),
+            0,
+            "a maneuver brake is inside the comfort envelope, not an emergency cap"
+        );
+    }
+
+    /// A committed maneuver whose predicted clearance falls below the policy's
+    /// minimum aborts, without ever reaching the kernel's position caps.
+    #[test]
+    fn a_committed_maneuver_aborts_below_the_policy_minimum() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let (rider, _passed) = committed_rider(&mut sim);
+        let distance_m = sim.agents.distance_m[rider.index()] + 6.0;
+        push_obstacle(&mut sim, HAZARD_LANE, distance_m, LOST_OBSTACLE_RADIUS_M);
+
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Aborted]);
+        assert_eq!(
+            reason_for(output.transitions(), rider),
+            Some(ManeuverAbortReason::ClearanceLost)
+        );
+        assert_eq!(rider_state(&sim, rider).maneuver, ManeuverState::Aborted);
+        assert_eq!(sim.emergency_cap_steps(), 0);
+    }
+
+    /// A hold that stays at or below the target clearance for the whole timeout
+    /// aborts with the timeout reason.
+    #[test]
+    fn a_committed_hold_timeout_aborts_the_maneuver() {
+        let mut sim = rider_sim(0.25, 0.5);
+        let (rider, _passed) = committed_rider(&mut sim);
+        let distance_m = sim.agents.distance_m[rider.index()] + 6.0;
+        push_obstacle(&mut sim, HAZARD_LANE, distance_m, HOLD_OBSTACLE_RADIUS_M);
+
+        let mut aborted_at = None;
+        for step in 0..40 {
+            let output = sim.step();
+            if edge_for(output.transitions(), rider) == Some(ManeuverEdge::Aborted) {
+                assert_eq!(
+                    reason_for(output.transitions(), rider),
+                    Some(ManeuverAbortReason::HoldTimeout)
+                );
+                aborted_at = Some(step);
+                break;
+            }
+            assert!(
+                rider_state(&sim, rider).braking,
+                "the hold brakes every step"
+            );
+        }
+        assert!(
+            aborted_at.is_some_and(|step| step < 20),
+            "the hold times out within its window: {aborted_at:?}"
+        );
+    }
+
+    /// A winner that loses clearance never hands its corridor to another
+    /// claimant in the same step: the committed claimant stays in the batch
+    /// while it aborts, the contending claim is rejected, and the space is only
+    /// re-arbitrated once the winner has left its maneuver.
+    #[test]
+    fn losing_clearance_does_not_revoke_another_winner_mid_step() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let (winner, winner_passed) = committed_rider(&mut sim);
+
+        // A second claimant contests the same corridor: it passes the same body,
+        // so its claimed corridor is the same space.
+        let claimant = push_rider(&mut sim, 54.0, 0.0);
+        assert!(request_maneuver(&mut sim, claimant, winner_passed));
+        let output = sim.step();
+        assert_eq!(step_edges(output.transitions()), [ManeuverEdge::Attempted]);
+
+        // A hazard the winner alone can see — it lies beyond the claimant's own
+        // prediction horizon — removes the winner's clearance in the step the
+        // claimant's claim falls due.
+        let distance_m = sim.agents.distance_m[winner.index()] + 8.0;
+        push_obstacle(&mut sim, HAZARD_LANE, distance_m, LOST_OBSTACLE_RADIUS_M);
+        let output = sim.step();
+        assert_eq!(
+            reason_for(output.transitions(), winner),
+            Some(ManeuverAbortReason::ClearanceLost)
+        );
+        assert_eq!(
+            reason_for(output.transitions(), claimant),
+            Some(ManeuverAbortReason::ClaimRejected),
+            "the loser may not inherit the winner's corridor mid-step"
+        );
+        assert_eq!(rider_state(&sim, claimant).maneuver, ManeuverState::Aborted);
+
+        // Once the winner has left its maneuver, a fresh intent is granted at
+        // the next decision.
+        assert!(request_maneuver(&mut sim, claimant, winner_passed));
+        let mut committed = false;
+        for _ in 0..10 {
+            sim.step();
+            if rider_state(&sim, claimant).maneuver == ManeuverState::Committed {
+                committed = true;
+                break;
+            }
+        }
+        assert!(
+            committed,
+            "the corridor is re-arbitrated once the previous winner is gone"
+        );
+    }
+
+    /// The request seam refuses an agent that can never maneuver: an agent with
+    /// no route state, a bogus target body, and an agent with no compiled commit
+    /// policy.
+    #[test]
+    fn the_request_seam_refuses_an_agent_that_cannot_maneuver() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        let passed = push_rider(&mut sim, 80.0, 0.0);
+        assert!(request_maneuver(&mut sim, rider, passed));
+        assert!(
+            !request_maneuver(&mut sim, rider, rider),
+            "an agent cannot pass itself"
+        );
+        sim.agents.alive[passed.index()] = false;
+        assert!(
+            !request_maneuver(&mut sim, rider, passed),
+            "a despawned target is not a body to displace around"
+        );
+
+        // A legacy version-1 walking population carries no route state and no
+        // compiled facility, so it has no maneuver to request.
+        let mut walking = walking_sim(0);
+        assert!(!request_maneuver(
+            &mut walking,
+            AgentId::from_index(0),
+            AgentId::from_index(1)
+        ));
+        assert!(
+            walking.step().transitions().is_empty(),
+            "a version-1 run records no maneuver transition"
         );
     }
 }
