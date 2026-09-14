@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:12Z
+updated: 2026-09-14T18:09:04Z
 summary: Measure close passes with exact clearance, relative speed, duration, and rule evidence.
-next: [[TAS-121-detect-executed-overtakes-and-accumulate-clearan]]
+next: [[TAS-122-close-the-close-pass-observation-and-report-clea]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].

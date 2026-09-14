@@ -46,6 +46,7 @@ use tangle_model::{
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
+use crate::close_pass::ClosePassTracker;
 use crate::compliance::{self, ComplianceDecision, ComplianceReason, SignalAction};
 use crate::config::RunConfig;
 use crate::control::{Constraint, IDM_STANDSTILL_GAP_M};
@@ -293,6 +294,12 @@ pub struct Simulation {
     /// post-encroachment time. See [`crate::metrics`] for the definitions. The
     /// pass only borrows state, so it cannot change the simulated trajectory.
     metrics: InteractionMetrics,
+    /// Close-pass tracking over the same integrated tick: detected overtaking
+    /// intervals and the duration each configured clearance band accumulated
+    /// over them. See [`crate::close_pass`] for the definitions. Like the
+    /// metrics pass it only borrows state and emits nothing, so it cannot change
+    /// the simulated trajectory, an event stream, or a golden.
+    close_passes: ClosePassTracker,
     /// Reused candidate buffer for a crossing-occupancy query, so the query
     /// does not allocate inside the tick loop.
     candidates: Vec<AgentId>,
@@ -445,6 +452,7 @@ impl Simulation {
             spatial: SpatialIndex::default(),
             safety: SafetyMonitor::default(),
             metrics: InteractionMetrics::default(),
+            close_passes: ClosePassTracker::default(),
             candidates: Vec::new(),
             events: Vec::new(),
             transitions: Vec::new(),
@@ -797,6 +805,16 @@ impl Simulation {
         &self.metrics
     }
 
+    /// Close-pass tracking for the run so far.
+    ///
+    /// Every completed overtaking interval, with the duration each configured
+    /// clearance band accumulated over it. See [`crate::close_pass`] for the
+    /// detection definition, the band accumulation rule, and the determinism
+    /// argument.
+    pub fn close_pass_tracker(&self) -> &ClosePassTracker {
+        &self.close_passes
+    }
+
     /// Install replacement motion models.
     ///
     /// The kernel calls both modes through [`crate::controller::ControllerModels`],
@@ -846,6 +864,7 @@ impl Simulation {
         self.spatial.rebuild(&self.agents);
         self.safety.begin_tick(&self.agents);
         self.metrics.begin_tick(&self.agents);
+        self.close_passes.begin_tick(&self.agents);
 
         // The maneuver pass runs before any agent command, so every claim this
         // step is collected from one immutable observation of the tick-start
@@ -880,6 +899,12 @@ impl Simulation {
         // trajectory, a trace, or a golden.
         self.metrics
             .observe(&self.agents, self.tick, self.config, &self.events);
+
+        // Close-pass tracking reads the same integrated bodies and the same
+        // tick-start shapes, so a detected overtaking interval and its band
+        // durations describe exactly the state this tick produced.
+        self.close_passes
+            .observe(&self.agents, &self.scenario, self.tick, self.config.step());
 
         self.advance_demand(dt);
 
