@@ -39,9 +39,10 @@ use glam::DVec2;
 use tangle_model::{
     AdjacencySide, AgentFamily, CommitPolicySource, CompiledFacilityAdjacency, CompiledMovement,
     CompiledPath, CompiledPedestrianRoute, CompiledReferencePath, CompiledScenario, CrossingId,
-    DemandId, FacilityId, LateralTransition, ModeTemplateId, MovementDirection, MovementId,
-    PassingSide, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId, PermissionEffect,
-    PortalId, RuleKind, SignalColor, SignalId, TacticalCapability, TraversalTransitions,
+    DemandId, FacilityId, FacilityTraversal, LateralTransition, ModeTemplateId, MovementDirection,
+    MovementId, PassingSide, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId,
+    PermissionEffect, PortalId, RuleKind, SignalColor, SignalId, TacticalCapability,
+    TraversalTransitions,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
@@ -2516,14 +2517,27 @@ impl Simulation {
         false
     }
 
-    /// Nearest live leader ahead on the same path travelling the same way.
+    /// Nearest live leader ahead on the same path travelling the same way, and,
+    /// for an agent whose active maneuver crosses to another facility, the
+    /// nearest leader on the far side of that crossing too.
     ///
     /// The gap is bumper to bumper along the path. Iterating in ascending agent
     /// order means the lowest agent id wins a tie, which keeps tie-breaking
     /// stable across runs. Opposite-direction and crossing-path interaction is
     /// later work.
+    ///
+    /// A body on the far side of an active cross-facility maneuver is a leader
+    /// before the handoff moves ownership there, so both facilities' leader
+    /// constraints stay active through the handoff and no gap opens across the
+    /// ownership change: the destination band of a change of lane constrains the
+    /// approach, and the band a `returning` or `aborted` maneuver crosses back
+    /// to constrains the return. Its world pose is projected onto the facility
+    /// the agent rides, exactly as the crossing predictor projects every body it
+    /// reads, so both sides' gaps are measured in the one travel frame the
+    /// agent's own corridor lives in.
     fn nearest_leader(&self, index: usize) -> Option<(AgentId, Constraint)> {
         let direction = self.agents.direction[index];
+        let own_path = self.agents.path[index];
         let own_progress = direction * self.agents.distance_m[index];
         let own_front = own_progress + self.agents.body_length_m[index] * 0.5;
         // A body an active lateral maneuver is passing is not a longitudinal
@@ -2537,6 +2551,11 @@ impl Simulation {
             }
             ManeuverState::Following | ManeuverState::Preparing => None,
         });
+        // The traversal this agent's active maneuver crosses to, when it makes
+        // one, and the ridden facility's reference the far side's bodies are
+        // read through.
+        let far_side = self.crossing_far_traversal(index);
+        let ridden_geometry = far_side.and_then(|_| self.route_geometry(index));
         let mut best: Option<(usize, f64)> = None;
         for other in 0..self.agents.len() {
             if other == index || !self.agents.alive[other] {
@@ -2545,12 +2564,30 @@ impl Simulation {
             if passed_body == Some(AgentId::from_index(other)) {
                 continue;
             }
-            if self.agents.path[other] != self.agents.path[index]
-                || self.agents.direction[other] != direction
+            let other_progress = if self.agents.path[other] == own_path {
+                direction * self.agents.distance_m[other]
+            } else if let Some(far_side) = far_side
+                && self.agents.direction[other] == travel_sign(far_side.direction())
+                && self.agents.route_state[other]
+                    .is_some_and(|state| state.facility == far_side.facility())
+                && let Some(geometry) = ridden_geometry
             {
+                let progress = direction * geometry.project(self.agents.position[other]).s();
+                // A body on the far side is a *following* leader only once it is
+                // genuinely ahead: its rear envelope past this agent's front. A
+                // body alongside or overlapping the agent still lies in the lane
+                // the crossing would enter, but no longitudinal step can ever
+                // touch it while the agent rides its own band, so the anti-overlap
+                // cap must not freeze the agent for it: the crossing's own corridor
+                // clearance governs that body, and holds or aborts the maneuver
+                // instead.
+                if progress - self.agents.body_length_m[other] * 0.5 <= own_front {
+                    continue;
+                }
+                progress
+            } else {
                 continue;
-            }
-            let other_progress = direction * self.agents.distance_m[other];
+            };
             if other_progress <= own_progress {
                 continue;
             }
@@ -3170,6 +3207,34 @@ impl Simulation {
                 source_half_m.max(shift_m + destination_half_m),
             ],
         })
+    }
+
+    /// The traversal across the compiled shared boundary of an agent's active
+    /// cross-facility maneuver, or `None` when the agent makes no crossing.
+    ///
+    /// The target facility is fixed when the attempt fixes it, so a `preparing`
+    /// maneuver already knows the traversal its approach is closing on, a
+    /// `committed` one knows the traversal it crosses into, and a `returning` or
+    /// `aborted` one knows the band it crosses back to. Reading the far side
+    /// from the first of those states is what keeps the destination leader and
+    /// the body closing from behind active across the whole approach and through
+    /// the handoff, rather than only once ownership has already moved.
+    fn crossing_far_traversal(&self, index: usize) -> Option<FacilityTraversal> {
+        let state = self.agents.route_state[index]?;
+        let target_facility = match state.maneuver {
+            ManeuverState::Following => return None,
+            ManeuverState::Preparing | ManeuverState::Committed => state.target_facility,
+            ManeuverState::Returning | ManeuverState::Aborted => state.return_facility,
+        }?;
+        if target_facility == state.facility {
+            return None;
+        }
+        self.crossing_lateral(
+            state.facility,
+            self.agents.direction[index],
+            target_facility,
+        )
+        .map(|crossing| crossing.transition.target())
     }
 
     /// The contract's connector handoff, performed when the agent has reached

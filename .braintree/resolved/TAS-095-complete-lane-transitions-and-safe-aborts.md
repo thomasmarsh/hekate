@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T14:22:55Z
+updated: 2026-09-14T15:01:12Z
 summary: Complete configured lane or facility transitions with bounded abort, braking, and return.
-next: [[TAS-114-keep-destination-leader-follower-constraints-act]]
 ---
 
 Parent [[TAS-092-passing-and-lane-transition-behavior]].
@@ -38,14 +37,14 @@ Do not define event payloads, close-pass aggregation, or acceptance scenarios.
 
 # Result
 
-Partial: both facility handoffs, the forbidden-boundary fact, the compiled
+Complete. Both facility handoffs, the forbidden-boundary fact, the compiled
 shared-boundary crossing, the cross-facility committed hazard matrix, and the
-return-obstruction policy have landed with a focused suite; the cross-facility
+return-obstruction policy landed with a focused suite; the cross-facility
 return leg landed in
 [[TAS-113-return-a-cross-facility-change-of-lane-to-the-so]] (one crossing out
-and one back over the same compiled adjacency), so only the current+destination
-leader/follower constraints remain and TAS-095 stays `active` with the `next`
-above.
+and one back over the same compiled adjacency), and the current+destination
+leader/follower constraints landed in
+[[TAS-114-keep-destination-leader-follower-constraints-act]].
 
 ## This session (TAS-112 unblocked the outbound hazard matrix)
 
@@ -146,14 +145,22 @@ changed, and no golden, baseline, or schema was regenerated.
   no-change without authored connectivity or lateral capability, and the
   mixed-capability adversarial input.
 
-## Remaining scope (the `next`)
+## Final slices
 
 - **Cross-facility return leg**: landed by
   [[TAS-113-return-a-cross-facility-change-of-lane-to-the-so]].
-- **Current and destination constraints together**: leader/follower selection
-  reads the agent's current facility only; the destination's leaders and
-  followers are not considered before the handoff. Owned by
+- **Current and destination constraints together**: landed by
   [[TAS-114-keep-destination-leader-follower-constraints-act]].
+
+## Resolution
+
+TAS-113 (cross-facility return crossing) and TAS-114 (destination
+leader/follower constraints) complete the remaining scope. Final gate on the
+integrated tree: `cargo test -p tangle-sim --test lane_transitions` (18 passed),
+`cargo test --workspace` (875 passed, 0 failed), `cargo clippy --workspace
+--all-targets --all-features -- -D warnings` (clean), `cargo fmt --all --check`
+(clean), and `scripts/check-dependency-direction.sh` (`dependency direction OK`).
+All Done-when clauses are met and every child is resolved.
 
 ## Validation
 
