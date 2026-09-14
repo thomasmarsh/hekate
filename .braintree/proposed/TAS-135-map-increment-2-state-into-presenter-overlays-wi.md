@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Map Increment 2 state into presenter overlays with backend parity.
 next: Map the versioned snapshot and event state into backend-neutral overlays and expose all five overlays in both backends.
 ---
@@ -24,6 +24,11 @@ without simulation or scenario-specific branches.
 
 # Context
 
+Gated on [[TAS-100-version-the-maneuver-event-and-trace-surface]].
+Gated on [[TAS-101-measure-close-passes-with-exact-clearance-evidence]].
+Gated on [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]].
+Gated on [[TAS-106-check-in-increment-2-passing-fixtures]].
+Gated on [[TAS-107-check-in-contextual-wrong-way-fixtures]].
 Extends [[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]]; reads the
 presenter and gate seams in
 [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns the mapping and

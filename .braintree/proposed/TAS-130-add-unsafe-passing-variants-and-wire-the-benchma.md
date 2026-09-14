@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Add unsafe-passing variants and wire the benchmark matrix.
 next: Add the unsafe and prohibited passing variants and replace only the planned benchmark-matrix entries.
 ---
@@ -25,6 +25,8 @@ and wired to the benchmark matrix without widening any disposition or tolerance.
 
 # Context
 
+Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
+Gated on [[TAS-101-measure-close-passes-with-exact-clearance-evidence]].
 Extends [[TAS-106-check-in-increment-2-passing-fixtures]]; reads the fixture gates
 in [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns the unsafe
 variants and the matrix wiring; the core fixtures are the sibling slice.

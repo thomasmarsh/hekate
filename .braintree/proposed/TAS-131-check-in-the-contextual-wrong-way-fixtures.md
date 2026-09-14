@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Check in the contextual wrong-way fixtures.
 next: Add the permitted, prohibited-but-connected, disconnected, and occupied-corridor fixtures with their rule assertions.
 ---
@@ -25,6 +25,8 @@ head-on interaction, and explicit rule evidence.
 
 # Context
 
+Gated on [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]].
+Gated on [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]].
 Extends [[TAS-107-check-in-contextual-wrong-way-fixtures]]; reads the fixture
 gates in [[THO-016-increment-2-event-metric-trajectory-presenter-an]].
 `apps/tangle-cli/tests/migration_regression.rs` enumerates `scenarios/**/*.json5`.

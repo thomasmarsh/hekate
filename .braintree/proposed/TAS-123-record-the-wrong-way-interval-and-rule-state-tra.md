@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Record the wrong-way interval and rule-state trajectory.
 next: Open and close the wrong-way interval at the rule boundaries and expose rule state on sampled trajectories.
 ---
@@ -25,6 +25,8 @@ rule geometry and as optional rule state on sampled trajectories.
 
 # Context
 
+Gated on [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]].
+Gated on [[TAS-100-version-the-maneuver-event-and-trace-surface]].
 Extends [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]]; reads
 [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns the interval
 and trajectory rule state; do not add the aggregate metrics.

@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Add the maneuver event payloads and bump EVENT_VERSION once.
 next: Add the maneuver, transition, and violation event payloads and bump EVENT_VERSION exactly once.
 ---
@@ -26,6 +26,8 @@ and rule record under one documented version.
 
 # Context
 
+Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
+Gated on [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]].
 Extends [[TAS-100-version-the-maneuver-event-and-trace-surface]]; reads the seams
 and gates in [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns
 the payloads and the version bump; do not change emission timing.

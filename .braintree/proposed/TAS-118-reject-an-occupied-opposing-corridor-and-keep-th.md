@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Reject an occupied opposing corridor and keep the ordinary lifecycle.
 next: Reject an occupied opposing corridor through ordinary feasibility and keep the normal identity, events, and metrics.
 ---
@@ -26,6 +26,7 @@ lifecycle.
 
 # Context
 
+Gated on [[TAS-097-make-contextual-wrong-way-decisions-reproducible]].
 Extends [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]]; reads
 [[THO-015-increment-2-compiled-contract-and-model-seams-sc]]. Owns the occupancy
 rejection and the ordinary-path preservation.

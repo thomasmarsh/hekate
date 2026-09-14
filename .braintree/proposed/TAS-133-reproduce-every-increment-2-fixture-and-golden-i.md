@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Reproduce every Increment 2 fixture and golden its transitions.
 next: Reproduce each fixture at fixed seeds and presets and golden every maneuver transition and wrong-way interval lifecycle.
 ---
@@ -23,6 +23,8 @@ trace hash at fixed seeds and required presets.
 
 # Context
 
+Gated on [[TAS-106-check-in-increment-2-passing-fixtures]].
+Gated on [[TAS-107-check-in-contextual-wrong-way-fixtures]].
 Extends [[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]]; reads
 [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns the
 reproducibility and goldens; stream isolation is the sibling slice.

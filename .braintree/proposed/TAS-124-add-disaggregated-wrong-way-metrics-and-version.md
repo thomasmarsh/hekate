@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Add disaggregated wrong-way metrics and version bumps.
 next: Accumulate wrong-way distance, duration, exposure, encounters, and conflicts by dimension and bump the needed format versions.
 ---
@@ -25,6 +25,8 @@ conflicts.
 
 # Context
 
+Gated on [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]].
+Gated on [[TAS-100-version-the-maneuver-event-and-trace-surface]].
 Extends [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]]; reads
 [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns the aggregate
 metrics and version bumps; the interval is the sibling slice.

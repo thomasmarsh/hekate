@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Prove each unsafe-commit hazard response with a falsification probe.
 next: Prove each committed-hazard response and add a falsification probe for the tie-break key and a hazard response.
 ---
@@ -25,6 +25,8 @@ probe shows the suite fails when a response is removed.
 
 # Context
 
+Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
+Gated on [[TAS-100-version-the-maneuver-event-and-trace-surface]].
 Extends [[TAS-105-prove-deterministic-claims-and-unsafe-commit-policy]]; reads
 [[THO-014-increment-2-sim-lateral-maneuver-seams-frames-an]]. Owns the hazard
 responses and the falsification probe.

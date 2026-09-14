@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Detect executed overtakes and accumulate clearance-band durations.
 next: Detect an actual overtaking interval from exact world body queries and accumulate each configured clearance band.
 ---
@@ -24,6 +24,8 @@ configured clearance band accumulates its duration independently.
 
 # Context
 
+Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
+Gated on [[TAS-100-version-the-maneuver-event-and-trace-surface]].
 Extends [[TAS-101-measure-close-passes-with-exact-clearance-evidence]]; reads
 [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns detection and
 band accumulation; do not bump a metric version here.

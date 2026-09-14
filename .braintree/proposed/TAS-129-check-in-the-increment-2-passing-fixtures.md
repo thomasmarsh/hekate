@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Check in the Increment 2 passing fixtures.
 next: Add the minimal passing, motor-overtaking, and lane-change fixtures under scenarios/phase2/inc2 with their assertions.
 ---
@@ -26,6 +26,8 @@ CLI.
 
 # Context
 
+Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
+Gated on [[TAS-101-measure-close-passes-with-exact-clearance-evidence]].
 Extends [[TAS-106-check-in-increment-2-passing-fixtures]]; reads the fixture gates
 in [[THO-016-increment-2-event-metric-trajectory-presenter-an]].
 `apps/tangle-cli/tests/migration_regression.rs` enumerates `scenarios/**/*.json5`,

@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:43Z
+updated: 2026-09-14T13:33:34Z
 summary: Prove deterministic simultaneous-claim resolution.
 next: Prove two and three-agent claims select the same winner after reversing declaration, discovery, and insertion order.
 ---
@@ -22,6 +22,8 @@ stable key regardless of declaration, discovery, or insertion order.
 
 # Context
 
+Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
+Gated on [[TAS-100-version-the-maneuver-event-and-trace-surface]].
 Extends [[TAS-105-prove-deterministic-claims-and-unsafe-commit-policy]]; reads
 [[THO-014-increment-2-sim-lateral-maneuver-seams-frames-an]]. Owns the claim
 determinism proof; the hazard responses are the sibling slice.
