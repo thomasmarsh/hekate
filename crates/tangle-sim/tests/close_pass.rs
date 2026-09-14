@@ -11,7 +11,9 @@
 use std::collections::BTreeMap;
 
 use tangle_model::{BodyKind, ClearanceBandId, CompiledScenario, parse_scenario_source_v2};
-use tangle_sim::{AgentId, OvertakeObservation, RunConfig, Simulation, SnapshotDetail};
+use tangle_sim::{
+    AgentId, Event, EventKind, OvertakeObservation, RunConfig, Simulation, SnapshotDetail,
+};
 
 /// The default 0.05 s step, so one tick is a twentieth of a second.
 const DT: f64 = 0.05;
@@ -319,4 +321,112 @@ fn a_single_mode_run_records_nothing() {
         sim.step();
     }
     assert!(sim.close_pass_tracker().overtakes().is_empty());
+}
+
+/// Every `ClosePass` event a run emitted, with the tick that emitted it.
+fn close_pass_events(scenario: CompiledScenario, seed: u64) -> Vec<(u64, Event)> {
+    let mut sim = Simulation::new(scenario, RunConfig::new(seed)).expect("the simulation builds");
+    let mut events = Vec::new();
+    for _ in 0..TICKS {
+        let output = sim.step();
+        let tick = output.time().tick();
+        for event in output.events() {
+            if event.kind() == EventKind::ClosePass {
+                events.push((tick, event.clone()));
+            }
+        }
+    }
+    events
+}
+
+/// A completed overtake emits one `ClosePass` event carrying the passing agent,
+/// the passed body, the facility and side, the exact minimum with its time and
+/// relative speed, and the declaration-ordered bands — the contract's payload.
+#[test]
+fn a_completed_pass_emits_one_close_pass_event_with_its_evidence() {
+    let events = close_pass_events(passing_scenario(9.0, 4.0), 7);
+    assert!(
+        !events.is_empty(),
+        "the faster motor passing the slower user emits a ClosePass event"
+    );
+    for (tick, event) in &events {
+        assert_eq!(event.kind(), EventKind::ClosePass);
+        let Event::ClosePass {
+            agent,
+            partner,
+            facility,
+            side,
+            min_clearance_m,
+            min_clearance_time_s,
+            relative_speed_mps,
+            bands,
+            violating_bands,
+            ..
+        } = event
+        else {
+            unreachable!("the kind accessor agreed it is a close pass")
+        };
+        assert_ne!(
+            agent, partner,
+            "the actor and passed-user roles are distinct"
+        );
+        assert_eq!(
+            event.agent(),
+            *agent,
+            "the event attributes itself to the actor"
+        );
+        assert!(
+            min_clearance_m.is_finite(),
+            "the minimum is a real clearance"
+        );
+        assert!(
+            min_clearance_time_s.is_finite() && *min_clearance_time_s <= *tick as f64 * DT + 1e-9,
+            "the minimum's time lies at or before its emitting tick: {min_clearance_time_s}"
+        );
+        assert!(relative_speed_mps.is_finite());
+        assert!(
+            !bands.is_empty(),
+            "the every-pair band always applies to this pass"
+        );
+        let ids: Vec<u32> = bands.iter().map(|band| band.band.get()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(ids, sorted, "bands are reported in declaration order");
+        for band in bands {
+            assert!(band.duration_s >= 0.0);
+        }
+        for violating in violating_bands {
+            assert!(
+                ids.contains(&violating.get()),
+                "a violating band is one of the participating bands"
+            );
+        }
+        // The facility and side resolve, so the payload names where and which
+        // way the pass happened.
+        let _ = facility.get();
+        let _ = side.label();
+    }
+}
+
+/// Every closed observation becomes exactly one event: the kernel emits one
+/// `ClosePass` per observation it closes, so a pair is never counted twice and
+/// no completed pass is lost.
+#[test]
+fn every_closed_observation_emits_exactly_one_event() {
+    let mut sim = Simulation::new(passing_scenario(9.0, 4.0), RunConfig::new(7))
+        .expect("the simulation builds");
+    let mut emitted = 0usize;
+    for _ in 0..TICKS {
+        let output = sim.step();
+        emitted += output
+            .events()
+            .iter()
+            .filter(|event| event.kind() == EventKind::ClosePass)
+            .count();
+    }
+    assert_eq!(
+        emitted,
+        sim.close_pass_tracker().overtakes().len(),
+        "one event per closed observation"
+    );
 }

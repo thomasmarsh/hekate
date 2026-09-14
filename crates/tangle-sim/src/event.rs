@@ -17,8 +17,10 @@
 //! - maneuver and rule records of the state changes the maneuver and wrong-way
 //!   stages already own — [`Event::Maneuver`], [`Event::FacilityTransition`],
 //!   and [`Event::OpposingTraversal`], whose `reason` fields are the closed code
-//!   sets [`ManeuverReasonCode`] and [`crate::WrongWayReason`]. A run whose
-//!   scenario authors no lateral, transition, or opposing-traversal shape emits
+//!   sets [`ManeuverReasonCode`] and [`crate::WrongWayReason`] — and the close
+//!   pass a completed overtaking interval closes, [`Event::ClosePass`], whose
+//!   band payload is the closed set [`ClosePassBand`]. A run whose scenario
+//!   authors no lateral, transition, opposing-traversal, or pass shape emits
 //!   none of them, so a Phase 1 or Increment 1 stream is unchanged apart from the
 //!   recorded [`EVENT_VERSION`].
 //!
@@ -59,13 +61,17 @@
 //!   [`Event::OpposingTraversal`] once when an opposing-traversal interval opens
 //!   and once when it closes; each reads a state change the maneuver and
 //!   wrong-way stages already record, so a retry cannot duplicate one.
+//! - [`Event::ClosePass`] emits once per completed overtaking interval, at the
+//!   tick the observation closes on pass completion, an aborted pass, or a
+//!   participant's despawn.
 
 use tangle_model::{
-    ConflictRegionId, CrossingId, FacilityId, MovementDirection, MovementId, NominalDirection,
-    PathId, PermissionEffect, TacticKind,
+    ClearanceBandId, ConflictRegionId, CrossingId, FacilityId, MovementDirection, MovementId,
+    NominalDirection, PathId, PermissionEffect, TacticKind,
 };
 
 use crate::agent::{AgentId, AgentMode};
+use crate::close_pass::ClosePassBand;
 use crate::stage::{
     ManeuverAbortReason, ManeuverEdge, ManeuverReason, ManeuverState, PassSide, TransitionKind,
 };
@@ -87,11 +93,12 @@ use crate::wrong_way::WrongWayReason;
 ///
 /// Version 3 adds the maneuver and rule records [`Event::Maneuver`],
 /// [`Event::FacilityTransition`], and [`Event::OpposingTraversal`] with the
-/// closed reason set [`ManeuverReasonCode`]. No existing variant gains or loses
-/// a field, changes meaning, or changes its [`EventKind::order`] position, so a
-/// version-2 trace stays readable apart from the recorded version. This is the
-/// union's one bump: the increment's fourth record, a close-pass observation,
-/// lands under this same version rather than bumping again.
+/// closed reason set [`ManeuverReasonCode`], and the close-pass record
+/// [`Event::ClosePass`]. No existing variant gains or loses a field, changes
+/// meaning, or changes its [`EventKind::order`] position, so a version-2 trace
+/// stays readable apart from the recorded version. This is the union's one
+/// bump: the increment's fourth record, a close-pass observation, lands under
+/// this same version rather than bumping again.
 pub const EVENT_VERSION: u32 = 3;
 
 /// Why an agent left the simulation.
@@ -134,6 +141,8 @@ pub enum EventKind {
     FacilityTransition,
     /// An agent opened or closed an opposing traversal of a facility.
     OpposingTraversal,
+    /// A completed overtaking interval closed with its clearance evidence.
+    ClosePass,
 }
 
 impl EventKind {
@@ -337,7 +346,11 @@ impl From<ManeuverAbortReason> for ManeuverReasonCode {
 /// build traces without touching internal state. See [`EVENT_VERSION`] for the
 /// schema version recorded in run provenance, and [`Event::order_key`] for the
 /// documented within-tick order.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// A record is [`Clone`] but not `Copy`: [`Event::ClosePass`] carries the
+/// participating bands as a variable-length list, so a consumer that holds an
+/// event owns it and a consumer that borrows one clones it to take it by value.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// An agent entered the world at a path position.
     Spawned {
@@ -567,13 +580,52 @@ pub enum Event {
         /// `true` when the interval opened, `false` when it closed.
         entering: bool,
     },
+    /// A completed overtaking interval closed with its exact clearance evidence.
+    ///
+    /// Emitted once when the observation closes: the faster body's pass of a
+    /// slower one completed (the pair stopped being alongside), the pass was
+    /// aborted, or a participant despawned. `agent` is the passing body and
+    /// `partner` the passed body, so the pair keeps its actor and passed-user
+    /// roles and never collapses to a symmetric distance. `min_clearance_m` is
+    /// the least body-to-body swept clearance over the interval, the boundary
+    /// crossing excluded, and `bands` reports each participating clearance
+    /// band's accumulated duration in declaration order.
+    ClosePass {
+        /// The passing agent: the faster body of the pair.
+        agent: AgentId,
+        /// The passed body.
+        partner: AgentId,
+        /// The facility the pass happened on.
+        facility: FacilityId,
+        /// The side the pass claims, in the passing agent's travel frame.
+        side: PassSide,
+        /// Least signed surface clearance in metres over the interval.
+        min_clearance_m: f64,
+        /// Simulated time of that minimum, in seconds.
+        min_clearance_time_s: f64,
+        /// Relative speed along the shared reference at that minimum, in metres
+        /// per second.
+        relative_speed_mps: f64,
+        /// Each participating band's accumulated duration, in declaration order.
+        bands: Vec<ClosePassBand>,
+        /// The participating bands whose observed minimum fell below their
+        /// threshold and that record a violation.
+        violating_bands: Vec<ClearanceBandId>,
+        /// `true` when either participant crossed a facility boundary during the
+        /// interval.
+        crossed_boundary: bool,
+        /// `true` when either participant traversed against its facility's
+        /// nominal direction during the interval.
+        entered_opposing: bool,
+    },
 }
 
 impl Event {
     /// The agent this event is about.
     ///
-    /// For a body-pair record this is the lower [`AgentId`] of the pair.
-    pub const fn agent(self) -> AgentId {
+    /// For a body-pair record this is the lower [`AgentId`] of the pair, and for
+    /// a close pass the passing agent.
+    pub const fn agent(&self) -> AgentId {
         match self {
             Self::Spawned { agent, .. }
             | Self::Despawned { agent, .. }
@@ -587,12 +639,13 @@ impl Event {
             | Self::ControlTransition { agent, .. }
             | Self::Maneuver { agent, .. }
             | Self::FacilityTransition { agent, .. }
-            | Self::OpposingTraversal { agent, .. } => agent,
+            | Self::OpposingTraversal { agent, .. }
+            | Self::ClosePass { agent, .. } => *agent,
         }
     }
 
     /// Which record this event is, without its payload.
-    pub const fn kind(self) -> EventKind {
+    pub const fn kind(&self) -> EventKind {
         match self {
             Self::Spawned { .. } => EventKind::Spawned,
             Self::Despawned { .. } => EventKind::Despawned,
@@ -607,6 +660,7 @@ impl Event {
             Self::Maneuver { .. } => EventKind::Maneuver,
             Self::FacilityTransition { .. } => EventKind::FacilityTransition,
             Self::OpposingTraversal { .. } => EventKind::OpposingTraversal,
+            Self::ClosePass { .. } => EventKind::ClosePass,
         }
     }
 
@@ -622,7 +676,7 @@ impl Event {
     /// rule. A step sorts its buffer
     /// by this key, so a consumer can assert the documented order directly. See
     /// the module docs for why a residual tie can only be two identical records.
-    pub const fn order_key(self) -> (u32, u8, u8, u32, u32, u32, u32, u32) {
+    pub const fn order_key(&self) -> (u32, u8, u8, u32, u32, u32, u32, u32) {
         let kind = self.kind().order();
         match self {
             Self::Spawned { agent, path, .. } => (agent.get(), kind, 0, path.get(), 0, 0, 0, 0),
@@ -636,7 +690,7 @@ impl Event {
                 kind,
                 0,
                 crossing.get(),
-                yielding as u32,
+                *yielding as u32,
                 0,
                 0,
                 0,
@@ -651,7 +705,7 @@ impl Event {
                 kind,
                 0,
                 other.get(),
-                contacting as u32,
+                *contacting as u32,
                 0,
                 0,
                 0,
@@ -661,7 +715,7 @@ impl Event {
                 other,
                 entering,
                 ..
-            } => (agent.get(), kind, 0, other.get(), entering as u32, 0, 0, 0),
+            } => (agent.get(), kind, 0, other.get(), *entering as u32, 0, 0, 0),
             Self::Violation {
                 agent,
                 kind: breach,
@@ -672,7 +726,7 @@ impl Event {
             Self::Exit { agent, region } => {
                 (agent.get(), kind, region.tag(), region.get(), 0, 0, 0, 0)
             }
-            Self::Queue { agent, joined } => (agent.get(), kind, 0, 0, joined as u32, 0, 0, 0),
+            Self::Queue { agent, joined } => (agent.get(), kind, 0, 0, *joined as u32, 0, 0, 0),
             Self::ControlTransition {
                 agent,
                 control,
@@ -682,7 +736,7 @@ impl Event {
                 kind,
                 0,
                 control.order() as u32,
-                active as u32,
+                *active as u32,
                 0,
                 0,
                 0,
@@ -690,7 +744,7 @@ impl Event {
             // The increment-2 keys of *Ordering*: the tactic, the target
             // facility, both states, and the edge; then the two facilities of a
             // handoff; then the facility, movement, and interval edge of an
-            // opposing traversal.
+            // opposing traversal; then the partner and facility of a close pass.
             Self::Maneuver {
                 agent,
                 kind: tactic,
@@ -703,11 +757,11 @@ impl Event {
                 agent.get(),
                 kind,
                 0,
-                tactic as u32,
-                facility_key(target_facility),
-                from as u32,
-                to as u32,
-                edge as u32,
+                *tactic as u32,
+                facility_key(*target_facility),
+                *from as u32,
+                *to as u32,
+                *edge as u32,
             ),
             Self::FacilityTransition {
                 agent,
@@ -735,11 +789,17 @@ impl Event {
                 kind,
                 0,
                 facility.get(),
-                movement_key(movement),
-                entering as u32,
+                movement_key(*movement),
+                *entering as u32,
                 0,
                 0,
             ),
+            Self::ClosePass {
+                agent,
+                partner,
+                facility,
+                ..
+            } => (agent.get(), kind, 0, partner.get(), facility.get(), 0, 0, 0),
         }
     }
 }
@@ -816,7 +876,26 @@ mod tests {
         }
     }
 
-    /// The version-2 kinds keep their order values and the three additive kinds
+    fn close_pass(partner: usize, facility: usize) -> Event {
+        Event::ClosePass {
+            agent: AGENT,
+            partner: AgentId::from_index(partner),
+            facility: FacilityId::from_index(facility),
+            side: PassSide::Left,
+            min_clearance_m: 0.3,
+            min_clearance_time_s: 1.5,
+            relative_speed_mps: 1.25,
+            bands: vec![ClosePassBand {
+                band: ClearanceBandId::from_index(0),
+                duration_s: 0.4,
+            }],
+            violating_bands: vec![ClearanceBandId::from_index(0)],
+            crossed_boundary: false,
+            entered_opposing: false,
+        }
+    }
+
+    /// The version-2 kinds keep their order values and the four additive kinds
     /// are appended after them, so no existing stream reorders.
     #[test]
     fn the_additive_kinds_are_appended_after_control_transition() {
@@ -835,6 +914,10 @@ mod tests {
         assert_eq!(
             EventKind::OpposingTraversal.order() as usize,
             VERSION_2_KINDS.len() + 2
+        );
+        assert_eq!(
+            EventKind::ClosePass.order() as usize,
+            VERSION_2_KINDS.len() + 3
         );
         assert_eq!(EVENT_VERSION, 3, "the additive union's single bump");
     }
@@ -887,6 +970,19 @@ mod tests {
             "a handoff orders by its destination facility"
         );
         assert_eq!(transition(1).kind(), EventKind::FacilityTransition);
+
+        // A close pass orders by its partner and then its facility, and the
+        // accessors report the passing agent and its kind.
+        assert!(
+            close_pass(1, 0).order_key() < close_pass(2, 0).order_key(),
+            "a close pass orders by its partner"
+        );
+        assert!(
+            close_pass(1, 0).order_key() < close_pass(1, 1).order_key(),
+            "a close pass orders by its facility within one partner"
+        );
+        assert_eq!(close_pass(1, 0).agent(), AGENT);
+        assert_eq!(close_pass(1, 0).kind(), EventKind::ClosePass);
 
         // Every new kind follows the version-2 kinds for the same agent.
         assert!(

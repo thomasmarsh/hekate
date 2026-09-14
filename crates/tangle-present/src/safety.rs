@@ -44,7 +44,7 @@ pub const fn is_safety_record(kind: EventKind) -> bool {
 }
 
 /// One safety record a frame carries, with the tick that emitted it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FrameEvent {
     tick: u64,
     event: Event,
@@ -57,17 +57,17 @@ impl FrameEvent {
     }
 
     /// Completed kernel tick that emitted the record.
-    pub const fn tick(self) -> u64 {
+    pub const fn tick(&self) -> u64 {
         self.tick
     }
 
     /// The record itself.
-    pub const fn event(self) -> Event {
-        self.event
+    pub fn event(&self) -> &Event {
+        &self.event
     }
 
     /// Which record this is, without its payload.
-    pub const fn kind(self) -> EventKind {
+    pub fn kind(&self) -> EventKind {
         self.event.kind()
     }
 }
@@ -87,11 +87,21 @@ pub struct EventParticipants {
 
 impl EventParticipants {
     /// The participants of `event`.
-    pub fn of(event: Event) -> Self {
+    pub fn of(event: &Event) -> Self {
         let agents = match event {
             Event::Collision { agent, other, .. } | Event::NearMiss { agent, other, .. } => {
                 // The canonical pair spelling already ascends.
                 vec![agent.get() as usize, other.get() as usize]
+            }
+            Event::ClosePass { agent, partner, .. } => {
+                // A close pass keeps its passing agent and passed body as
+                // roles, so the participant list is sorted to ascend.
+                let (first, second) = (agent.get() as usize, partner.get() as usize);
+                if first <= second {
+                    vec![first, second]
+                } else {
+                    vec![second, first]
+                }
             }
             Event::Spawned { agent, .. }
             | Event::Despawned { agent, .. }
@@ -106,8 +116,8 @@ impl EventParticipants {
             | Event::OpposingTraversal { agent, .. } => vec![agent.get() as usize],
         };
         let region = match event {
-            Event::Entry { region, .. } | Event::Exit { region, .. } => Some(region),
-            Event::Yielded { crossing, .. } => Some(RegionKey::Crossing(crossing)),
+            Event::Entry { region, .. } | Event::Exit { region, .. } => Some(*region),
+            Event::Yielded { crossing, .. } => Some(RegionKey::Crossing(*crossing)),
             _ => None,
         };
         Self { agents, region }
@@ -198,7 +208,7 @@ impl OccupiedRegion {
 /// it, and neither restates a kernel payload. The line names the bodies with
 /// their `#` ids and the region when the record has one, so a reader can jump
 /// to a body the way [`EventParticipants`] spells it.
-pub fn event_summary(record: FrameEvent) -> String {
+pub fn event_summary(record: &FrameEvent) -> String {
     let event = record.event();
     let ticket = format!("t{}", record.tick());
     let body = |agent: usize| format!("#{agent}");
@@ -224,7 +234,7 @@ pub fn event_summary(record: FrameEvent) -> String {
             yielding,
         } => format!(
             "{ticket} yield {}  {}  crossing {}",
-            if yielding { "began" } else { "ended" },
+            if *yielding { "began" } else { "ended" },
             body(agent.get() as usize),
             crossing.get()
         ),
@@ -235,7 +245,7 @@ pub fn event_summary(record: FrameEvent) -> String {
             contacting,
         } => format!(
             "{ticket} contact {}  {} + {}  clearance {clearance_m:.2} m",
-            if contacting { "began" } else { "ended" },
+            if *contacting { "began" } else { "ended" },
             body(agent.get() as usize),
             body(other.get() as usize)
         ),
@@ -246,7 +256,7 @@ pub fn event_summary(record: FrameEvent) -> String {
             entering,
         } => format!(
             "{ticket} near miss {}  {} + {}  clearance {clearance_m:.2} m",
-            if entering { "began" } else { "ended" },
+            if *entering { "began" } else { "ended" },
             body(agent.get() as usize),
             body(other.get() as usize)
         ),
@@ -258,16 +268,16 @@ pub fn event_summary(record: FrameEvent) -> String {
         Event::Entry { agent, region } => format!(
             "{ticket} entry  {}  {}",
             body(agent.get() as usize),
-            region_label(region)
+            region_label(*region)
         ),
         Event::Exit { agent, region } => format!(
             "{ticket} exit  {}  {}",
             body(agent.get() as usize),
-            region_label(region)
+            region_label(*region)
         ),
         Event::Queue { agent, joined } => format!(
             "{ticket} queue {}  {}",
-            if joined { "joined" } else { "left" },
+            if *joined { "joined" } else { "left" },
             body(agent.get() as usize)
         ),
         Event::ControlTransition {
@@ -278,7 +288,7 @@ pub fn event_summary(record: FrameEvent) -> String {
             "{ticket} control  {}  {} {}",
             body(agent.get() as usize),
             control.label(),
-            if active { "active" } else { "ended" }
+            if *active { "active" } else { "ended" }
         ),
         Event::Maneuver {
             agent,
@@ -320,10 +330,24 @@ pub fn event_summary(record: FrameEvent) -> String {
             ..
         } => format!(
             "{ticket} opposing {}  {}  facility {}  reason {}  violating {violating}",
-            if entering { "began" } else { "ended" },
+            if *entering { "began" } else { "ended" },
             body(agent.get() as usize),
             facility.get(),
             reason.label()
+        ),
+        Event::ClosePass {
+            agent,
+            partner,
+            facility,
+            min_clearance_m,
+            relative_speed_mps,
+            ..
+        } => format!(
+            "{ticket} close pass  {} + {}  facility {}  min {min_clearance_m:.2} m  \
+             relative {relative_speed_mps:.2} m/s",
+            body(agent.get() as usize),
+            body(partner.get() as usize),
+            facility.get()
         ),
     }
 }
@@ -342,7 +366,7 @@ fn region_label(region: RegionKey) -> String {
 /// region the record names, otherwise the midpoint of the participants that
 /// are alive in the frame. A record whose bodies have all left the world, and
 /// whose record names no region, draws no marker.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SafetyMarker {
     record: FrameEvent,
     position: DVec2,
@@ -350,28 +374,28 @@ pub struct SafetyMarker {
 
 impl SafetyMarker {
     /// The record this marker is for.
-    pub const fn record(self) -> FrameEvent {
-        self.record
+    pub fn record(&self) -> &FrameEvent {
+        &self.record
     }
 
     /// Which record this marker is, without its payload.
-    pub const fn kind(self) -> EventKind {
+    pub fn kind(&self) -> EventKind {
         self.record.kind()
     }
 
     /// Tick that emitted the record.
-    pub const fn tick(self) -> u64 {
+    pub const fn tick(&self) -> u64 {
         self.record.tick()
     }
 
     /// World position of the marker in metres.
-    pub const fn position(self) -> DVec2 {
+    pub const fn position(&self) -> DVec2 {
         self.position
     }
 
     /// The bodies and region this marker links, so a renderer that lets a
     /// pointer pick a marker can select the bodies it involves.
-    pub fn participants(self) -> EventParticipants {
+    pub fn participants(&self) -> EventParticipants {
         EventParticipants::of(self.record.event())
     }
 }
@@ -421,7 +445,7 @@ impl SafetyOverlay {
     pub fn observe(&mut self, tick: u64, events: &[Event]) {
         for event in events {
             if is_safety_record(event.kind()) {
-                self.events.push(FrameEvent::new(tick, *event));
+                self.events.push(FrameEvent::new(tick, event.clone()));
             }
             match *event {
                 Event::Entry { agent, region } => {
@@ -464,7 +488,8 @@ impl SafetyOverlay {
                 | Event::Violation { .. }
                 | Event::Maneuver { .. }
                 | Event::FacilityTransition { .. }
-                | Event::OpposingTraversal { .. } => {}
+                | Event::OpposingTraversal { .. }
+                | Event::ClosePass { .. } => {}
             }
         }
         self.prune(tick);
@@ -590,8 +615,8 @@ impl SceneFrame {
             .events()
             .iter()
             .filter_map(|record| {
-                marker_anchor(self, *record).map(|position| SafetyMarker {
-                    record: *record,
+                marker_anchor(self, record).map(|position| SafetyMarker {
+                    record: record.clone(),
                     position,
                 })
             })
@@ -649,12 +674,12 @@ impl SceneFrame {
         self.safety
             .events()
             .iter()
-            .copied()
             .filter(|record| {
                 EventParticipants::of(record.event())
                     .agents()
                     .contains(&agent)
             })
+            .cloned()
             .collect()
     }
 
@@ -665,7 +690,7 @@ impl SceneFrame {
 }
 
 /// World anchor of the marker for `record`, or `None` when it has none.
-fn marker_anchor(frame: &SceneFrame, record: FrameEvent) -> Option<DVec2> {
+fn marker_anchor(frame: &SceneFrame, record: &FrameEvent) -> Option<DVec2> {
     let participants = EventParticipants::of(record.event());
     if let Some(region) = participants.region()
         && let Some(center) = frame.geometry.region_center(region)
@@ -883,7 +908,7 @@ mod tests {
             ),
         ];
         for (event, agents, region) in cases {
-            let participants = EventParticipants::of(event);
+            let participants = EventParticipants::of(&event);
             assert_eq!(participants.agents(), agents.as_slice(), "{event:?}");
             assert_eq!(participants.region(), region, "{event:?}");
         }
@@ -894,12 +919,12 @@ mod tests {
             clearance_m: 0.0,
             contacting: false,
         };
-        assert_eq!(EventParticipants::of(reversed).agents(), &[5, 3]);
+        assert_eq!(EventParticipants::of(&reversed).agents(), &[5, 3]);
     }
 
     #[test]
     fn others_are_the_jump_targets_of_one_record() {
-        let participants = EventParticipants::of(pair(EventKind::Collision));
+        let participants = EventParticipants::of(&pair(EventKind::Collision));
         assert_eq!(participants.others(0), vec![1]);
         assert_eq!(participants.others(1), vec![0]);
         // An agent outside the record has every participant as a jump target.
@@ -1269,7 +1294,7 @@ mod tests {
             ),
         ];
         for (event, expected) in cases {
-            let summary = event_summary(FrameEvent::new(120, event));
+            let summary = event_summary(&FrameEvent::new(120, event.clone()));
             assert_eq!(summary, format!("t120 {expected}"), "{event:?}");
         }
     }

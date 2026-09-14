@@ -187,7 +187,8 @@ fn spawns(sim: &mut Simulation) -> Vec<(AgentId, PathId, f64)> {
             | Event::ControlTransition { .. }
             | Event::Maneuver { .. }
             | Event::FacilityTransition { .. }
-            | Event::OpposingTraversal { .. } => None,
+            | Event::OpposingTraversal { .. }
+            | Event::ClosePass { .. } => None,
         })
         .collect()
 }

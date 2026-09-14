@@ -19,8 +19,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tangle_model::CompiledScenario;
 use tangle_sim::{
-    DespawnReason, EVENT_VERSION, Event, InitError, RegionKey, RunConfig, RunSummary, Simulation,
-    StepOutput,
+    ClosePassBand, DespawnReason, EVENT_VERSION, Event, InitError, RegionKey, RunConfig,
+    RunSummary, Simulation, StepOutput,
 };
 
 use crate::run_dir::TrajectorySampling;
@@ -87,7 +87,7 @@ impl TraceRecorder {
     pub fn record(&mut self, output: &StepOutput<'_>) {
         let tick = output.time().tick();
         for event in output.events() {
-            write_line(&mut self.bytes, &EventRecord::new(tick, *event));
+            write_line(&mut self.bytes, &EventRecord::new(tick, event.clone()));
         }
     }
 
@@ -312,6 +312,39 @@ struct EventRecord {
     perceived_rule: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     violating: Option<bool>,
+    // The close-pass record appends its own fields last, in the contract's
+    // payload order, so no earlier variant's line changes byte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_clearance_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_clearance_time_s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relative_speed_mps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bands: Option<Vec<ClosePassBandRecord>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    violating_bands: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crossed_boundary: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entered_opposing: Option<bool>,
+}
+
+/// One clearance band of a `ClosePass` record: its stable id and the seconds
+/// the pair's exact clearance sat inside it.
+#[derive(Serialize)]
+struct ClosePassBandRecord {
+    band: u32,
+    duration_s: f64,
+}
+
+impl From<&ClosePassBand> for ClosePassBandRecord {
+    fn from(band: &ClosePassBand) -> Self {
+        Self {
+            band: band.band.get(),
+            duration_s: band.duration_s,
+        }
+    }
 }
 
 /// A record with every field empty but the ones this variant owns.
@@ -362,6 +395,13 @@ impl EventRecord {
             nominal_direction: None,
             perceived_rule: None,
             violating: None,
+            min_clearance_m: None,
+            min_clearance_time_s: None,
+            relative_speed_mps: None,
+            bands: None,
+            violating_bands: None,
+            crossed_boundary: None,
+            entered_opposing: None,
         }
     }
 
@@ -516,6 +556,31 @@ impl EventRecord {
                 entering: Some(entering),
                 ..Self::empty(tick, "opposing_traversal", agent.get())
             },
+            Event::ClosePass {
+                agent,
+                partner,
+                facility,
+                side,
+                min_clearance_m,
+                min_clearance_time_s,
+                relative_speed_mps,
+                bands,
+                violating_bands,
+                crossed_boundary,
+                entered_opposing,
+            } => Self {
+                partner: Some(partner.get()),
+                facility: Some(facility.get()),
+                side: Some(side.label()),
+                min_clearance_m: Some(min_clearance_m),
+                min_clearance_time_s: Some(min_clearance_time_s),
+                relative_speed_mps: Some(relative_speed_mps),
+                bands: Some(bands.iter().map(ClosePassBandRecord::from).collect()),
+                violating_bands: Some(violating_bands.iter().map(|band| band.get()).collect()),
+                crossed_boundary: Some(crossed_boundary),
+                entered_opposing: Some(entered_opposing),
+                ..Self::empty(tick, "close_pass", agent.get())
+            },
         }
     }
 }
@@ -654,17 +719,18 @@ mod tests {
     #[test]
     fn each_record_shape_serializes_its_own_fields_in_order() {
         use tangle_model::{
-            ConflictRegionId, CrossingId, FacilityId, MovementDirection, MovementId,
-            NominalDirection, PathId, PermissionEffect, TacticKind,
+            ClearanceBandId, ConflictRegionId, CrossingId, FacilityId, MovementDirection,
+            MovementId, NominalDirection, PathId, PermissionEffect, TacticKind,
         };
         use tangle_sim::{
-            AgentId, AgentMode, ControlTransitionKind, ManeuverEdge, ManeuverReasonCode,
-            ManeuverState, PassSide, RegionKey, TransitionKind, ViolationKind, WrongWayReason,
+            AgentId, AgentMode, ClosePassBand, ControlTransitionKind, ManeuverEdge,
+            ManeuverReasonCode, ManeuverState, PassSide, RegionKey, TransitionKind, ViolationKind,
+            WrongWayReason,
         };
 
         let agent = AgentId::from_index(3);
         let partner = AgentId::from_index(7);
-        let cases: [(&str, Event); 13] = [
+        let cases: [(&str, Event); 14] = [
             (
                 "spawned",
                 Event::Spawned {
@@ -789,6 +855,25 @@ mod tests {
                     entering: false,
                 },
             ),
+            (
+                "close_pass",
+                Event::ClosePass {
+                    agent,
+                    partner,
+                    facility: FacilityId::from_index(5),
+                    side: PassSide::Left,
+                    min_clearance_m: 0.3,
+                    min_clearance_time_s: 1.5,
+                    relative_speed_mps: 1.25,
+                    bands: vec![ClosePassBand {
+                        band: ClearanceBandId::from_index(0),
+                        duration_s: 0.4,
+                    }],
+                    violating_bands: vec![ClearanceBandId::from_index(0)],
+                    crossed_boundary: false,
+                    entered_opposing: true,
+                },
+            ),
         ];
 
         for (name, event) in cases {
@@ -823,6 +908,9 @@ mod tests {
                 ),
                 "opposing_traversal" => Some(
                     r#""reason":"noncompliant_choice","entering":false,"facility":3,"movement":4,"direction":"reverse","nominal_direction":"forward","perceived_rule":"prohibit","violating":true"#,
+                ),
+                "close_pass" => Some(
+                    r#""partner":7,"side":"left","facility":5,"min_clearance_m":0.3,"min_clearance_time_s":1.5,"relative_speed_mps":1.25,"bands":[{"band":0,"duration_s":0.4}],"violating_bands":[0],"crossed_boundary":false,"entered_opposing":true"#,
                 ),
                 _ => None,
             };

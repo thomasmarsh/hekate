@@ -448,7 +448,7 @@ fn every_recorded_edge_emits_one_maneuver_event_in_a_stable_key_order() {
                     "the buffer is non-decreasing by the documented order key"
                 );
             }
-            events.extend(output.events().iter().copied());
+            events.extend(output.events().iter().cloned());
             recorded += output.transitions().len();
         }
         (events, recorded, passed, riders[1], riders[2])
@@ -464,7 +464,7 @@ fn every_recorded_edge_emits_one_maneuver_event_in_a_stable_key_order() {
     let maneuvers: Vec<Event> = forward
         .iter()
         .filter(|event| matches!(event, Event::Maneuver { .. }))
-        .copied()
+        .cloned()
         .collect();
     assert_eq!(
         maneuvers.len(),
@@ -487,7 +487,7 @@ fn every_recorded_edge_emits_one_maneuver_event_in_a_stable_key_order() {
                 } if *agent == nearer
             )
         })
-        .copied()
+        .cloned()
         .expect("the granted claimant's commit edge is emitted");
     assert_eq!(
         committed,
@@ -517,7 +517,7 @@ fn every_recorded_edge_emits_one_maneuver_event_in_a_stable_key_order() {
                 } if *agent == farther
             )
         })
-        .copied()
+        .cloned()
         .expect("the losing claimant's abort edge is emitted");
     assert!(matches!(
         aborted,

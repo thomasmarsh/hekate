@@ -551,7 +551,7 @@ fn a_connector_handoff_emits_one_facility_transition_event_mapping_its_record() 
                 .events()
                 .iter()
                 .filter(|event| event.agent() == rider)
-                .copied(),
+                .cloned(),
         );
         if events
             .iter()
@@ -571,7 +571,7 @@ fn a_connector_handoff_emits_one_facility_transition_event_mapping_its_record() 
     let emitted = events
         .iter()
         .find_map(|event| match event {
-            Event::FacilityTransition { agent, .. } if *agent == rider => Some(*event),
+            Event::FacilityTransition { agent, .. } if *agent == rider => Some(event.clone()),
             _ => None,
         })
         .expect("the handoff emitted its event");
@@ -1667,7 +1667,7 @@ fn a_wrong_way_rider_keeps_its_identity_profile_and_lifecycle() {
         .iter()
         .flat_map(|(_, events)| events.iter())
         .filter(|event| matches!(event, Event::Spawned { agent, .. } if *agent == rider))
-        .copied()
+        .cloned()
         .collect();
     assert_eq!(
         spawned.len(),

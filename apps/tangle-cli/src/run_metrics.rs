@@ -567,7 +567,7 @@ impl RunMetricsRecorder {
         let Some((family, kind)) = counted_family(event) else {
             return;
         };
-        let agent = event_agent(*event);
+        let agent = event_agent(event);
         *self.by_family.entry(family.label()).or_insert(0) += 1;
         if let Some(kind) = kind {
             *self
@@ -948,19 +948,19 @@ fn bucket_key(first: &str, second: &str) -> String {
 /// joined, and a yield when it is yielding; every violation, region entry or
 /// exit, control transition, spawn, and despawn is counted.
 fn counted_family(event: &Event) -> Option<(EventFamily, Option<&'static str>)> {
-    match *event {
+    match event {
         Event::Collision { contacting, .. } => {
-            contacting.then_some((EventFamily::Collisions, None))
+            (*contacting).then_some((EventFamily::Collisions, None))
         }
-        Event::NearMiss { entering, .. } => entering.then_some((EventFamily::NearMisses, None)),
+        Event::NearMiss { entering, .. } => (*entering).then_some((EventFamily::NearMisses, None)),
         Event::Violation { kind, .. } => Some((EventFamily::Violations, Some(kind.label()))),
         Event::Entry { .. } => Some((EventFamily::RegionEntries, None)),
         Event::Exit { .. } => Some((EventFamily::RegionExits, None)),
-        Event::Queue { joined, .. } => joined.then_some((EventFamily::QueueEvents, None)),
+        Event::Queue { joined, .. } => (*joined).then_some((EventFamily::QueueEvents, None)),
         Event::ControlTransition { control, .. } => {
             Some((EventFamily::ControlTransitions, Some(control.label())))
         }
-        Event::Yielded { yielding, .. } => yielding.then_some((EventFamily::Yields, None)),
+        Event::Yielded { yielding, .. } => (*yielding).then_some((EventFamily::Yields, None)),
         Event::Spawned { .. } => Some((EventFamily::Spawns, None)),
         Event::Despawned { .. } => Some((EventFamily::Despawns, None)),
         // The increment-2 maneuver and rule records carry no metric definition
@@ -968,12 +968,13 @@ fn counted_family(event: &Event) -> Option<(EventFamily, Option<&'static str>)> 
         // additive increment-2 union, counted by their own leaf.
         Event::Maneuver { .. }
         | Event::FacilityTransition { .. }
-        | Event::OpposingTraversal { .. } => None,
+        | Event::OpposingTraversal { .. }
+        | Event::ClosePass { .. } => None,
     }
 }
 
 /// The subject agent of an event, the agent its record attributes it to.
-const fn event_agent(event: Event) -> AgentId {
+const fn event_agent(event: &Event) -> AgentId {
     match event {
         Event::Spawned { agent, .. }
         | Event::Despawned { agent, .. }
@@ -987,7 +988,8 @@ const fn event_agent(event: Event) -> AgentId {
         | Event::ControlTransition { agent, .. }
         | Event::Maneuver { agent, .. }
         | Event::FacilityTransition { agent, .. }
-        | Event::OpposingTraversal { agent, .. } => agent,
+        | Event::OpposingTraversal { agent, .. }
+        | Event::ClosePass { agent, .. } => *agent,
     }
 }
 

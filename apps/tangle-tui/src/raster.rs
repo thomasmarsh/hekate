@@ -89,7 +89,10 @@ pub const fn marker_glyph(kind: EventKind) -> Option<char> {
         EventKind::Spawned | EventKind::Despawned => None,
         // The increment-2 maneuver and rule records are not markers
         // ([`is_safety_record`] does not carry them), so they draw none.
-        EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => None,
+        EventKind::Maneuver
+        | EventKind::FacilityTransition
+        | EventKind::OpposingTraversal
+        | EventKind::ClosePass => None,
     }
 }
 
@@ -103,9 +106,10 @@ pub const fn marker_color(kind: EventKind) -> Rgb {
         EventKind::Queue => QUEUE_COLOR,
         EventKind::Yielded | EventKind::ControlTransition => CONTROL_COLOR,
         EventKind::Spawned | EventKind::Despawned => BODY_COLOR,
-        EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => {
-            BODY_COLOR
-        }
+        EventKind::Maneuver
+        | EventKind::FacilityTransition
+        | EventKind::OpposingTraversal
+        | EventKind::ClosePass => BODY_COLOR,
     }
 }
 

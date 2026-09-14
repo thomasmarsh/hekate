@@ -46,7 +46,7 @@ use tangle_model::{
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
-use crate::close_pass::ClosePassTracker;
+use crate::close_pass::{ClosePassTracker, OvertakeObservation};
 use crate::compliance::{self, ComplianceDecision, ComplianceReason, SignalAction};
 use crate::config::RunConfig;
 use crate::control::{Constraint, IDM_STANDSTILL_GAP_M};
@@ -807,12 +807,56 @@ impl Simulation {
 
     /// Close-pass tracking for the run so far.
     ///
-    /// Every completed overtaking interval, with the duration each configured
-    /// clearance band accumulated over it. See [`crate::close_pass`] for the
-    /// detection definition, the band accumulation rule, and the determinism
-    /// argument.
+    /// Every completed overtaking interval, with the exact minimum clearance,
+    /// its time and relative speed, and the duration each configured clearance
+    /// band accumulated over it. See [`crate::close_pass`] for the detection
+    /// definition, the band accumulation rule, and the determinism argument.
     pub fn close_pass_tracker(&self) -> &ClosePassTracker {
         &self.close_passes
+    }
+
+    /// Close every close-pass observation still open at the run's end.
+    ///
+    /// A pass still in progress when the run ends terminates with the run, so a
+    /// consumer that has performed its last [`Self::step`] calls this once
+    /// before reading [`Self::close_pass_tracker`], and every participant pair
+    /// has exactly one observation. A run-end closure emits no event: no tick
+    /// remains to carry one, so the closed observation is read from the tracker
+    /// rather than from a step's event buffer.
+    pub fn close_open_close_passes(&mut self) {
+        self.close_passes.close_open();
+    }
+
+    /// The [`Event::ClosePass`] of one closed observation, or `None` when the
+    /// contract's applicability does not hold.
+    ///
+    /// The contract's *Applicability* gives a `ClosePass` record only to a pass
+    /// the passing agent's mode carries a `pass` or `overtake` capability for,
+    /// on a compiled facility, so a scenario that authors no such capability
+    /// emits none. The observation always closes; only its event is gated.
+    fn close_pass_event(&self, observation: &OvertakeObservation) -> Option<Event> {
+        let facility = observation.facility?;
+        let side = observation.side?;
+        let mode = self.agents.route_state[observation.agent.index()]?.mode_template;
+        let tactics = self.scenario.mode_template(mode)?.tactics();
+        if !(tactics.supports(TacticalCapability::Pass)
+            || tactics.supports(TacticalCapability::Overtake))
+        {
+            return None;
+        }
+        Some(Event::ClosePass {
+            agent: observation.agent,
+            partner: observation.partner,
+            facility,
+            side,
+            min_clearance_m: observation.min_clearance_m,
+            min_clearance_time_s: observation.min_clearance_time_s,
+            relative_speed_mps: observation.relative_speed_mps,
+            bands: observation.bands.clone(),
+            violating_bands: observation.violating_bands.clone(),
+            crossed_boundary: observation.crossed_boundary,
+            entered_opposing: observation.entered_opposing,
+        })
     }
 
     /// Install replacement motion models.
@@ -902,9 +946,21 @@ impl Simulation {
 
         // Close-pass tracking reads the same integrated bodies and the same
         // tick-start shapes, so a detected overtaking interval and its band
-        // durations describe exactly the state this tick produced.
-        self.close_passes
-            .observe(&self.agents, &self.scenario, self.tick, self.config.step());
+        // durations describe exactly the state this tick produced. The kernel
+        // emits one [`Event::ClosePass`] for every observation the tick closed.
+        let closed_before = self.close_passes.overtakes().len();
+        self.close_passes.observe(
+            &self.agents,
+            &self.scenario,
+            &self.facility_transitions,
+            self.tick,
+            self.config.step(),
+        );
+        let closed: Vec<Event> = self.close_passes.overtakes()[closed_before..]
+            .iter()
+            .filter_map(|observation| self.close_pass_event(observation))
+            .collect();
+        self.events.extend(closed);
 
         self.advance_demand(dt);
 
@@ -6366,7 +6422,7 @@ mod tests {
             .events()
             .iter()
             .filter(|event| matches!(event, Event::Maneuver { .. }))
-            .copied()
+            .cloned()
             .collect()
     }
 
@@ -6440,7 +6496,7 @@ mod tests {
         let mut settled = None;
         for _ in 0..600 {
             let output = sim.step();
-            settled = maneuver_events(&output).first().copied();
+            settled = maneuver_events(&output).first().cloned();
             if settled.is_some() {
                 break;
             }
@@ -6661,7 +6717,7 @@ mod tests {
                         window[1].order_key()
                     );
                 }
-                stream.extend(events.iter().copied());
+                stream.extend(events.iter().cloned());
                 recorded += output.transitions().len();
             }
             (stream, recorded, near, far)
@@ -6679,7 +6735,7 @@ mod tests {
         let maneuvers: Vec<Event> = forward
             .iter()
             .filter(|event| matches!(event, Event::Maneuver { .. }))
-            .copied()
+            .cloned()
             .collect();
         assert_eq!(
             maneuvers.len(),

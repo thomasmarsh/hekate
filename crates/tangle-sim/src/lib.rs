@@ -62,7 +62,7 @@ mod units;
 pub mod wrong_way;
 
 pub use agent::{AgentId, AgentMode};
-pub use close_pass::{ClosePassBandDuration, ClosePassTracker, OvertakeObservation};
+pub use close_pass::{ClosePassBand, ClosePassTracker, OvertakeObservation};
 pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
 pub use config::{DEFAULT_STEP, RunConfig};
 pub use controller::ControllerModelNames;

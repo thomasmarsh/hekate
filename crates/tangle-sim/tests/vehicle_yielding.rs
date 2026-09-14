@@ -169,7 +169,8 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
         report.yield_events.extend(
             events
                 .iter()
-                .filter(|event| matches!(event, Event::Yielded { .. })),
+                .filter(|event| matches!(event, Event::Yielded { .. }))
+                .cloned(),
         );
         let after = agents(&sim);
         for sample in &after {
@@ -295,7 +296,7 @@ fn a_vehicle_holds_before_an_occupied_crossing_and_resumes() {
         .yield_events
         .iter()
         .filter(|event| matches!(event, Event::Yielded { yielding: true, .. }))
-        .copied()
+        .cloned()
         .collect();
     assert!(!begins.is_empty(), "no yield began");
     // Resumption: everyone seen well before the end is through, so no vehicle

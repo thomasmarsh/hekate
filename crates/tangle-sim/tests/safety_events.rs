@@ -49,7 +49,7 @@ fn collect(text: &str, seed: u64, ticks: u64) -> Vec<(u64, Event)> {
     for _ in 0..ticks {
         let tick = sim.time().tick();
         for event in sim.step().events() {
-            records.push((tick, *event));
+            records.push((tick, event.clone()));
         }
     }
     records
@@ -293,7 +293,7 @@ fn the_mixed_benchmark_stream_is_ordered_deterministic_and_both_modes() {
     let mut modes: BTreeMap<AgentId, AgentMode> = BTreeMap::new();
     let mut kinds: BTreeMap<EventKind, (u64, u64)> = BTreeMap::new();
     for (tick, event) in &first {
-        ticks.entry(*tick).or_default().push(*event);
+        ticks.entry(*tick).or_default().push(event.clone());
         // A spawned record carries the mode (F5), so the stream alone says which
         // mode each record is about.
         if let Event::Spawned { agent, mode, .. } = event {

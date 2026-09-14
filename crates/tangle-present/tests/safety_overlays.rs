@@ -157,7 +157,7 @@ fn every_derived_overlay_is_supported_by_the_frame() {
                 "marker {marker:?} names no body"
             );
             assert!(
-                frame.safety.events().contains(&marker.record()),
+                frame.safety.events().contains(marker.record()),
                 "marker {marker:?} is not in the frame's window"
             );
             if let Some(region) = participants.region() {

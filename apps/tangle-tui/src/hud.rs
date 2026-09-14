@@ -155,7 +155,7 @@ esc clear   q quit"
         // one line, so only the most recent records are named.
         let links = frame.events_involving(body.id);
         if let Some(latest) = links.last() {
-            out.push_str(&format!("   link {}", event_summary(*latest)));
+            out.push_str(&format!("   link {}", event_summary(latest)));
         }
         out
     }

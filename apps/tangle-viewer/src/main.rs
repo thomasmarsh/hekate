@@ -392,7 +392,8 @@ fn advance_simulation(time: Res<Time>, mut state: ResMut<ViewerState>) {
                     | Event::ControlTransition { .. }
                     | Event::Maneuver { .. }
                     | Event::FacilityTransition { .. }
-                    | Event::OpposingTraversal { .. } => {}
+                    | Event::OpposingTraversal { .. }
+                    | Event::ClosePass { .. } => {}
                 }
             }
         }
@@ -730,8 +731,8 @@ fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
     for marker in frame.safety_markers() {
         shapes.push(SafetyOverlayShape::Circle {
             centre: marker.position(),
-            radius_m: marker_radius(marker),
-            color: marker_color(marker),
+            radius_m: marker_radius(&marker),
+            color: marker_color(&marker),
         });
     }
 
@@ -799,7 +800,7 @@ fn emphasis_color(emphasis: BodyEmphasis) -> Color {
 }
 
 /// Color of one event marker.
-fn marker_color(marker: SafetyMarker) -> Color {
+fn marker_color(marker: &SafetyMarker) -> Color {
     use tangle_sim::EventKind;
     match marker.kind() {
         EventKind::Collision => Color::srgb(0.95, 0.25, 0.25),
@@ -811,14 +812,15 @@ fn marker_color(marker: SafetyMarker) -> Color {
         EventKind::Spawned | EventKind::Despawned => Color::WHITE,
         // The increment-2 maneuver and rule records are not markers
         // ([`tangle_present::is_safety_record`] does not carry them).
-        EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => {
-            Color::WHITE
-        }
+        EventKind::Maneuver
+        | EventKind::FacilityTransition
+        | EventKind::OpposingTraversal
+        | EventKind::ClosePass => Color::WHITE,
     }
 }
 
 /// World radius of one event marker: a bigger ring for a heavier record.
-fn marker_radius(marker: SafetyMarker) -> f32 {
+fn marker_radius(marker: &SafetyMarker) -> f32 {
     use tangle_sim::EventKind;
     match marker.kind() {
         EventKind::Collision => 1.6,
@@ -928,7 +930,7 @@ fn describe_agent(scenario: &CompiledScenario, body: &SceneBody, frame: &SceneFr
     if !links.is_empty() {
         out.push_str("\nlinks");
         for record in links.iter().take(MAX_INSPECTOR_LINKS) {
-            out.push_str(&format!("\n  {}", event_summary(*record)));
+            out.push_str(&format!("\n  {}", event_summary(record)));
         }
         if links.len() > MAX_INSPECTOR_LINKS {
             out.push_str(&format!(
