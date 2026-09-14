@@ -1,9 +1,9 @@
 ---
-context_rev: 1
+context_rev: 2
 priority: P1
-updated: 2026-09-12T15:12:03Z
-summary: Increment 2 adds continuous lateral motion, overtaking, close-pass evidence, and contextual wrong-way travel.
-next: Implement continuous lateral targeting with the following/preparing/committed/returning maneuver state machine and bounded steering.
+updated: 2026-09-14T00:27:04Z
+summary: Add continuous lateral motion, passing evidence, and contextual wrong-way travel.
+next: [[TAS-082-increment-2-authored-and-compiled-contract]]
 ---
 
 # Outcome
@@ -37,3 +37,41 @@ Per `PHASE_2_PLAN.md` Increment 2:
   bypass an occupied opposing corridor.
 
 Parent [[TAS-017-phase-2-mixed-traffic]].
+
+# Execution structure
+
+This node coordinates six independently acceptable workstreams, executed in
+this order:
+
+1. [[TAS-082-increment-2-authored-and-compiled-contract]] fixes and implements
+   the authored and compiled Increment 2 policy surface.
+2. [[TAS-087-continuous-lateral-motion-and-gap-machinery]] supplies
+   route-relative state, bounded steering, prediction, and deterministic claims.
+3. [[TAS-092-passing-and-lane-transition-behavior]] integrates the three
+   required passing families and safe abort/return behavior.
+4. [[TAS-096-contextual-wrong-way-travel]] selects and executes physically
+   connected opposing traversal through ordinary systems.
+5. [[TAS-099-increment-2-events-metrics-and-output]] records the versioned
+   maneuver, close-pass, and wrong-way evidence.
+6. [[TAS-103-increment-2-acceptance-evidence-and-presenters]] closes the
+   analytic, fine-step, adversarial, reproducibility, performance, matrix, and
+   viewer gates.
+
+The leaves below those coordinators are the session-scoped handoff units. A
+worker takes one leaf, preserves its exclusions and owned paths, records exact
+evidence in that leaf, and does not roll up a coordinator unless explicitly
+assigned that coordination write set.
+
+# Constraints
+
+- World pose remains collision and output truth; route coordinates are tactical
+  state and must be projected back after integration.
+- Shared interaction, collision, routing, event, and presenter code dispatches
+  on components or physical families, never a named scenario or mode.
+- Increment 1 longitudinal behavior and every Phase 1 baseline remain available.
+  Any intentional output union change bumps its definition version and updates
+  only the required goldens with a versioned explanation.
+- No navigation mesh, balance/lean/fall model, sidewalk-riding special case,
+  detailed visibility-error model, or mode-specific crate is in Increment 2.
+- Every new scenario or model-card artifact names the repository-wide suite
+  that enumerates its directory before the path is introduced.
