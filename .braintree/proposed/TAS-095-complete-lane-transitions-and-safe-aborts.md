@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T05:49:58Z
+updated: 2026-09-14T11:19:57Z
 summary: Complete configured lane or facility transitions with bounded abort, braking, and return.
 next: Apply the committed hazard and return-obstruction policy on a change of lane's outbound and return legs.
 ---
@@ -31,7 +31,8 @@ bounded hold, brake, abort, return, or explicit forbidden-boundary fact.
 
 # Context
 
-Gated on [[TAS-094-enable-motor-vehicle-overtaking-of-narrow-users]]. Owns
+Gated on [[TAS-094-enable-motor-vehicle-overtaking-of-narrow-users]] and
+[[TAS-112-compile-the-adjacency-shared-boundary-lateral-co]]. Owns
 facility-transition integration, safe-abort behavior, and focused tests. Do not
 define event payloads, close-pass aggregation, or acceptance scenarios.
 
