@@ -1106,7 +1106,7 @@ fn the_mode_event_and_agent_movement_slices_are_reported_per_metric() {
 }
 
 /// Every reported metric links to the manifests of every fidelity it reports and
-/// to `metric_definition_version: 2`, in the declared ordering.
+/// to `metric_definition_version: 3`, in the declared ordering.
 #[test]
 fn every_metric_links_to_its_manifests_and_the_definition_version() {
     let scratch = Scratch::new("links");

@@ -9,7 +9,7 @@
 //! runs report, the across-seed count, mean, spread, and confidence interval,
 //! disaggregated by mode pair (`ModePair`) and by movement (the `MovementId` /
 //! `PedestrianRouteId` union v1 chose), with every aggregated metric linked to
-//! the run manifest(s) it came from and to `metric_definition_version: 2`.
+//! the run manifest(s) it came from and to `metric_definition_version: 3`.
 //!
 //! ## Metric keys and slices
 //!

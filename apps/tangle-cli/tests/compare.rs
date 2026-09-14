@@ -1209,7 +1209,7 @@ fn unpaired_values_are_counted_not_zeroed() {
 }
 
 /// Every comparison links to both run manifests and to
-/// `metric_definition_version: 2`, and its statuses account for every pair.
+/// `metric_definition_version: 3`, and its statuses account for every pair.
 #[test]
 fn every_comparison_links_to_both_manifests_and_the_definition_version() {
     let scratch = Scratch::new("links");

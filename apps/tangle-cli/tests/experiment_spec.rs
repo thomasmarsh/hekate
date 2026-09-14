@@ -18,7 +18,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Deserialize;
-use tangle_cli::{PRESETS, SEED_BANK_VERSION, SamplingPolicy, load_scenario, read_seed_bank};
+use tangle_cli::{
+    METRIC_DEFINITION_VERSION, PRESETS, SEED_BANK_VERSION, SamplingPolicy, load_scenario,
+    read_seed_bank,
+};
 use tangle_model::{ScenarioSource, parse_scenario_source};
 use tangle_sim::{Event, RunConfig, Simulation};
 
@@ -407,7 +410,10 @@ fn the_checked_in_experiment_runs_paired_from_the_seed_bank() {
         &std::fs::read_to_string(&comparison).expect("compare wrote its artifact"),
     )
     .expect("comparison.json is valid JSON");
-    assert_eq!(comparison["metric_definition_version"], 2);
+    assert_eq!(
+        comparison["metric_definition_version"],
+        METRIC_DEFINITION_VERSION
+    );
     assert_eq!(
         comparison["seed_bank"]["content_sha256"],
         serde_json::json!(expected.content_sha256),

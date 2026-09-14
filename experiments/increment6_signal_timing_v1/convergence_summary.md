@@ -1,6 +1,6 @@
 # increment6_signal_timing_v1 convergence summary
 
-Generated from `convergence_evidence.json` (evidence_version 1, metric_definition_version 2) by `tangle-cli experiment --convergence --summary`. Every number below is that artifact's own.
+Generated from `convergence_evidence.json` (evidence_version 1, metric_definition_version 3) by `tangle-cli experiment --convergence --summary`. Every number below is that artifact's own.
 
 - Spec: `experiments/increment6_signal_timing_v1/experiment.json` (sha256 `1b16413dad58adc4228c039334c2045a405e59836b34ff012881bbd8eb6383db`)
 - Seed bank: `experiments/increment6_signal_timing_v1/seed_bank.json` (sha256 `daeff62dfc8e5db75d23fc700197bd9b203c5719539016799db18a416af6e08f`)

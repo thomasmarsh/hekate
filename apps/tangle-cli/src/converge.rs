@@ -80,7 +80,7 @@
 //! comparison's own [`PairedDistribution`]: the paired mean difference, its
 //! interval, the paired seeds, the seeds the step excludes with both fidelities'
 //! statuses, and both fidelities' `manifest_sha256` lists. Every record
-//! therefore carries `metric_definition_version: 2` and resolves to the run
+//! therefore carries `metric_definition_version: 3` and resolves to the run
 //! manifest at each fidelity, and each fidelity's batch manifest, run
 //! directories, and artifact hashes are recorded once in
 //! [`Convergence::fidelities`].

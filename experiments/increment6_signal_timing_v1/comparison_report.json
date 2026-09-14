@@ -1,6 +1,6 @@
 {
   "report_version": 1,
-  "metric_definition_version": 2,
+  "metric_definition_version": 3,
   "experiment": {
     "experiment_version": 1,
     "id": "increment6_signal_timing_v1",
@@ -29,7 +29,7 @@
   "side_a": "ew_priority",
   "side_b": "ns_priority",
   "links": {
-    "metric_definition_version": 2,
+    "metric_definition_version": 3,
     "manifests": "a record's reported_seeds name the seeds behind its numbers; that variant's runs table maps each seed to its run directory, manifest_sha256, and metrics_sha256, and every manifest lives at <root>/<directory>/manifest.json",
     "paired_difference": "a - b"
   },
@@ -198,7 +198,7 @@
           "slice": "*",
           "metrics": {
             "operational.run.throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -296,7 +296,7 @@
           "slice": "pedestrian",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -394,7 +394,7 @@
           "slice": "vehicle",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -492,7 +492,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -590,7 +590,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -688,7 +688,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -786,7 +786,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -884,7 +884,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -982,7 +982,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "section": "throughput",
               "a": {
@@ -1085,7 +1085,7 @@
           "slice": "*",
           "metrics": {
             "operational.run.mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1177,7 +1177,7 @@
               }
             },
             "operational.run.mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1269,7 +1269,7 @@
               }
             },
             "operational.run.mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1361,7 +1361,7 @@
               }
             },
             "operational.run.total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1453,7 +1453,7 @@
               }
             },
             "operational.run.total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1545,7 +1545,7 @@
               }
             },
             "operational.run.total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1643,7 +1643,7 @@
           "slice": "pedestrian",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1735,7 +1735,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1827,7 +1827,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -1919,7 +1919,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2011,7 +2011,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2103,7 +2103,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2201,7 +2201,7 @@
           "slice": "vehicle",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2293,7 +2293,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2385,7 +2385,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2477,7 +2477,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2569,7 +2569,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2661,7 +2661,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2759,7 +2759,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2851,7 +2851,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -2943,7 +2943,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3035,7 +3035,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3127,7 +3127,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3219,7 +3219,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3317,7 +3317,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3409,7 +3409,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3501,7 +3501,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3593,7 +3593,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3685,7 +3685,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3777,7 +3777,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3875,7 +3875,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -3967,7 +3967,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4059,7 +4059,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4151,7 +4151,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4243,7 +4243,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4335,7 +4335,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4433,7 +4433,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4525,7 +4525,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4617,7 +4617,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4709,7 +4709,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4801,7 +4801,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4893,7 +4893,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -4991,7 +4991,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5083,7 +5083,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5175,7 +5175,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5267,7 +5267,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5359,7 +5359,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5451,7 +5451,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5549,7 +5549,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5641,7 +5641,7 @@
               }
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5733,7 +5733,7 @@
               }
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5825,7 +5825,7 @@
               }
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -5917,7 +5917,7 @@
               }
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -6009,7 +6009,7 @@
               }
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "delay",
               "a": {
@@ -6112,7 +6112,7 @@
           "slice": "*",
           "metrics": {
             "event_counts.by_family.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -6204,7 +6204,7 @@
               }
             },
             "operational.run.maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -6296,7 +6296,7 @@
               }
             },
             "operational.run.maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -6388,7 +6388,7 @@
               }
             },
             "operational.run.mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -6486,7 +6486,7 @@
           "slice": "pedestrian",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -6578,7 +6578,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -6670,7 +6670,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -6762,7 +6762,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -6860,7 +6860,7 @@
           "slice": "vehicle",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -6952,7 +6952,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -7044,7 +7044,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -7136,7 +7136,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -7234,7 +7234,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -7326,7 +7326,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -7418,7 +7418,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -7510,7 +7510,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -7608,7 +7608,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -7700,7 +7700,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -7792,7 +7792,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -7884,7 +7884,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -7982,7 +7982,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -8074,7 +8074,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -8166,7 +8166,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -8258,7 +8258,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -8356,7 +8356,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -8448,7 +8448,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -8540,7 +8540,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -8632,7 +8632,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -8730,7 +8730,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -8822,7 +8822,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -8914,7 +8914,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -9006,7 +9006,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -9104,7 +9104,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "queues",
               "a": {
@@ -9196,7 +9196,7 @@
               }
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -9288,7 +9288,7 @@
               }
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "section": "queues",
               "a": {
@@ -9380,7 +9380,7 @@
               }
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "queues",
               "a": {
@@ -9483,7 +9483,7 @@
           "slice": "*",
           "metrics": {
             "event_counts.by_family.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -9575,7 +9575,7 @@
               }
             },
             "event_counts.by_family_kind.violations.crossed_against_signal": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -9667,7 +9667,7 @@
               }
             },
             "event_counts.by_family_kind.violations.ran_red_light": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -9765,7 +9765,7 @@
           "slice": "pedestrian",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -9863,7 +9863,7 @@
           "slice": "vehicle",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -9961,7 +9961,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -10059,7 +10059,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -10157,7 +10157,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -10255,7 +10255,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -10353,7 +10353,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -10451,7 +10451,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "violations",
               "a": {
@@ -10554,7 +10554,7 @@
           "slice": "*",
           "metrics": {
             "event_counts.by_family.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -10652,7 +10652,7 @@
           "slice": "pedestrian",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -10750,7 +10750,7 @@
           "slice": "vehicle",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -10848,7 +10848,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -10946,7 +10946,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -11044,7 +11044,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -11142,7 +11142,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -11240,7 +11240,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -11338,7 +11338,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "collisions",
               "a": {
@@ -11441,7 +11441,7 @@
           "slice": "*",
           "metrics": {
             "event_counts.by_family.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -11539,7 +11539,7 @@
           "slice": "pedestrian",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -11637,7 +11637,7 @@
           "slice": "vehicle",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -11735,7 +11735,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -11833,7 +11833,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -11931,7 +11931,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -12029,7 +12029,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -12127,7 +12127,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -12225,7 +12225,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "near_misses",
               "a": {
@@ -12328,7 +12328,7 @@
           "slice": "*",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -12426,7 +12426,7 @@
           "slice": "movement:ew_through|movement:ew_through",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -12524,7 +12524,7 @@
           "slice": "movement:ew_through|movement:ns_through",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -12622,7 +12622,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -12693,7 +12693,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -12764,7 +12764,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -12862,7 +12862,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -12960,7 +12960,7 @@
           "slice": "movement:ns_through|movement:ns_through",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13058,7 +13058,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13156,7 +13156,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13254,7 +13254,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13325,7 +13325,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13396,7 +13396,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13497,7 +13497,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13595,7 +13595,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13666,7 +13666,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13737,7 +13737,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13838,7 +13838,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -13909,7 +13909,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -14010,7 +14010,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -14108,7 +14108,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -14206,7 +14206,7 @@
           "slice": "pedestrian_route:west_to_south|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "time_to_collision",
               "a": {
@@ -14309,7 +14309,7 @@
           "slice": "*",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -14407,7 +14407,7 @@
           "slice": "movement:ew_through|movement:ew_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -14505,7 +14505,7 @@
           "slice": "movement:ew_through|movement:ns_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -14603,7 +14603,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -14674,7 +14674,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -14745,7 +14745,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -14843,7 +14843,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -14941,7 +14941,7 @@
           "slice": "movement:ns_through|movement:ns_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15039,7 +15039,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15137,7 +15137,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15235,7 +15235,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15306,7 +15306,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15377,7 +15377,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15478,7 +15478,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15570,7 +15570,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15641,7 +15641,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15712,7 +15712,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15804,7 +15804,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15875,7 +15875,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -15946,7 +15946,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -16047,7 +16047,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -16139,7 +16139,7 @@
           "slice": "pedestrian_route:west_to_south|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "section": "post_encroachment_time",
               "a": {
@@ -16227,7 +16227,7 @@
           "slice": "*",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -16325,7 +16325,7 @@
           "slice": "pedestrian_pedestrian",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -16423,7 +16423,7 @@
           "slice": "vehicle_pedestrian",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -16521,7 +16521,7 @@
           "slice": "vehicle_vehicle",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -16619,7 +16619,7 @@
           "slice": "movement:ew_through|movement:ew_through",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -16717,7 +16717,7 @@
           "slice": "movement:ew_through|movement:ns_through",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -16815,7 +16815,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -16913,7 +16913,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17011,7 +17011,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17109,7 +17109,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17207,7 +17207,7 @@
           "slice": "movement:ns_through|movement:ns_through",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17305,7 +17305,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17403,7 +17403,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17501,7 +17501,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17599,7 +17599,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17697,7 +17697,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17795,7 +17795,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17893,7 +17893,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -17991,7 +17991,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -18089,7 +18089,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -18187,7 +18187,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -18285,7 +18285,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -18383,7 +18383,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -18481,7 +18481,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -18579,7 +18579,7 @@
           "slice": "pedestrian_route:west_to_south|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "section": "minimum_separation",
               "a": {
@@ -18682,7 +18682,7 @@
           "slice": "*",
           "metrics": {
             "event_counts.by_family.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -18774,7 +18774,7 @@
               }
             },
             "event_counts.by_family.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -18866,7 +18866,7 @@
               }
             },
             "event_counts.by_family.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -18958,7 +18958,7 @@
               }
             },
             "event_counts.by_family.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19050,7 +19050,7 @@
               }
             },
             "event_counts.by_family.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19142,7 +19142,7 @@
               }
             },
             "event_counts.by_family.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19234,7 +19234,7 @@
               }
             },
             "event_counts.by_family_kind.control_transitions.crossing_wait": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19326,7 +19326,7 @@
               }
             },
             "event_counts.by_family_kind.control_transitions.signal_stop": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19418,7 +19418,7 @@
               }
             },
             "event_counts.total": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19516,7 +19516,7 @@
           "slice": "pedestrian",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19608,7 +19608,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19700,7 +19700,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19792,7 +19792,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19884,7 +19884,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -19976,7 +19976,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20074,7 +20074,7 @@
           "slice": "vehicle",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20166,7 +20166,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20258,7 +20258,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20350,7 +20350,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20442,7 +20442,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20534,7 +20534,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20632,7 +20632,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20724,7 +20724,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20816,7 +20816,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -20908,7 +20908,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21000,7 +21000,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21092,7 +21092,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21190,7 +21190,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21282,7 +21282,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21374,7 +21374,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21466,7 +21466,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21558,7 +21558,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21650,7 +21650,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21748,7 +21748,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21840,7 +21840,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -21932,7 +21932,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22024,7 +22024,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22116,7 +22116,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22208,7 +22208,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22306,7 +22306,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22398,7 +22398,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22490,7 +22490,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22582,7 +22582,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22674,7 +22674,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22766,7 +22766,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22864,7 +22864,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -22956,7 +22956,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23048,7 +23048,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23140,7 +23140,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23232,7 +23232,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23324,7 +23324,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23422,7 +23422,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23514,7 +23514,7 @@
               }
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23606,7 +23606,7 @@
               }
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23698,7 +23698,7 @@
               }
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23790,7 +23790,7 @@
               }
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {
@@ -23882,7 +23882,7 @@
               }
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "section": "events",
               "a": {

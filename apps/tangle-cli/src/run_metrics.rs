@@ -9,11 +9,11 @@
 //! `manifest.json`, `summary.json`, `events.jsonl.gz`, and
 //! `trajectories.parquet`.
 //!
-//! The artifact carries `metric_definition_version: 2` and the run's
+//! The artifact carries `metric_definition_version: 3` and the run's
 //! `manifest_sha256`, so every number ties back to the versioned definition
-//! ([[DEF-005-metric-definition-v2]], which carries
-//! [[DEF-004-metric-definition-v1]] forward) and to the manifest that produced
-//! it. It holds:
+//! ([[DEF-006-metric-definition-v3]], which carries
+//! [[DEF-005-metric-definition-v2]] and [[DEF-004-metric-definition-v1]]
+//! forward) and to the manifest that produced it. It holds:
 //!
 //! - the run-level interaction-metric minima — minimum time to collision,
 //!   minimum surface separation, and minimum post-encroachment time — each with
@@ -77,14 +77,15 @@ pub const METRICS_FILE: &str = "metrics.json";
 
 /// The metric definition revision this artifact reports.
 ///
-/// Fixed at `2` by [[DEF-005-metric-definition-v2]], which carries metric
-/// definition v1 ([[DEF-004-metric-definition-v1]]) forward unchanged and adds
-/// the operational families — throughput, delay, and queues — that v1
-/// explicitly deferred. A change to any reported metric's name, formula, unit,
-/// applicability, tie-break, or disaggregation key bumps this with the code
-/// change, and an artifact already written stays attributed to the revision that
-/// produced it.
-pub const METRIC_DEFINITION_VERSION: u32 = 2;
+/// Fixed at `3` by [[DEF-006-metric-definition-v3]], which carries metric
+/// definition v2 ([[DEF-005-metric-definition-v2]]) forward unchanged and adds
+/// the close-pass families — the overtaking attempt, commit, completion, and
+/// abort counts and the close-pass observation, minimum-clearance, clearance-
+/// band-duration, and violation families — that v2 did not report. A change to
+/// any reported metric's name, formula, unit, applicability, tie-break, or
+/// disaggregation key bumps this with the code change, and an artifact already
+/// written stays attributed to the revision that produced it.
+pub const METRIC_DEFINITION_VERSION: u32 = 3;
 
 /// The reporting status of one metric value.
 ///

@@ -1,6 +1,6 @@
 {
   "evidence_version": 1,
-  "metric_definition_version": 2,
+  "metric_definition_version": 3,
   "experiment": {
     "experiment_version": 1,
     "id": "increment6_signal_timing_v1",
@@ -265,7 +265,7 @@
           "slice": "*",
           "metrics": {
             "event_counts.by_family.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -335,7 +335,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -405,7 +405,7 @@
               "verdict": "converged"
             },
             "event_counts.by_family.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -475,7 +475,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -545,7 +545,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -615,7 +615,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -685,7 +685,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -755,7 +755,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -825,7 +825,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -895,7 +895,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -965,7 +965,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family_kind.control_transitions.crossing_wait": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -1035,7 +1035,7 @@
               "verdict": "converged"
             },
             "event_counts.by_family_kind.control_transitions.signal_stop": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -1105,7 +1105,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family_kind.violations.crossed_against_signal": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -1175,7 +1175,7 @@
               "verdict": "converged"
             },
             "event_counts.by_family_kind.violations.ran_red_light": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -1245,7 +1245,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.total": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -1315,7 +1315,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -1385,7 +1385,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -1455,7 +1455,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -1525,7 +1525,7 @@
               "verdict": "converged"
             },
             "operational.by_mode.pedestrian.maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -1595,7 +1595,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -1665,7 +1665,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -1735,7 +1735,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -1805,7 +1805,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -1875,7 +1875,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -1945,7 +1945,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -2015,7 +2015,7 @@
               "verdict": "converged"
             },
             "operational.by_mode.pedestrian.total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2085,7 +2085,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2155,7 +2155,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2225,7 +2225,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2295,7 +2295,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -2365,7 +2365,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2435,7 +2435,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2505,7 +2505,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2575,7 +2575,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2645,7 +2645,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -2715,7 +2715,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2785,7 +2785,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2855,7 +2855,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2925,7 +2925,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -2995,7 +2995,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -3065,7 +3065,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -3135,7 +3135,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -3205,7 +3205,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -3275,7 +3275,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -3345,7 +3345,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -3415,7 +3415,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -3485,7 +3485,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -3555,7 +3555,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -3631,7 +3631,7 @@
           "slice": "pedestrian",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -3701,7 +3701,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -3771,7 +3771,7 @@
               "verdict": "converged"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -3841,7 +3841,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -3911,7 +3911,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -3981,7 +3981,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4051,7 +4051,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4121,7 +4121,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4191,7 +4191,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4261,7 +4261,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4337,7 +4337,7 @@
           "slice": "vehicle",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4407,7 +4407,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4477,7 +4477,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4547,7 +4547,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4617,7 +4617,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4687,7 +4687,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4757,7 +4757,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4827,7 +4827,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4897,7 +4897,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -4967,7 +4967,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -5043,7 +5043,7 @@
           "slice": "pedestrian_pedestrian",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -5119,7 +5119,7 @@
           "slice": "vehicle_pedestrian",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -5195,7 +5195,7 @@
           "slice": "vehicle_vehicle",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -5271,7 +5271,7 @@
           "slice": "movement:ew_through|movement:ew_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -5341,7 +5341,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -5411,7 +5411,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -5487,7 +5487,7 @@
           "slice": "movement:ew_through|movement:ns_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -5557,7 +5557,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -5627,7 +5627,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -5703,7 +5703,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -5755,7 +5755,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -5825,7 +5825,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -5883,7 +5883,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -5935,7 +5935,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -6005,7 +6005,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6063,7 +6063,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6133,7 +6133,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -6203,7 +6203,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6279,7 +6279,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6349,7 +6349,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -6419,7 +6419,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6495,7 +6495,7 @@
           "slice": "movement:ns_through|movement:ns_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6565,7 +6565,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -6635,7 +6635,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6711,7 +6711,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6781,7 +6781,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -6851,7 +6851,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6927,7 +6927,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -6997,7 +6997,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -7067,7 +7067,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7143,7 +7143,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7195,7 +7195,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -7265,7 +7265,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7323,7 +7323,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7375,7 +7375,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -7445,7 +7445,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7503,7 +7503,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7564,7 +7564,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -7634,7 +7634,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7710,7 +7710,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7762,7 +7762,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -7832,7 +7832,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7908,7 +7908,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -7960,7 +7960,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -8030,7 +8030,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8088,7 +8088,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8140,7 +8140,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -8210,7 +8210,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8268,7 +8268,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8320,7 +8320,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -8390,7 +8390,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8466,7 +8466,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8518,7 +8518,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -8588,7 +8588,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8646,7 +8646,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8698,7 +8698,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -8768,7 +8768,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8844,7 +8844,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -8905,7 +8905,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -8975,7 +8975,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -9051,7 +9051,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -9121,7 +9121,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -9191,7 +9191,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -9267,7 +9267,7 @@
           "slice": "pedestrian_route:west_to_south|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -9319,7 +9319,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -9389,7 +9389,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -9465,7 +9465,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -9535,7 +9535,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -9605,7 +9605,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -9675,7 +9675,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -9745,7 +9745,7 @@
               "verdict": "converged"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -9815,7 +9815,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -9885,7 +9885,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -9955,7 +9955,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -10025,7 +10025,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -10095,7 +10095,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -10165,7 +10165,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10235,7 +10235,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -10305,7 +10305,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10375,7 +10375,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10445,7 +10445,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10515,7 +10515,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10585,7 +10585,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -10655,7 +10655,7 @@
               "verdict": "materially_sensitive"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10725,7 +10725,7 @@
               "verdict": "converged"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10795,7 +10795,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -10871,7 +10871,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -10941,7 +10941,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11011,7 +11011,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11081,7 +11081,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11151,7 +11151,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11221,7 +11221,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11291,7 +11291,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11361,7 +11361,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11431,7 +11431,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11501,7 +11501,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -11571,7 +11571,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -11641,7 +11641,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -11711,7 +11711,7 @@
               "verdict": "converged"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -11781,7 +11781,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -11851,7 +11851,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -11921,7 +11921,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -11991,7 +11991,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -12061,7 +12061,7 @@
               "verdict": "materially_sensitive"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -12131,7 +12131,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -12201,7 +12201,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -12277,7 +12277,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12347,7 +12347,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12417,7 +12417,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12487,7 +12487,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12557,7 +12557,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12627,7 +12627,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12697,7 +12697,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12767,7 +12767,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12837,7 +12837,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12907,7 +12907,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -12977,7 +12977,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13047,7 +13047,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -13117,7 +13117,7 @@
               "verdict": "converged"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13187,7 +13187,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13257,7 +13257,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13327,7 +13327,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13397,7 +13397,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -13467,7 +13467,7 @@
               "verdict": "converged"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13537,7 +13537,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13607,7 +13607,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -13683,7 +13683,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -13753,7 +13753,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -13823,7 +13823,7 @@
               "verdict": "converged"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -13893,7 +13893,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -13963,7 +13963,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -14033,7 +14033,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -14103,7 +14103,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -14173,7 +14173,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -14243,7 +14243,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -14313,7 +14313,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -14383,7 +14383,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -14453,7 +14453,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -14523,7 +14523,7 @@
               "verdict": "converged"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -14593,7 +14593,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -14663,7 +14663,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -14733,7 +14733,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -14803,7 +14803,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -14873,7 +14873,7 @@
               "verdict": "converged"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -14943,7 +14943,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -15013,7 +15013,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -15089,7 +15089,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15159,7 +15159,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15229,7 +15229,7 @@
               "verdict": "converged"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15299,7 +15299,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15369,7 +15369,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15439,7 +15439,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15509,7 +15509,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15579,7 +15579,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15649,7 +15649,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15719,7 +15719,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -15789,7 +15789,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -15859,7 +15859,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -15929,7 +15929,7 @@
               "verdict": "converged"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -15999,7 +15999,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -16069,7 +16069,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -16139,7 +16139,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -16209,7 +16209,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -16279,7 +16279,7 @@
               "verdict": "materially_sensitive"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -16349,7 +16349,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -16419,7 +16419,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -16495,7 +16495,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -16565,7 +16565,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -16635,7 +16635,7 @@
               "verdict": "converged"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -16705,7 +16705,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -16775,7 +16775,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -16845,7 +16845,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -16915,7 +16915,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -16985,7 +16985,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -17055,7 +17055,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -17125,7 +17125,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -17195,7 +17195,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -17265,7 +17265,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -17335,7 +17335,7 @@
               "verdict": "converged"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -17405,7 +17405,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -17475,7 +17475,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -17545,7 +17545,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -17615,7 +17615,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -17685,7 +17685,7 @@
               "verdict": "materially_sensitive"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -17755,7 +17755,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -17825,7 +17825,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -18149,7 +18149,7 @@
           "slice": "*",
           "metrics": {
             "event_counts.by_family.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18219,7 +18219,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18289,7 +18289,7 @@
               "verdict": "converged"
             },
             "event_counts.by_family.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18359,7 +18359,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18429,7 +18429,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18499,7 +18499,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18569,7 +18569,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18639,7 +18639,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18709,7 +18709,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18779,7 +18779,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18849,7 +18849,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family_kind.control_transitions.crossing_wait": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18919,7 +18919,7 @@
               "verdict": "converged"
             },
             "event_counts.by_family_kind.control_transitions.signal_stop": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -18989,7 +18989,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.by_family_kind.violations.crossed_against_signal": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -19059,7 +19059,7 @@
               "verdict": "converged"
             },
             "event_counts.by_family_kind.violations.ran_red_light": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -19129,7 +19129,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.total": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -19199,7 +19199,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19269,7 +19269,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -19339,7 +19339,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19409,7 +19409,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19479,7 +19479,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -19549,7 +19549,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19619,7 +19619,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19689,7 +19689,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19759,7 +19759,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19829,7 +19829,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -19899,7 +19899,7 @@
               "verdict": "converged"
             },
             "operational.by_mode.pedestrian.total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -19969,7 +19969,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20039,7 +20039,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.pedestrian.total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20109,7 +20109,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20179,7 +20179,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -20249,7 +20249,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20319,7 +20319,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20389,7 +20389,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20459,7 +20459,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20529,7 +20529,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -20599,7 +20599,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20669,7 +20669,7 @@
               "verdict": "converged"
             },
             "operational.by_mode.vehicle.total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20739,7 +20739,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.by_mode.vehicle.total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20809,7 +20809,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -20879,7 +20879,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -20949,7 +20949,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -21019,7 +21019,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -21089,7 +21089,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -21159,7 +21159,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -21229,7 +21229,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -21299,7 +21299,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -21369,7 +21369,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -21439,7 +21439,7 @@
               "verdict": "materially_sensitive"
             },
             "operational.run.total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -21515,7 +21515,7 @@
           "slice": "pedestrian",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -21585,7 +21585,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -21655,7 +21655,7 @@
               "verdict": "converged"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -21725,7 +21725,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -21795,7 +21795,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -21865,7 +21865,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -21935,7 +21935,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22005,7 +22005,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22075,7 +22075,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22145,7 +22145,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22221,7 +22221,7 @@
           "slice": "vehicle",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22291,7 +22291,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22361,7 +22361,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22431,7 +22431,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22501,7 +22501,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22571,7 +22571,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22641,7 +22641,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22711,7 +22711,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22781,7 +22781,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22851,7 +22851,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -22927,7 +22927,7 @@
           "slice": "pedestrian_pedestrian",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -23003,7 +23003,7 @@
           "slice": "vehicle_pedestrian",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -23079,7 +23079,7 @@
           "slice": "vehicle_vehicle",
           "metrics": {
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -23155,7 +23155,7 @@
           "slice": "movement:ew_through|movement:ew_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23225,7 +23225,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -23295,7 +23295,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23371,7 +23371,7 @@
           "slice": "movement:ew_through|movement:ns_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23441,7 +23441,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -23511,7 +23511,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23587,7 +23587,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23639,7 +23639,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -23709,7 +23709,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23767,7 +23767,7 @@
           "slice": "movement:ew_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23819,7 +23819,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -23889,7 +23889,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -23947,7 +23947,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24017,7 +24017,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -24087,7 +24087,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24163,7 +24163,7 @@
           "slice": "movement:ew_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24233,7 +24233,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -24303,7 +24303,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24379,7 +24379,7 @@
           "slice": "movement:ns_through|movement:ns_through",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24449,7 +24449,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -24519,7 +24519,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24595,7 +24595,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24665,7 +24665,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -24735,7 +24735,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24811,7 +24811,7 @@
           "slice": "movement:ns_through|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -24881,7 +24881,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -24951,7 +24951,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25027,7 +25027,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25079,7 +25079,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -25149,7 +25149,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25207,7 +25207,7 @@
           "slice": "movement:ns_through|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25259,7 +25259,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -25329,7 +25329,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25387,7 +25387,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_east",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25439,7 +25439,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -25509,7 +25509,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25585,7 +25585,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25637,7 +25637,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -25707,7 +25707,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25783,7 +25783,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25835,7 +25835,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -25905,7 +25905,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -25963,7 +25963,7 @@
           "slice": "pedestrian_route:south_to_east|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26015,7 +26015,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -26085,7 +26085,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26143,7 +26143,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:south_to_west",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26204,7 +26204,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -26274,7 +26274,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26350,7 +26350,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26402,7 +26402,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -26472,7 +26472,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26530,7 +26530,7 @@
           "slice": "pedestrian_route:south_to_west|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26582,7 +26582,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -26652,7 +26652,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26719,7 +26719,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_north",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26771,7 +26771,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -26841,7 +26841,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26917,7 +26917,7 @@
           "slice": "pedestrian_route:west_to_north|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -26969,7 +26969,7 @@
               "verdict": "inconclusive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -27039,7 +27039,7 @@
               "verdict": "converged"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -27115,7 +27115,7 @@
           "slice": "pedestrian_route:west_to_south|pedestrian_route:west_to_south",
           "metrics": {
             "minimum_post_encroachment_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -27167,7 +27167,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_separation_m": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "metres",
               "tolerance": {
                 "class": "continuous",
@@ -27237,7 +27237,7 @@
               "verdict": "materially_sensitive"
             },
             "minimum_ttc_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -27313,7 +27313,7 @@
           "slice": "movement:ew_through",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27383,7 +27383,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27453,7 +27453,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27523,7 +27523,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27593,7 +27593,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27663,7 +27663,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27733,7 +27733,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27803,7 +27803,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27873,7 +27873,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -27943,7 +27943,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -28013,7 +28013,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28083,7 +28083,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -28153,7 +28153,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28223,7 +28223,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28293,7 +28293,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28363,7 +28363,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28433,7 +28433,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -28503,7 +28503,7 @@
               "verdict": "materially_sensitive"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28573,7 +28573,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28643,7 +28643,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -28719,7 +28719,7 @@
           "slice": "movement:ns_through",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -28789,7 +28789,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -28859,7 +28859,7 @@
               "verdict": "converged"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -28929,7 +28929,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -28999,7 +28999,7 @@
               "verdict": "converged"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -29069,7 +29069,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -29139,7 +29139,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -29209,7 +29209,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -29279,7 +29279,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -29349,7 +29349,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -29419,7 +29419,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -29489,7 +29489,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -29559,7 +29559,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -29629,7 +29629,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -29699,7 +29699,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -29769,7 +29769,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -29839,7 +29839,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -29909,7 +29909,7 @@
               "verdict": "materially_sensitive"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -29979,7 +29979,7 @@
               "verdict": "converged"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -30049,7 +30049,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -30125,7 +30125,7 @@
           "slice": "pedestrian_route:south_to_east",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30195,7 +30195,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30265,7 +30265,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30335,7 +30335,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30405,7 +30405,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30475,7 +30475,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30545,7 +30545,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30615,7 +30615,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30685,7 +30685,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30755,7 +30755,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -30825,7 +30825,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -30895,7 +30895,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -30965,7 +30965,7 @@
               "verdict": "converged"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -31035,7 +31035,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -31105,7 +31105,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -31175,7 +31175,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -31245,7 +31245,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -31315,7 +31315,7 @@
               "verdict": "converged"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -31385,7 +31385,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -31455,7 +31455,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -31531,7 +31531,7 @@
           "slice": "pedestrian_route:south_to_west",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -31601,7 +31601,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -31671,7 +31671,7 @@
               "verdict": "converged"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -31741,7 +31741,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -31811,7 +31811,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -31881,7 +31881,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -31951,7 +31951,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -32021,7 +32021,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -32091,7 +32091,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -32161,7 +32161,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -32231,7 +32231,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32301,7 +32301,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -32371,7 +32371,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32441,7 +32441,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32511,7 +32511,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32581,7 +32581,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32651,7 +32651,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -32721,7 +32721,7 @@
               "verdict": "converged"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32791,7 +32791,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32861,7 +32861,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -32937,7 +32937,7 @@
           "slice": "pedestrian_route:west_to_north",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33007,7 +33007,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33077,7 +33077,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33147,7 +33147,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33217,7 +33217,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33287,7 +33287,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33357,7 +33357,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33427,7 +33427,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33497,7 +33497,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33567,7 +33567,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -33637,7 +33637,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -33707,7 +33707,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -33777,7 +33777,7 @@
               "verdict": "converged"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -33847,7 +33847,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -33917,7 +33917,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -33987,7 +33987,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -34057,7 +34057,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -34127,7 +34127,7 @@
               "verdict": "converged"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -34197,7 +34197,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -34267,7 +34267,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -34343,7 +34343,7 @@
           "slice": "pedestrian_route:west_to_south",
           "metrics": {
             "event_counts.collisions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34413,7 +34413,7 @@
               "verdict": "converged"
             },
             "event_counts.control_transitions": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34483,7 +34483,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.despawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34553,7 +34553,7 @@
               "verdict": "converged"
             },
             "event_counts.near_misses": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34623,7 +34623,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.queue_events": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34693,7 +34693,7 @@
               "verdict": "materially_sensitive"
             },
             "event_counts.region_entries": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34763,7 +34763,7 @@
               "verdict": "converged"
             },
             "event_counts.region_exits": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34833,7 +34833,7 @@
               "verdict": "converged"
             },
             "event_counts.spawns": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34903,7 +34903,7 @@
               "verdict": "converged"
             },
             "event_counts.violations": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -34973,7 +34973,7 @@
               "verdict": "converged"
             },
             "event_counts.yields": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "records",
               "tolerance": {
                 "class": "count",
@@ -35043,7 +35043,7 @@
               "verdict": "converged"
             },
             "maximum_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -35113,7 +35113,7 @@
               "verdict": "materially_sensitive"
             },
             "maximum_queue_length_agents": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents",
               "tolerance": {
                 "class": "count",
@@ -35183,7 +35183,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -35253,7 +35253,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_queue_duration_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -35323,7 +35323,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -35393,7 +35393,7 @@
               "verdict": "materially_sensitive"
             },
             "mean_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -35463,7 +35463,7 @@
               "verdict": "materially_sensitive"
             },
             "throughput_agents_per_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "agents_per_second",
               "tolerance": {
                 "class": "continuous",
@@ -35533,7 +35533,7 @@
               "verdict": "converged"
             },
             "total_control_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -35603,7 +35603,7 @@
               "verdict": "materially_sensitive"
             },
             "total_stopped_delay_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",
@@ -35673,7 +35673,7 @@
               "verdict": "materially_sensitive"
             },
             "total_travel_time_s": {
-              "metric_definition_version": 2,
+              "metric_definition_version": 3,
               "unit": "seconds",
               "tolerance": {
                 "class": "continuous",

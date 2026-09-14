@@ -273,7 +273,7 @@ Aggregate a completed batch into one machine-readable aggregation.json: for ever
 metric the batch's runs report, the across-seed count, mean, spread, and two-sided
 95% Student-t confidence interval, disaggregated by mode pair, by mode, and by
 movement, with every number linked to its run manifest and to
-metric_definition_version 2.
+metric_definition_version 3.
 
 Usage:
   tangle-cli aggregate <BATCH_ROOT> [--output <PATH>]
@@ -307,7 +307,7 @@ comparison proves both sides used that bank in that one seed order, pairs the
 runs by seed, and for every reported metric computes the per-seed difference
 d_i = A(seed_i) - B(seed_i) with its mean and a paired two-sided 95% Student-t
 confidence interval, disaggregated by mode pair, by mode, and by movement and
-linked to both run manifests and to metric_definition_version 2.
+linked to both run manifests and to metric_definition_version 3.
 
 Usage:
   tangle-cli compare --a <BATCH_ROOT> --b <BATCH_ROOT> --seed-bank <FILE> [--output <PATH>]
@@ -1001,7 +1001,7 @@ policy and seed bank, the two sides, the manifest link rule, each variant's
 batch link and seed table, and one record per metric per slice, grouped into the
 gate sections the metric belongs to. A record holds both variants' across-seed
 distributions and the paired difference side_a - side_b, and states
-metric_definition_version 2. A not-applicable or not-observed value is a status
+metric_definition_version 3. A not-applicable or not-observed value is a status
 and a seed list, never a fabricated zero. convergence_report.json holds one
 convergence report per variant over every slice family, and one record per
 selected finding with both variants' across-seed means at each fidelity and the

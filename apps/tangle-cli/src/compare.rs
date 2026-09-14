@@ -17,7 +17,7 @@
 //! method), disaggregated by mode pair (`ModePair`) and by movement — the
 //! `MovementId` / `PedestrianRouteId` union [[DEF-004-metric-definition-v1]]
 //! chose — exactly as the aggregation keys the same slices. Every number links
-//! to both run manifests and to `metric_definition_version: 2`, and the artifact
+//! to both run manifests and to `metric_definition_version: 3`, and the artifact
 //! writes `comparison.json` without touching any run artifact.
 //!
 //! ## Why the paired interval is narrower
