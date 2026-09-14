@@ -300,7 +300,10 @@ impl<B: SessionBackend> TuiSession<B> {
                 | Event::Entry { .. }
                 | Event::Exit { .. }
                 | Event::Queue { .. }
-                | Event::ControlTransition { .. } => {}
+                | Event::ControlTransition { .. }
+                | Event::Maneuver { .. }
+                | Event::FacilityTransition { .. }
+                | Event::OpposingTraversal { .. } => {}
             }
         }
         self.curr = self.sim.snapshot(SnapshotDetail::Full);

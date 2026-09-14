@@ -327,7 +327,7 @@ fn event_stream_round_trips_to_the_canonical_records() {
     assert_eq!(lines.len(), 14);
     assert_eq!(
         lines[0],
-        r#"{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"event_version":2,"seed":0,"step_s":0.05,"ticks":250}"#
+        r#"{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"event_version":3,"seed":0,"step_s":0.05,"ticks":250}"#
     );
     for line in &lines {
         serde_json::from_str::<serde_json::Value>(line).expect("each record is JSON");

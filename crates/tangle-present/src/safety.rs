@@ -100,7 +100,10 @@ impl EventParticipants {
             | Event::Entry { agent, .. }
             | Event::Exit { agent, .. }
             | Event::Queue { agent, .. }
-            | Event::ControlTransition { agent, .. } => vec![agent.get() as usize],
+            | Event::ControlTransition { agent, .. }
+            | Event::Maneuver { agent, .. }
+            | Event::FacilityTransition { agent, .. }
+            | Event::OpposingTraversal { agent, .. } => vec![agent.get() as usize],
         };
         let region = match event {
             Event::Entry { region, .. } | Event::Exit { region, .. } => Some(region),
@@ -277,6 +280,51 @@ pub fn event_summary(record: FrameEvent) -> String {
             control.label(),
             if active { "active" } else { "ended" }
         ),
+        Event::Maneuver {
+            agent,
+            kind,
+            from,
+            to,
+            edge,
+            reason,
+            ..
+        } => format!(
+            "{ticket} maneuver  {}  {}  {} -> {}  {}  reason {}",
+            body(agent.get() as usize),
+            kind.label(),
+            from.label(),
+            to.label(),
+            edge.label(),
+            reason.label()
+        ),
+        Event::FacilityTransition {
+            agent,
+            from_facility,
+            to_facility,
+            via,
+            permitted,
+            ..
+        } => format!(
+            "{ticket} transition  {}  facility {} -> {}  {}  permitted {permitted}",
+            body(agent.get() as usize),
+            from_facility.get(),
+            to_facility.get(),
+            via.label()
+        ),
+        Event::OpposingTraversal {
+            agent,
+            facility,
+            reason,
+            violating,
+            entering,
+            ..
+        } => format!(
+            "{ticket} opposing {}  {}  facility {}  reason {}  violating {violating}",
+            if entering { "began" } else { "ended" },
+            body(agent.get() as usize),
+            facility.get(),
+            reason.label()
+        ),
     }
 }
 
@@ -413,7 +461,10 @@ impl SafetyOverlay {
                 | Event::Yielded { .. }
                 | Event::Collision { .. }
                 | Event::NearMiss { .. }
-                | Event::Violation { .. } => {}
+                | Event::Violation { .. }
+                | Event::Maneuver { .. }
+                | Event::FacilityTransition { .. }
+                | Event::OpposingTraversal { .. } => {}
             }
         }
         self.prune(tick);

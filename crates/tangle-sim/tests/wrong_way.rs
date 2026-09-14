@@ -717,7 +717,7 @@ fn queue_scenario(reference: QueueReference, rate_per_hour: f64) -> String {
 
 /// The documented within-tick order key of one record, as
 /// [`Event::order_key`] reports it.
-type OrderKey = (u32, u8, u8, u32, u8);
+type OrderKey = (u32, u8, u8, u32, u32, u32, u32, u32);
 
 /// Arc length of the crossing region's entry as the forward-reference queue
 /// approaches it, and as the reverse-reference queue does. Each fixture places

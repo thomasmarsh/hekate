@@ -263,6 +263,55 @@ struct EventRecord {
     region_kind: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     region: Option<u32>,
+    // The increment-2 records append their own fields here, in the contract's
+    // payload order and sorted so every variant's own fields stay in that
+    // order, so no version-2 line changes byte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maneuver_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edge: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    partner: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_facility: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_facility: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_offset_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from_facility: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to_facility: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from_direction: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to_direction: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    side: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    s_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permitted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    facility: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    movement: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    direction: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nominal_direction: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    perceived_rule: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    violating: Option<bool>,
 }
 
 /// A record with every field empty but the ones this variant owns.
@@ -290,6 +339,29 @@ impl EventRecord {
             control: None,
             region_kind: None,
             region: None,
+            maneuver_kind: None,
+            from: None,
+            to: None,
+            edge: None,
+            partner: None,
+            source_facility: None,
+            target_facility: None,
+            target_offset_m: None,
+            from_facility: None,
+            to_facility: None,
+            from_direction: None,
+            to_direction: None,
+            via: None,
+            side: None,
+            s_m: None,
+            d_m: None,
+            permitted: None,
+            facility: None,
+            movement: None,
+            direction: None,
+            nominal_direction: None,
+            perceived_rule: None,
+            violating: None,
         }
     }
 
@@ -375,6 +447,75 @@ impl EventRecord {
                 active: Some(active),
                 ..Self::empty(tick, "control_transition", agent.get())
             },
+            Event::Maneuver {
+                agent,
+                kind,
+                from,
+                to,
+                edge,
+                partner,
+                source_facility,
+                target_facility,
+                target_offset_m,
+                side,
+                reason,
+            } => Self {
+                maneuver_kind: Some(kind.label()),
+                from: Some(from.label()),
+                to: Some(to.label()),
+                edge: Some(edge.label()),
+                partner: partner.map(|partner| partner.get()),
+                source_facility: Some(source_facility.get()),
+                target_facility: target_facility.map(|facility| facility.get()),
+                target_offset_m: Some(target_offset_m),
+                side: Some(side.label()),
+                reason: Some(reason.label()),
+                ..Self::empty(tick, "maneuver", agent.get())
+            },
+            Event::FacilityTransition {
+                agent,
+                from_facility,
+                to_facility,
+                from_direction,
+                to_direction,
+                via,
+                side,
+                s_m,
+                d_m,
+                permitted,
+            } => Self {
+                from_facility: Some(from_facility.get()),
+                to_facility: Some(to_facility.get()),
+                from_direction: Some(from_direction.label()),
+                to_direction: Some(to_direction.label()),
+                via: Some(via.label()),
+                side: Some(side.label()),
+                s_m: Some(s_m),
+                d_m: Some(d_m),
+                permitted: Some(permitted),
+                ..Self::empty(tick, "facility_transition", agent.get())
+            },
+            Event::OpposingTraversal {
+                agent,
+                facility,
+                movement,
+                direction,
+                nominal_direction,
+                perceived_rule,
+                reason,
+                violating,
+                entering,
+            } => Self {
+                facility: Some(facility.get()),
+                movement: movement.map(|movement| movement.get()),
+                direction: Some(direction.label()),
+                nominal_direction: Some(nominal_direction.label()),
+                perceived_rule: perceived_rule.map(|rule| rule.label()),
+                reason: Some(reason.label()),
+                violating: Some(violating),
+                entering: Some(entering),
+                ..Self::empty(tick, "opposing_traversal", agent.get())
+            },
         }
     }
 }
@@ -450,7 +591,7 @@ mod tests {
         assert!(trace.bytes().ends_with(b"\n"));
         assert_eq!(
             lines[0],
-            r#"{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"event_version":2,"seed":0,"step_s":0.05,"ticks":250}"#
+            r#"{"kind":"run","scenario_id":"walking_guide_v1","schema_version":1,"event_version":3,"seed":0,"step_s":0.05,"ticks":250}"#
         );
         assert_eq!(
             *lines.last().expect("footer"),
@@ -512,12 +653,18 @@ mod tests {
     /// serializes as `null`.
     #[test]
     fn each_record_shape_serializes_its_own_fields_in_order() {
-        use tangle_model::{ConflictRegionId, CrossingId, PathId};
-        use tangle_sim::{AgentId, AgentMode, ControlTransitionKind, RegionKey, ViolationKind};
+        use tangle_model::{
+            ConflictRegionId, CrossingId, FacilityId, MovementDirection, MovementId,
+            NominalDirection, PathId, PermissionEffect, TacticKind,
+        };
+        use tangle_sim::{
+            AgentId, AgentMode, ControlTransitionKind, ManeuverEdge, ManeuverReasonCode,
+            ManeuverState, PassSide, RegionKey, TransitionKind, ViolationKind, WrongWayReason,
+        };
 
         let agent = AgentId::from_index(3);
         let partner = AgentId::from_index(7);
-        let cases: [(&str, Event); 10] = [
+        let cases: [(&str, Event); 13] = [
             (
                 "spawned",
                 Event::Spawned {
@@ -597,6 +744,51 @@ mod tests {
                     active: true,
                 },
             ),
+            (
+                "maneuver",
+                Event::Maneuver {
+                    agent,
+                    kind: TacticKind::Overtake,
+                    from: ManeuverState::Following,
+                    to: ManeuverState::Preparing,
+                    edge: ManeuverEdge::Attempted,
+                    partner: Some(partner),
+                    source_facility: FacilityId::from_index(2),
+                    target_facility: Some(FacilityId::from_index(3)),
+                    target_offset_m: 2.6,
+                    side: PassSide::Left,
+                    reason: ManeuverReasonCode::SlowerLeader,
+                },
+            ),
+            (
+                "facility_transition",
+                Event::FacilityTransition {
+                    agent,
+                    from_facility: FacilityId::from_index(1),
+                    to_facility: FacilityId::from_index(2),
+                    from_direction: MovementDirection::Forward,
+                    to_direction: MovementDirection::Reverse,
+                    via: TransitionKind::Lateral,
+                    side: PassSide::Right,
+                    s_m: 30.5,
+                    d_m: -1.25,
+                    permitted: false,
+                },
+            ),
+            (
+                "opposing_traversal",
+                Event::OpposingTraversal {
+                    agent,
+                    facility: FacilityId::from_index(3),
+                    movement: Some(MovementId::from_index(4)),
+                    direction: MovementDirection::Reverse,
+                    nominal_direction: NominalDirection::Forward,
+                    perceived_rule: Some(PermissionEffect::Prohibit),
+                    reason: WrongWayReason::NoncompliantChoice,
+                    violating: true,
+                    entering: false,
+                },
+            ),
         ];
 
         for (name, event) in cases {
@@ -623,6 +815,15 @@ mod tests {
                 "exit" => Some(r#""region_kind":"conflict_region","region":4"#),
                 "queue" => Some(r#""joined":true"#),
                 "control_transition" => Some(r#""active":true,"control":"crossing_wait""#),
+                "maneuver" => Some(
+                    r#""reason":"slower_leader","maneuver_kind":"overtake","from":"following","to":"preparing","edge":"attempted","partner":7,"source_facility":2,"target_facility":3,"target_offset_m":2.6,"side":"left""#,
+                ),
+                "facility_transition" => Some(
+                    r#""from_facility":1,"to_facility":2,"from_direction":"forward","to_direction":"reverse","via":"lateral","side":"right","s_m":30.5,"d_m":-1.25,"permitted":false"#,
+                ),
+                "opposing_traversal" => Some(
+                    r#""reason":"noncompliant_choice","entering":false,"facility":3,"movement":4,"direction":"reverse","nominal_direction":"forward","perceived_rule":"prohibit","violating":true"#,
+                ),
                 _ => None,
             };
             let expected = expected.expect("every variant has a case");

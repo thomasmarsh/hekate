@@ -1,4 +1,4 @@
-{"kind":"run","scenario_id":"four_leg_pedestrian_ew_priority_v1","schema_version":1,"event_version":2,"seed":1,"step_s":0.05,"ticks":1200}
+{"kind":"run","scenario_id":"four_leg_pedestrian_ew_priority_v1","schema_version":1,"event_version":3,"seed":1,"step_s":0.05,"ticks":1200}
 {"kind":"event","tick":9,"event":"spawned","agent":0,"path":0,"distance_m":0.0,"mode":"vehicle"}
 {"kind":"event","tick":13,"event":"spawned","agent":1,"path":1,"distance_m":0.0,"mode":"vehicle"}
 {"kind":"event","tick":14,"event":"control_transition","agent":1,"active":true,"control":"signal_stop"}

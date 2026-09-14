@@ -582,6 +582,16 @@ pub enum MovementDirection {
     Reverse,
 }
 
+impl MovementDirection {
+    /// Short stable label for inspectors and traces.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Reverse => "reverse",
+        }
+    }
+}
+
 /// A version-2 movement connector with an explicit nominal direction.
 ///
 /// Every version-1 movement field is carried forward unchanged; version 2 adds
@@ -668,6 +678,21 @@ pub enum TacticKind {
     Pass,
     /// Select a traversal against the applicable nominal direction.
     ReverseDirection,
+}
+
+impl TacticKind {
+    /// Short stable label for inspectors and traces.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Follow => "follow",
+            Self::Stop => "stop",
+            Self::Yield => "yield",
+            Self::ChangeLane => "change_lane",
+            Self::Overtake => "overtake",
+            Self::Pass => "pass",
+            Self::ReverseDirection => "reverse_direction",
+        }
+    }
 }
 
 /// Traversable object kind a version-2 mode may use.
@@ -958,6 +983,17 @@ pub enum PermissionEffect {
     Prohibit,
     /// The holder must do it.
     Obligate,
+}
+
+impl PermissionEffect {
+    /// Short stable label for inspectors and traces.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Permit => "permit",
+            Self::Prohibit => "prohibit",
+            Self::Obligate => "obligate",
+        }
+    }
 }
 
 /// One authored permission or obligation statement.

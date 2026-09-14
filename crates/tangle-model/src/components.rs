@@ -291,6 +291,17 @@ pub enum NominalDirection {
     Either,
 }
 
+impl NominalDirection {
+    /// Short stable label for inspectors and traces.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Reverse => "reverse",
+            Self::Either => "either",
+        }
+    }
+}
+
 /// The speed policy an agent's access imposes on its travel.
 ///
 /// The policy is the enforced limit, which is separate from the agent's

@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:12Z
+updated: 2026-09-14T17:07:56Z
 summary: Version maneuver lifecycle, rule, boundary, and transition events across trace and replay.
-next: [[TAS-119-add-the-maneuver-event-payloads-and-bump-event-v]]
+next: [[TAS-120-emit-maneuver-events-edge-triggered-with-stable]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].

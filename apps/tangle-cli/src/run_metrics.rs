@@ -963,6 +963,12 @@ fn counted_family(event: &Event) -> Option<(EventFamily, Option<&'static str>)> 
         Event::Yielded { yielding, .. } => yielding.then_some((EventFamily::Yields, None)),
         Event::Spawned { .. } => Some((EventFamily::Spawns, None)),
         Event::Despawned { .. } => Some((EventFamily::Despawns, None)),
+        // The increment-2 maneuver and rule records carry no metric definition
+        // v1 family: the overtaking, close-pass, and wrong-way families are the
+        // additive increment-2 union, counted by their own leaf.
+        Event::Maneuver { .. }
+        | Event::FacilityTransition { .. }
+        | Event::OpposingTraversal { .. } => None,
     }
 }
 
@@ -978,7 +984,10 @@ const fn event_agent(event: Event) -> AgentId {
         | Event::Entry { agent, .. }
         | Event::Exit { agent, .. }
         | Event::Queue { agent, .. }
-        | Event::ControlTransition { agent, .. } => agent,
+        | Event::ControlTransition { agent, .. }
+        | Event::Maneuver { agent, .. }
+        | Event::FacilityTransition { agent, .. }
+        | Event::OpposingTraversal { agent, .. } => agent,
     }
 }
 

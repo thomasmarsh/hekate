@@ -4,7 +4,7 @@
 //!
 //! [`Event`] is one closed union that both modes emit through, and
 //! [`EVENT_VERSION`] describes the union as a whole: a consumer that keys on the
-//! version may rely on the full variant set below, not on a subset. Two
+//! version may rely on the full variant set below, not on a subset. Three
 //! families live in it:
 //!
 //! - lifecycle records that carry dense identifiers — [`Event::Spawned`],
@@ -13,7 +13,14 @@
 //! - safety records produced by the tick's body scan
 //!   ([`crate::safety`]) — [`Event::Collision`], [`Event::NearMiss`],
 //!   [`Event::Violation`], [`Event::Entry`], [`Event::Exit`], and
-//!   [`Event::Queue`].
+//!   [`Event::Queue`];
+//! - maneuver and rule records of the state changes the maneuver and wrong-way
+//!   stages already own — [`Event::Maneuver`], [`Event::FacilityTransition`],
+//!   and [`Event::OpposingTraversal`], whose `reason` fields are the closed code
+//!   sets [`ManeuverReasonCode`] and [`crate::WrongWayReason`]. A run whose
+//!   scenario authors no lateral, transition, or opposing-traversal shape emits
+//!   none of them, so a Phase 1 or Increment 1 stream is unchanged apart from the
+//!   recorded [`EVENT_VERSION`].
 //!
 //! # Within-tick order
 //!
@@ -21,13 +28,15 @@
 //! hash-map iteration or on the order emission points happen to run. Every
 //! record carries [`Event::order_key`]; a step sorts its buffer by that key, so
 //! a consumer sees ascending [`AgentId`] first, then ascending event kind
-//! ([`EventKind::order`]), then the variant's own stable key (its partner agent,
-//! crossing, region, path, or sub-kind), and finally the record's edge flag
-//! (`yielding`, `contacting`, `entering`, `joined`, `active`, or a violation or
-//! control kind). The sort is stable, so two records that agree on all of that
-//! are the same variant with the same key, which the once-per-transition
-//! lifecycle forbids; a residual tie can therefore only be two identical
-//! records, and their relative order is the kernel's emission order.
+//! ([`EventKind::order`]), then the variant's own stable key — up to five
+//! ascending components in the contract's order, so a partner agent, crossing,
+//! region, path, tactic, facility, movement, or state edge can all carry one —
+//! and finally the record's edge flag (`yielding`, `contacting`, `entering`,
+//! `joined`, `active`, or a violation or control kind). The sort is stable, so
+//! two records that agree on all of that are the same variant with the same
+//! key, which the once-per-transition lifecycle forbids; a residual tie can
+//! therefore only be two identical records, and their relative order is the
+//! kernel's emission order.
 //!
 //! # Emission lifecycle
 //!
@@ -45,10 +54,22 @@
 //! - [`Event::Violation`] emits once per recorded noncompliant crossing action
 //!   (a red-light run or a crossing against a forbidding signal), reusing the
 //!   decision state the kernel already records.
+//! - [`Event::Maneuver`] emits once per legal maneuver state-machine edge,
+//!   [`Event::FacilityTransition`] once per recorded facility handoff, and
+//!   [`Event::OpposingTraversal`] once when an opposing-traversal interval opens
+//!   and once when it closes; each reads a state change the maneuver and
+//!   wrong-way stages already record, so a retry cannot duplicate one.
 
-use tangle_model::{ConflictRegionId, CrossingId, PathId};
+use tangle_model::{
+    ConflictRegionId, CrossingId, FacilityId, MovementDirection, MovementId, NominalDirection,
+    PathId, PermissionEffect, TacticKind,
+};
 
 use crate::agent::{AgentId, AgentMode};
+use crate::stage::{
+    ManeuverAbortReason, ManeuverEdge, ManeuverReason, ManeuverState, PassSide, TransitionKind,
+};
+use crate::wrong_way::WrongWayReason;
 
 /// Version of the typed event schema emitted by this build.
 ///
@@ -63,7 +84,15 @@ use crate::agent::{AgentId, AgentMode};
 /// typed safety and control variants ([`Event::Collision`],
 /// [`Event::NearMiss`], [`Event::Violation`], [`Event::Entry`], [`Event::Exit`],
 /// [`Event::Queue`], and [`Event::ControlTransition`]).
-pub const EVENT_VERSION: u32 = 2;
+///
+/// Version 3 adds the maneuver and rule records [`Event::Maneuver`],
+/// [`Event::FacilityTransition`], and [`Event::OpposingTraversal`] with the
+/// closed reason set [`ManeuverReasonCode`]. No existing variant gains or loses
+/// a field, changes meaning, or changes its [`EventKind::order`] position, so a
+/// version-2 trace stays readable apart from the recorded version. This is the
+/// union's one bump: the increment's fourth record, a close-pass observation,
+/// lands under this same version rather than bumping again.
+pub const EVENT_VERSION: u32 = 3;
 
 /// Why an agent left the simulation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +128,12 @@ pub enum EventKind {
     Queue,
     /// A recorded controller state changed.
     ControlTransition,
+    /// An agent transitioned between two documented maneuver states.
+    Maneuver,
+    /// An agent handed off between two facilities.
+    FacilityTransition,
+    /// An agent opened or closed an opposing traversal of a facility.
+    OpposingTraversal,
 }
 
 impl EventKind {
@@ -196,6 +231,102 @@ impl ControlTransitionKind {
         match self {
             Self::SignalStop => "signal_stop",
             Self::CrossingWait => "crossing_wait",
+        }
+    }
+}
+
+/// The closed code set an [`Event::Maneuver`] records as its reason.
+///
+/// `docs/schema-v2-contract.md` *Increment 2 events and metrics* fixes one
+/// closed `ManeuverReason` set covering both the eligibility rejections a
+/// lateral tactic reports and the terminations of a maneuver already in flight.
+/// The two source enums already spell those codes —
+/// [`crate::ManeuverReason`] carries the selection and rejection codes,
+/// [`crate::ManeuverAbortReason`] the termination codes — so this set is the one
+/// event surface they map into, and no code has a second spelling.
+/// [`Self::Settled`] is the completing edge's own reason, which no source enum
+/// records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ManeuverReasonCode {
+    /// Selection: a visible slower leader ahead is the obstacle the pass
+    /// displaces around.
+    SlowerLeader,
+    /// Rejection: the mode's compiled tactics carry no `pass` or `overtake`
+    /// capability.
+    Capability,
+    /// Rejection: an applicable `overtake` statement prohibits passing, or the
+    /// facility offers no lateral maneuver target.
+    NoPermission,
+    /// Rejection: no visible slower leader, or no route benefit from passing
+    /// one, or the leader is beyond the maneuver reach.
+    NoBenefit,
+    /// Rejection: the facility is too narrow for the pass on the selected side.
+    InsufficientWidth,
+    /// Rejection: the mode declares no lateral target clearance or horizon, or
+    /// the candidate corridor predicts infeasible over the horizon.
+    NoCorridor,
+    /// Rejection or termination: the crossing would enter a traversal the
+    /// applicable rule does not permit.
+    BoundaryForbidden,
+    /// Termination: the claim was rejected by arbitration; the loser aborts.
+    ClaimRejected,
+    /// Termination: the passed body disappeared under an active maneuver.
+    TargetLost,
+    /// Termination: the hold timeout elapsed without a grant.
+    HoldTimeout,
+    /// Termination: the candidate corridor became infeasible.
+    CorridorInfeasible,
+    /// Termination: the predicted swept clearance fell below the commit policy's
+    /// minimum after commitment.
+    ClearanceLost,
+    /// Completion: the maneuver reached its target offset and settled.
+    Settled,
+}
+
+impl ManeuverReasonCode {
+    /// Short stable label for traces and inspectors, the contract's code.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SlowerLeader => "slower_leader",
+            Self::Capability => "capability",
+            Self::NoPermission => "no_permission",
+            Self::NoBenefit => "no_benefit",
+            Self::InsufficientWidth => "insufficient_width",
+            Self::NoCorridor => "no_corridor",
+            Self::BoundaryForbidden => "boundary_forbidden",
+            Self::ClaimRejected => "claim_rejected",
+            Self::TargetLost => "target_lost",
+            Self::HoldTimeout => "hold_timeout",
+            Self::CorridorInfeasible => "corridor_infeasible",
+            Self::ClearanceLost => "clearance_lost",
+            Self::Settled => "settled",
+        }
+    }
+}
+
+impl From<ManeuverReason> for ManeuverReasonCode {
+    fn from(reason: ManeuverReason) -> Self {
+        match reason {
+            ManeuverReason::SlowerLeader => Self::SlowerLeader,
+            ManeuverReason::Capability => Self::Capability,
+            ManeuverReason::NoPermission => Self::NoPermission,
+            ManeuverReason::NoBenefit => Self::NoBenefit,
+            ManeuverReason::InsufficientWidth => Self::InsufficientWidth,
+            ManeuverReason::NoCorridor => Self::NoCorridor,
+            ManeuverReason::BoundaryForbidden => Self::BoundaryForbidden,
+        }
+    }
+}
+
+impl From<ManeuverAbortReason> for ManeuverReasonCode {
+    fn from(reason: ManeuverAbortReason) -> Self {
+        match reason {
+            ManeuverAbortReason::ClaimRejected => Self::ClaimRejected,
+            ManeuverAbortReason::TargetLost => Self::TargetLost,
+            ManeuverAbortReason::HoldTimeout => Self::HoldTimeout,
+            ManeuverAbortReason::CorridorInfeasible => Self::CorridorInfeasible,
+            ManeuverAbortReason::ClearanceLost => Self::ClearanceLost,
+            ManeuverAbortReason::BoundaryForbidden => Self::BoundaryForbidden,
         }
     }
 }
@@ -343,6 +474,99 @@ pub enum Event {
         /// `true` when the state began, `false` when it ended.
         active: bool,
     },
+    /// An agent transitioned between two documented maneuver states.
+    ///
+    /// Emitted once per legal maneuver state-machine edge, at the step the
+    /// transition happens. The record names the tactic the maneuver belongs to,
+    /// both states and the edge between them, the passed body when the maneuver
+    /// displaces around one, the facility traversals and the target offset, and
+    /// why the edge happened, so an observer reads the whole attempt without a
+    /// trajectory sample.
+    Maneuver {
+        /// The maneuvering agent.
+        agent: AgentId,
+        /// Which tactic the maneuver belongs to.
+        kind: TacticKind,
+        /// The state the maneuver left.
+        from: ManeuverState,
+        /// The state it entered.
+        to: ManeuverState,
+        /// Which documented edge it took.
+        edge: ManeuverEdge,
+        /// The body the maneuver displaces around, absent for a maneuver that
+        /// targets an offset rather than a body.
+        partner: Option<AgentId>,
+        /// The facility traversal the maneuver started on.
+        source_facility: FacilityId,
+        /// The facility the maneuver targets, absent for a same-facility
+        /// maneuver.
+        target_facility: Option<FacilityId>,
+        /// Target signed offset in metres, in the agent's own travel frame.
+        target_offset_m: f64,
+        /// The side the displacement claims, in the agent's own travel frame.
+        side: PassSide,
+        /// Why the edge happened.
+        reason: ManeuverReasonCode,
+    },
+    /// An agent handed off between two facilities.
+    ///
+    /// Emitted once per handoff at the handoff step, from the record the kernel
+    /// already produces, so the event and [`crate::FacilityTransitionRecord`]
+    /// never disagree. `permitted: false` is the forbidden-boundary fact: the
+    /// agent crossed into a traversal the applicable rule does not permit.
+    FacilityTransition {
+        /// The agent that changed facility.
+        agent: AgentId,
+        /// The facility the agent left.
+        from_facility: FacilityId,
+        /// The facility the agent entered.
+        to_facility: FacilityId,
+        /// The traversal direction it travelled on the facility it left.
+        from_direction: MovementDirection,
+        /// The traversal direction it travels on the facility it entered.
+        to_direction: MovementDirection,
+        /// Which geometric handoff it took.
+        via: TransitionKind,
+        /// The side of the crossing in the agent's own travel frame.
+        side: PassSide,
+        /// Route progress in metres at the handoff, on the facility it left.
+        s_m: f64,
+        /// Signed lateral offset in metres at the handoff, in the agent's own
+        /// travel frame on the facility it left.
+        d_m: f64,
+        /// Whether the applicable rule permitted the destination traversal.
+        permitted: bool,
+    },
+    /// An agent opened or closed an opposing traversal of a facility.
+    ///
+    /// Emitted once when the interval opens and once when it closes, from the
+    /// wrong-way decision the kernel already records. `reason` is the decision's
+    /// own reason and `perceived_rule` the permission statement the agent acted
+    /// under, absent when no statement applies. A permitted or obligated
+    /// opposing traversal is a legal traversal: it is recorded with
+    /// `violating: false` and never counted as a violation.
+    OpposingTraversal {
+        /// The traversing agent.
+        agent: AgentId,
+        /// The facility traversed against its rule direction.
+        facility: FacilityId,
+        /// The movement connector it entered on, absent for a facility
+        /// traversal.
+        movement: Option<MovementId>,
+        /// The direction the agent actually travels.
+        direction: MovementDirection,
+        /// The facility's authored nominal direction.
+        nominal_direction: NominalDirection,
+        /// The permission statement the agent acted under, absent when none
+        /// applies.
+        perceived_rule: Option<PermissionEffect>,
+        /// Why the decision selected the opposing option.
+        reason: WrongWayReason,
+        /// `true` for a traversal the applicable rule does not permit.
+        violating: bool,
+        /// `true` when the interval opened, `false` when it closed.
+        entering: bool,
+    },
 }
 
 impl Event {
@@ -360,7 +584,10 @@ impl Event {
             | Self::Entry { agent, .. }
             | Self::Exit { agent, .. }
             | Self::Queue { agent, .. }
-            | Self::ControlTransition { agent, .. } => agent,
+            | Self::ControlTransition { agent, .. }
+            | Self::Maneuver { agent, .. }
+            | Self::FacilityTransition { agent, .. }
+            | Self::OpposingTraversal { agent, .. } => agent,
         }
     }
 
@@ -377,51 +604,299 @@ impl Event {
             Self::Exit { .. } => EventKind::Exit,
             Self::Queue { .. } => EventKind::Queue,
             Self::ControlTransition { .. } => EventKind::ControlTransition,
+            Self::Maneuver { .. } => EventKind::Maneuver,
+            Self::FacilityTransition { .. } => EventKind::FacilityTransition,
+            Self::OpposingTraversal { .. } => EventKind::OpposingTraversal,
         }
     }
 
     /// The documented within-tick order key of this record.
     ///
-    /// The fields are, in order: the ascending [`AgentId`] the record is about,
-    /// the ascending [`EventKind::order`], a tag that separates the variant's
-    /// key space, the variant's own stable key (partner agent, crossing, region,
-    /// path, or sub-kind), and the record's edge flag. A step sorts its buffer
+    /// The slots are compared in order: the ascending [`AgentId`] the record is
+    /// about, the ascending [`EventKind::order`], a tag that separates the
+    /// variant's key space, then the variant's own stable key in up to five
+    /// ascending components, the last of which is the record's edge flag. A key
+    /// component that names a tactic, maneuver state, or maneuver edge is that
+    /// enum's declaration order, which is the contract's kind, state-machine,
+    /// and edge order, and an optional component is ordered by [`facility_key`]'s
+    /// rule. A step sorts its buffer
     /// by this key, so a consumer can assert the documented order directly. See
     /// the module docs for why a residual tie can only be two identical records.
-    pub const fn order_key(self) -> (u32, u8, u8, u32, u8) {
+    pub const fn order_key(self) -> (u32, u8, u8, u32, u32, u32, u32, u32) {
         let kind = self.kind().order();
         match self {
-            Self::Spawned { agent, path, .. } => (agent.get(), kind, 0, path.get(), 0),
-            Self::Despawned { agent, path, .. } => (agent.get(), kind, 0, path.get(), 0),
+            Self::Spawned { agent, path, .. } => (agent.get(), kind, 0, path.get(), 0, 0, 0, 0),
+            Self::Despawned { agent, path, .. } => (agent.get(), kind, 0, path.get(), 0, 0, 0, 0),
             Self::Yielded {
                 agent,
                 crossing,
                 yielding,
-            } => (agent.get(), kind, 0, crossing.get(), yielding as u8),
+            } => (
+                agent.get(),
+                kind,
+                0,
+                crossing.get(),
+                yielding as u32,
+                0,
+                0,
+                0,
+            ),
             Self::Collision {
                 agent,
                 other,
                 contacting,
                 ..
-            } => (agent.get(), kind, 0, other.get(), contacting as u8),
+            } => (
+                agent.get(),
+                kind,
+                0,
+                other.get(),
+                contacting as u32,
+                0,
+                0,
+                0,
+            ),
             Self::NearMiss {
                 agent,
                 other,
                 entering,
                 ..
-            } => (agent.get(), kind, 0, other.get(), entering as u8),
+            } => (agent.get(), kind, 0, other.get(), entering as u32, 0, 0, 0),
             Self::Violation {
                 agent,
                 kind: breach,
-            } => (agent.get(), kind, 0, breach.order() as u32, 0),
-            Self::Entry { agent, region } => (agent.get(), kind, region.tag(), region.get(), 0),
-            Self::Exit { agent, region } => (agent.get(), kind, region.tag(), region.get(), 0),
-            Self::Queue { agent, joined } => (agent.get(), kind, 0, 0, joined as u8),
+            } => (agent.get(), kind, 0, breach.order() as u32, 0, 0, 0, 0),
+            Self::Entry { agent, region } => {
+                (agent.get(), kind, region.tag(), region.get(), 0, 0, 0, 0)
+            }
+            Self::Exit { agent, region } => {
+                (agent.get(), kind, region.tag(), region.get(), 0, 0, 0, 0)
+            }
+            Self::Queue { agent, joined } => (agent.get(), kind, 0, 0, joined as u32, 0, 0, 0),
             Self::ControlTransition {
                 agent,
                 control,
                 active,
-            } => (agent.get(), kind, 0, control.order() as u32, active as u8),
+            } => (
+                agent.get(),
+                kind,
+                0,
+                control.order() as u32,
+                active as u32,
+                0,
+                0,
+                0,
+            ),
+            // The increment-2 keys of *Ordering*: the tactic, the target
+            // facility, both states, and the edge; then the two facilities of a
+            // handoff; then the facility, movement, and interval edge of an
+            // opposing traversal.
+            Self::Maneuver {
+                agent,
+                kind: tactic,
+                target_facility,
+                from,
+                to,
+                edge,
+                ..
+            } => (
+                agent.get(),
+                kind,
+                0,
+                tactic as u32,
+                facility_key(target_facility),
+                from as u32,
+                to as u32,
+                edge as u32,
+            ),
+            Self::FacilityTransition {
+                agent,
+                from_facility,
+                to_facility,
+                ..
+            } => (
+                agent.get(),
+                kind,
+                0,
+                from_facility.get(),
+                to_facility.get(),
+                0,
+                0,
+                0,
+            ),
+            Self::OpposingTraversal {
+                agent,
+                facility,
+                movement,
+                entering,
+                ..
+            } => (
+                agent.get(),
+                kind,
+                0,
+                facility.get(),
+                movement_key(movement),
+                entering as u32,
+                0,
+                0,
+            ),
         }
+    }
+}
+
+/// The order-key component of an optional facility.
+///
+/// An absent component is `0` and a present one its dense index plus one, so an
+/// absent component orders before every present one, exactly as `Option`'s own
+/// order does. A dense index is an array position, so it cannot reach
+/// `u32::MAX` and the two encodings stay distinct.
+const fn facility_key(facility: Option<FacilityId>) -> u32 {
+    match facility {
+        Some(facility) => facility.get() + 1,
+        None => 0,
+    }
+}
+
+/// The order-key component of an optional movement, on [`facility_key`]'s rule.
+const fn movement_key(movement: Option<MovementId>) -> u32 {
+    match movement {
+        Some(movement) => movement.get() + 1,
+        None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The event kinds of version 2, in their documented order.
+    const VERSION_2_KINDS: [EventKind; 10] = [
+        EventKind::Spawned,
+        EventKind::Despawned,
+        EventKind::Yielded,
+        EventKind::Collision,
+        EventKind::NearMiss,
+        EventKind::Violation,
+        EventKind::Entry,
+        EventKind::Exit,
+        EventKind::Queue,
+        EventKind::ControlTransition,
+    ];
+
+    /// One agent, so a test compares variant keys alone.
+    const AGENT: AgentId = AgentId::from_index(2);
+
+    fn maneuver(target_facility: Option<FacilityId>, reason: ManeuverReasonCode) -> Event {
+        Event::Maneuver {
+            agent: AGENT,
+            kind: TacticKind::Overtake,
+            from: ManeuverState::Following,
+            to: ManeuverState::Preparing,
+            edge: ManeuverEdge::Attempted,
+            partner: None,
+            source_facility: FacilityId::from_index(0),
+            target_facility,
+            target_offset_m: 2.5,
+            side: PassSide::Left,
+            reason,
+        }
+    }
+
+    fn opposing(movement: Option<MovementId>, entering: bool) -> Event {
+        Event::OpposingTraversal {
+            agent: AGENT,
+            facility: FacilityId::from_index(1),
+            movement,
+            direction: MovementDirection::Reverse,
+            nominal_direction: NominalDirection::Forward,
+            perceived_rule: None,
+            reason: WrongWayReason::NoncompliantChoice,
+            violating: true,
+            entering,
+        }
+    }
+
+    /// The version-2 kinds keep their order values and the three additive kinds
+    /// are appended after them, so no existing stream reorders.
+    #[test]
+    fn the_additive_kinds_are_appended_after_control_transition() {
+        for (position, kind) in VERSION_2_KINDS.iter().enumerate() {
+            assert_eq!(
+                kind.order() as usize,
+                position,
+                "{kind:?} kept its version-2 order"
+            );
+        }
+        assert_eq!(EventKind::Maneuver.order() as usize, VERSION_2_KINDS.len());
+        assert_eq!(
+            EventKind::FacilityTransition.order() as usize,
+            VERSION_2_KINDS.len() + 1
+        );
+        assert_eq!(
+            EventKind::OpposingTraversal.order() as usize,
+            VERSION_2_KINDS.len() + 2
+        );
+        assert_eq!(EVENT_VERSION, 3, "the additive union's single bump");
+    }
+
+    /// The appended kinds order by the contract's own key, and the accessors
+    /// report the agent and kind of every new variant.
+    #[test]
+    fn a_new_record_orders_by_its_contract_key() {
+        let later_facility = maneuver(Some(FacilityId::from_index(3)), ManeuverReasonCode::Settled);
+        let earlier_facility =
+            maneuver(Some(FacilityId::from_index(1)), ManeuverReasonCode::Settled);
+        assert!(
+            earlier_facility.order_key() < later_facility.order_key(),
+            "a maneuver orders by its target facility"
+        );
+        assert!(
+            maneuver(None, ManeuverReasonCode::Settled).order_key() < earlier_facility.order_key(),
+            "a maneuver with no target facility orders before every one that has one"
+        );
+        assert_eq!(later_facility.agent(), AGENT);
+        assert_eq!(later_facility.kind(), EventKind::Maneuver);
+
+        // The two interval edges of one traversal, and an absent movement before
+        // a present one, both follow the contract's key.
+        assert!(
+            opposing(None, true).order_key()
+                < opposing(Some(MovementId::from_index(0)), true).order_key()
+        );
+        assert!(
+            opposing(Some(MovementId::from_index(4)), false).order_key()
+                < opposing(Some(MovementId::from_index(4)), true).order_key(),
+            "the interval edge orders as every other edge flag does: closed before open"
+        );
+        assert_eq!(opposing(None, true).kind(), EventKind::OpposingTraversal);
+
+        let transition = |to_facility| Event::FacilityTransition {
+            agent: AGENT,
+            from_facility: FacilityId::from_index(0),
+            to_facility: FacilityId::from_index(to_facility),
+            from_direction: MovementDirection::Forward,
+            to_direction: MovementDirection::Reverse,
+            via: TransitionKind::Lateral,
+            side: PassSide::Right,
+            s_m: 30.0,
+            d_m: -1.25,
+            permitted: false,
+        };
+        assert!(
+            transition(1).order_key() < transition(2).order_key(),
+            "a handoff orders by its destination facility"
+        );
+        assert_eq!(transition(1).kind(), EventKind::FacilityTransition);
+
+        // Every new kind follows the version-2 kinds for the same agent.
+        assert!(
+            Event::ControlTransition {
+                agent: AGENT,
+                control: ControlTransitionKind::SignalStop,
+                active: true,
+            }
+            .order_key()
+                < earlier_facility.order_key()
+        );
     }
 }

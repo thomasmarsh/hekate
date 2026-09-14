@@ -65,7 +65,8 @@ pub use compliance::{ComplianceDecision, ComplianceReason, SignalAction};
 pub use config::{DEFAULT_STEP, RunConfig};
 pub use controller::ControllerModelNames;
 pub use event::{
-    ControlTransitionKind, DespawnReason, EVENT_VERSION, Event, EventKind, RegionKey, ViolationKind,
+    ControlTransitionKind, DespawnReason, EVENT_VERSION, Event, EventKind, ManeuverReasonCode,
+    RegionKey, ViolationKind,
 };
 pub use index::{BroadPhase, SweptBroadPhase};
 pub use metrics::{

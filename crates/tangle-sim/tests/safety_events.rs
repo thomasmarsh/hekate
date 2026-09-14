@@ -280,7 +280,7 @@ fn the_documented_tie_breakers_order_equal_tick_records() {
     // first, so a crossing key cannot tie with a conflict-region key.
     assert_eq!(ordered[1].order_key().2, 0);
     assert_eq!(ordered[2].order_key().2, 1);
-    assert_eq!(EVENT_VERSION, 2);
+    assert_eq!(EVENT_VERSION, 3);
 }
 
 #[test]

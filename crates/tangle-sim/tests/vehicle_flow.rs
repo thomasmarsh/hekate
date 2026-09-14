@@ -185,7 +185,10 @@ fn every_admitted_vehicle_receives_its_assigned_route() {
                 | Event::Entry { .. }
                 | Event::Exit { .. }
                 | Event::Queue { .. }
-                | Event::ControlTransition { .. } => None,
+                | Event::ControlTransition { .. }
+                | Event::Maneuver { .. }
+                | Event::FacilityTransition { .. }
+                | Event::OpposingTraversal { .. } => None,
             })
             .collect();
         for agent in spawned {
@@ -263,7 +266,10 @@ fn profile_sampling_stays_within_the_configured_ranges() {
                 | Event::Entry { .. }
                 | Event::Exit { .. }
                 | Event::Queue { .. }
-                | Event::ControlTransition { .. } => None,
+                | Event::ControlTransition { .. }
+                | Event::Maneuver { .. }
+                | Event::FacilityTransition { .. }
+                | Event::OpposingTraversal { .. } => None,
             })
             .collect();
         for agent in spawned {
@@ -365,7 +371,10 @@ fn same_seed_reproduces_demand_and_profiles() {
                     | Event::Entry { .. }
                     | Event::Exit { .. }
                     | Event::Queue { .. }
-                    | Event::ControlTransition { .. } => None,
+                    | Event::ControlTransition { .. }
+                    | Event::Maneuver { .. }
+                    | Event::FacilityTransition { .. }
+                    | Event::OpposingTraversal { .. } => None,
                 })
                 .collect();
             for agent in spawned {
