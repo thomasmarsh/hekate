@@ -323,6 +323,64 @@ fn a_single_mode_run_records_nothing() {
     assert!(sim.close_pass_tracker().overtakes().is_empty());
 }
 
+/// An overtaking interval still alongside at the run's final tick is closed by
+/// the run-end close boundary as one observation carrying exactly the evidence
+/// the completed interval carried, so a pass in progress at termination is
+/// neither dropped nor counted twice.
+#[test]
+fn an_interval_still_open_at_the_final_tick_closes_with_the_completed_evidence() {
+    let (completed, _) = run(passing_scenario(9.0, 4.0), 7);
+    // An interval that stayed alongside for more than one tick was still open on
+    // its last observed tick, so a run that stops there leaves it open.
+    let full = completed
+        .iter()
+        .find(|observation| observation.end_tick > observation.start_tick)
+        .expect("the fixture records an overtaking interval spanning several ticks");
+    let final_tick = full.end_tick;
+
+    let mut sim = Simulation::new(passing_scenario(9.0, 4.0), RunConfig::new(7))
+        .expect("the simulation builds");
+    for _ in 0..final_tick {
+        sim.step();
+    }
+    let before = sim.close_pass_tracker().overtakes().len();
+
+    sim.close_open_close_passes();
+
+    let closed = sim.close_pass_tracker().overtakes();
+    assert!(
+        closed.len() > before,
+        "the run end closes the interval still alongside at the final tick"
+    );
+    let expected: Vec<OvertakeObservation> = completed
+        .iter()
+        .filter(|observation| observation.end_tick <= final_tick)
+        .cloned()
+        .collect();
+    assert_eq!(
+        closed, expected,
+        "the run-end closure records the still-open interval as its one \
+         observation, alongside the intervals that closed on their own ticks"
+    );
+    assert_eq!(
+        closed
+            .iter()
+            .filter(|observation| observation.start_tick == full.start_tick)
+            .count(),
+        1,
+        "the closed-at-run-end interval yields one record for its pair"
+    );
+    let reopened = closed
+        .iter()
+        .find(|observation| observation.start_tick == full.start_tick)
+        .expect("the interval still open at the final tick closed at run end");
+    assert_eq!(
+        reopened, full,
+        "a run-end closure carries the same minimum, time, relative speed, and \
+         bands as the completed interval"
+    );
+}
+
 /// Every `ClosePass` event a run emitted, with the tick that emitted it.
 fn close_pass_events(scenario: CompiledScenario, seed: u64) -> Vec<(u64, Event)> {
     let mut sim = Simulation::new(scenario, RunConfig::new(seed)).expect("the simulation builds");

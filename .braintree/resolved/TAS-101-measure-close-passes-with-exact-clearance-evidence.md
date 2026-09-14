@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T18:09:04Z
+updated: 2026-09-14T23:56:00Z
 summary: Measure close passes with exact clearance, relative speed, duration, and rule evidence.
-next: [[TAS-122-close-the-close-pass-observation-and-report-clea]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].
@@ -42,3 +41,32 @@ queries; do not implement tactical eligibility.
 
 - [[TAS-121-detect-executed-overtakes-and-accumulate-clearan]] Overtake detection and band durations.
 - [[TAS-122-close-the-close-pass-observation-and-report-clea]] Observation closure and clearance metrics.
+
+# Result
+
+Complete: both slices resolved and every `# Done when` bullet holds against their
+evidence.
+
+Detection and band accumulation: `crates/tangle-sim/src/close_pass.rs
+(ClosePassTracker)` detects an overtaking interval from the pair's longitudinal
+footprints on one shared reference and measures clearance with the exact swept
+world-body query `crate::metrics::tick_minimum_clearance_m`, not centre distance,
+lane id, or a time-to-collision surrogate; each configured
+`CompiledClearanceBand` accumulates its own duration under its stable
+`ClearanceBandId` (17 unit tests, including `nested_bands_accumulate_independently_and_monotonically`, the
+mode gate, and the symmetry of the minimum in pair query order).
+
+Observation closure and metrics: `ClosePassTracker::close_open` closes one
+observation per pair on completion or termination — including the run-end closure
+[[TAS-142-close-still-open-close-pass-intervals-at-run-end]] wired into
+`apps/tangle-cli/src/trace.rs (canonical_run_captured)` — and
+[[TAS-139-define-close-pass-metric-v3]] raised `METRIC_DEFINITION_VERSION` to 3 with
+the families [[TAS-140-accumulate-close-pass-metric-families]] accrues by mode pair,
+movement, facility, and applicability, surfaced by
+[[TAS-141-surface-close-pass-metric-families]] and carried by
+[[TAS-143-aggregate-and-compare-close-pass-families]]. Encounter coverage: the
+close-pass suites include safe, close, multi-band, boundary-crossing
+(`a_boundary_crossing_is_evidence_on_the_observation`), opposing-facility
+(`a_body_on_the_opposing_traversal_records_its_evidence`), aborted
+(`an_aborted_pass_closes_exactly_one_observation`), and no-overtake
+(`an_abreast_convoy_is_not_an_overtake`, `equal_speeds_yield_no_overtake`) cases.

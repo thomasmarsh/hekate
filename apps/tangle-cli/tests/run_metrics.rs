@@ -1271,6 +1271,11 @@ fn record_run(scenario: CompiledScenario, seed: u64, ticks: u64) -> Recording {
         }
         recorder.record(&output);
     }
+    // The run ends, so the still-open close-pass intervals close before the
+    // capture reads the tracker: this hand-driven loop mirrors the run loop's
+    // close boundary, and every reference it produces holds the run-end
+    // closures the loop holds.
+    sim.close_open_close_passes();
     let metrics = recorder.finish(&sim);
     Recording {
         metrics,
@@ -1435,6 +1440,70 @@ fn close_pass_families_accumulate_from_the_closed_observations() {
         recording.metrics.close_pass.by_movement.len(),
         1,
         "one movement pair is declared, so one movement bucket exists"
+    );
+}
+
+/// A run that stops on the last tick of an overtaking interval reports that pass
+/// with the evidence the completed interval carries: the run loop closes the
+/// still-open interval at run end before the metric capture reads the tracker,
+/// so a pass in progress at termination is counted rather than dropped.
+#[test]
+fn a_pass_still_open_at_the_final_tick_is_reported_with_its_evidence() {
+    let seed = 7;
+    let scenario = || passing_scenario(9.0, 4.0, true, "shared");
+
+    // The full-horizon run names an interval that stayed alongside for several
+    // ticks, so its last observed tick is a run end that leaves the same
+    // interval open.
+    let full = record_run(scenario(), seed, CLOSE_PASS_TICKS);
+    let completed = full
+        .observations
+        .iter()
+        .find(|observation| observation.end_tick > observation.start_tick)
+        .expect("the fixture records an overtaking interval spanning several ticks");
+    let final_tick = completed.end_tick;
+
+    // The hand-driven reference closes the open interval explicitly, so it names
+    // the observation the loop's own capture must hold.
+    let reference = record_run(scenario(), seed, final_tick);
+    let closed = reference
+        .observations
+        .iter()
+        .find(|observation| observation.start_tick == completed.start_tick)
+        .expect("the interval still alongside at the final tick closed at run end");
+    assert_eq!(
+        closed, completed,
+        "the closed-at-run-end observation carries the completed interval's \
+         minimum, time, relative speed, and band evidence"
+    );
+    assert_eq!(
+        reference
+            .observations
+            .iter()
+            .filter(|observation| observation.start_tick == completed.start_tick)
+            .count(),
+        1,
+        "the interval yields one record for its pair"
+    );
+
+    // The run loop performs that same closure: its capture matches the reference
+    // count for count, including the still-open interval.
+    let sampling = SamplingPolicy::default();
+    let (_, _, _, metrics) = canonical_run_captured(
+        scenario(),
+        RunConfig::new(seed),
+        final_tick,
+        &sampling.trajectories,
+    )
+    .expect("run completes");
+    assert_count(
+        &metrics.close_pass.run.close_passes,
+        reference.observations.len() as u64,
+    );
+    assert_eq!(
+        metrics, reference.metrics,
+        "the run loop's capture is the explicitly closed reference, so the \
+         still-open interval reaches every close-pass family"
     );
 }
 

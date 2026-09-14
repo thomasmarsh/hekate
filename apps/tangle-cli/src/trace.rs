@@ -166,6 +166,12 @@ pub fn canonical_run_sampled(
 /// change the canonical trace or its hash. The returned [`RunMetrics`] is read
 /// from the live simulation before it is consumed, so it observes exactly the
 /// run the trace records.
+///
+/// The run ends at a close boundary: before the metric capture, the run's
+/// still-open close-pass intervals are closed, so a pass in progress at the
+/// final tick is reported with the evidence a completed one carries rather than
+/// dropped. The closure emits no event — no tick remains to carry one — so the
+/// recorded trace bytes stay the canonical ones.
 pub fn canonical_run_captured(
     scenario: CompiledScenario,
     config: RunConfig,
@@ -185,6 +191,12 @@ pub fn canonical_run_captured(
         // observes the same completed tick through an immutable borrow.
         trajectories.observe(&sim);
     }
+
+    // The run's last tick has been observed: an interval still alongside now
+    // closes as a termination, before the capture below reads the tracker. The
+    // closure emits no event — no tick remains to carry one — so the recorded
+    // trace bytes are unchanged.
+    sim.close_open_close_passes();
 
     // The metric capture reads the live simulation, so it closes before
     // `finish` consumes the simulation.
