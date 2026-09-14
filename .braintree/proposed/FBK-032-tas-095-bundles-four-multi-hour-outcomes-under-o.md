@@ -1,6 +1,6 @@
 ---
 context_rev: 1
-updated: 2026-09-14T13:21:25Z
+updated: 2026-09-14T13:26:28Z
 summary: TAS-095 bundles four multi-hour outcomes under one Done when, so each dispatch exceeded the...
 braintree_revision: 0.6.0+g169bad5
 ---
@@ -97,3 +97,22 @@ than widening the slice; (4) provide an orientation packet such as `braintree no
 NODE --with-references` that loads the node, its route, and its linked
 reconnaissance in one command, since the fixed per-session orientation cost is
 the dominant term for a fast model.
+
+## Finding 6 — no batch decomposition primitive, so re-scoping is a two-pass chore
+
+Attempted: re-scoped the Phase 2 Increment 2 tree into 27 small nodes (3 `THO`
+reconnaissance plus 24 task children) using `braintree node record`, one
+invocation per node, then rewrote each parent's `next` to point at its first
+child.
+Friction: every node is a separate command carrying a long `--body`, `--route`,
+and `--next`; the children's allocated ids are only known after creation, so
+advancing each parent's `next` and adding its `# Slices` list is necessarily a
+second pass. There is no way to express "these are the ordered children of X"
+in one place, so a large, deliberate decomposition — exactly what the skill now
+encourages — is slow and error-prone to author, and a mid-script failure leaves a
+half-built tree.
+Improvement: add a batch or cascade primitive such as `braintree decompose
+PARENT --from PLAN.md` (or `braintree node record --parent X --children FILE`)
+that allocates ids, writes the ordered children, and advances the parent's `next`
+to the first child in one transaction; a `braintree node next X CHILD` shorthand
+for the parent-advance step alone would also remove the second pass.

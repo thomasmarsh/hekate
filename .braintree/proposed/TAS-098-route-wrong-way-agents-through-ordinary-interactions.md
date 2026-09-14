@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:27:04Z
+updated: 2026-09-14T13:26:12Z
 summary: Route wrong-way agents through ordinary steering, collision, and lifecycle paths.
-next: Integrate opposing traversal selection with ordinary route state, gap claims, and completion.
+next: [[TAS-117-transition-route-and-direction-for-wrong-way-ent]]
 ---
 
 Parent [[TAS-096-contextual-wrong-way-travel]].
@@ -35,3 +35,8 @@ gap, collision, yielding, safety, and despawn machinery.
 Gated on [[TAS-097-make-contextual-wrong-way-decisions-reproducible]]. Owns
 wrong-way route integration and focused tests. No scripted trajectory,
 collision bypass, public event payload, or metric aggregation belongs here.
+
+# Slices
+
+- [[TAS-117-transition-route-and-direction-for-wrong-way-ent]] Route and direction transition.
+- [[TAS-118-reject-an-occupied-opposing-corridor-and-keep-th]] Occupied-corridor rejection and lifecycle.

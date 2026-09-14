@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:12Z
 summary: Version maneuver lifecycle, rule, boundary, and transition events across trace and replay.
-next: Add the Increment 2 event union and carry it losslessly through run artifacts and replay.
+next: [[TAS-119-add-the-maneuver-event-payloads-and-bump-event-v]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].
@@ -36,3 +36,8 @@ Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]] and
 crates/tangle-sim/src/event.rs and emission seams, CLI event serialization and
 replay/summary consumers, presenter decoding as needed, and directly affected
 goldens. Do not compute close-pass or wrong-way aggregate metrics.
+
+# Slices
+
+- [[TAS-119-add-the-maneuver-event-payloads-and-bump-event-v]] Event payloads and EVENT_VERSION.
+- [[TAS-120-emit-maneuver-events-edge-triggered-with-stable]] Edge-triggered emission and ordering.

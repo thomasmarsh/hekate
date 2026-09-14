@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:12Z
 summary: Check in Increment 2 narrow passing, motor overtaking, and lane-transition fixtures.
-next: Author and test the three passing families plus prohibited and close-clearance variants.
+next: [[TAS-129-check-in-the-increment-2-passing-fixtures]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -42,3 +42,8 @@ Gates my scenario artifacts enter: apps/tangle-cli/tests/migration_regression.rs
 enumerates scenarios/**/*.json5; crates/tangle-present/tests/v2_fixtures.rs may
 enumerate version-2 fixtures; benchmark-matrix checked-path tests enumerate the
 matrix fixture paths.
+
+# Slices
+
+- [[TAS-129-check-in-the-increment-2-passing-fixtures]] Core passing fixtures.
+- [[TAS-130-add-unsafe-passing-variants-and-wire-the-benchma]] Unsafe variants and matrix wiring.

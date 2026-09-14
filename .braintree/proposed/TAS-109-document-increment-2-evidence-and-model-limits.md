@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:19Z
 summary: Reconcile the benchmark matrix and narrow-mode cards with checked Increment 2 evidence.
 next: Replace planned Increment 2 evidence with checked paths and update both narrow-mode model cards.
 ---
@@ -38,3 +38,13 @@ Gated on [[TAS-104-bound-predicted-versus-executed-clearance]],
 [[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]]. Owns
 docs/benchmark-matrix.md, docs/benchmark-matrix.json, and the existing bicycle
 and scooter model cards only.
+
+# Slices
+
+- Reconcile the Markdown and JSON benchmark-matrix representations on the checked
+  passing, close-pass, prediction, and wrong-way fixture paths, presets,
+  quantities, tolerances, baselines, and supported/impossible/deferred cells.
+- Update the bicycle and scooter model cards with the implemented assumptions,
+  ranges, limitations, evidence, and the explicit exclusions.
+- Verify every evidence link exists and every numeric claim is copied from a
+  resolved test result; run matrix-consistency and model-card tests.

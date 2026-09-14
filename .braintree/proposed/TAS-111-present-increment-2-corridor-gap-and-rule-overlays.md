@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:12Z
 summary: Present usable corridor, target offset, predicted gap, maneuver, and wrong-way overlays.
-next: Carry Increment 2 inspection state through tangle-present into terminal and Bevy overlays.
+next: [[TAS-135-map-increment-2-state-into-presenter-overlays-wi]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -37,3 +37,8 @@ Gated on [[TAS-100-version-the-maneuver-event-and-trace-surface]],
 [[TAS-107-check-in-contextual-wrong-way-fixtures]]. Owns shared scene/overlay
 mapping, both backend renderings, inspector text, presenter tests, and directly
 affected scene goldens. Do not alter simulation decisions or metric semantics.
+
+# Slices
+
+- [[TAS-135-map-increment-2-state-into-presenter-overlays-wi]] Overlay mapping and backend parity.
+- [[TAS-136-check-in-presenter-fixtures-and-the-negative-sou]] Presenter fixtures and negative guard.

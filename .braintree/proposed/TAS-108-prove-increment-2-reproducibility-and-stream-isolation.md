@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:12Z
 summary: Prove Increment 2 trace reproducibility and maneuver-stream isolation.
-next: Add fixed-seed repeat, batch/replay, golden-transition, and unrelated-agent isolation tests.
+next: [[TAS-133-reproduce-every-increment-2-fixture-and-golden-i]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -39,3 +39,8 @@ by the tests.
 
 Gates my seed-bank and golden artifacts enter: scenario fixture enumeration,
 CLI golden/fixture discovery, and cargo test --workspace.
+
+# Slices
+
+- [[TAS-133-reproduce-every-increment-2-fixture-and-golden-i]] Fixture reproducibility and goldens.
+- [[TAS-134-prove-stream-isolation-and-preserve-the-phase-1]] Stream isolation and Phase 1 baseline.

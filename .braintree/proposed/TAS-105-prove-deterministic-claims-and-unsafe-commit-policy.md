@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:12Z
 summary: Prove deterministic simultaneous claims and every unsafe committed-maneuver response.
-next: Add adversarial claim and hazard fixtures with declaration-order and seed-order probes.
+next: [[TAS-127-prove-deterministic-simultaneous-claim-resolutio]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -37,3 +37,8 @@ scenario fixtures, metrics, or presentation.
 
 Gates my test artifact enters: Cargo's tangle-sim integration-test discovery and
 the workspace warnings-as-errors test gate.
+
+# Slices
+
+- [[TAS-127-prove-deterministic-simultaneous-claim-resolutio]] Deterministic simultaneous-claim proof.
+- [[TAS-128-prove-each-unsafe-commit-hazard-response-with-a]] Unsafe-commit hazard responses and probe.

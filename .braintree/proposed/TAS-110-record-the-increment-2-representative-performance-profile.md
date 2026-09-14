@@ -1,7 +1,7 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:19Z
 summary: Record the representative mixed-mode profile and Increment 2 performance budget.
 next: Benchmark the fixed representative profile and derive budgets from the Phase 1 baseline.
 ---
@@ -40,3 +40,15 @@ author the final mixed-mode release fixture.
 
 Gates my scenario and benchmark artifacts enter: scenario enumeration, any
 checked benchmark-artifact manifest test, and cargo test --workspace.
+
+# Slices
+
+- Add the representative mixed-mode workload fixture: cars, bicycles, and
+  scooters with passing and opposing interactions at a declared density and a
+  fixed seed bank.
+- Record release-mode measurements on named hardware: agent-steps per second,
+  tactical and broad-phase candidates, prediction work per agent-step,
+  simulated/wall time, output bytes per simulated hour, and presenter frame time.
+- Write the disabled-versus-enabled and Phase 1 baseline comparison, budgets,
+  profiler commands, raw artifact hashes, and rerun commands; label unsupported
+  density and fidelity ranges.

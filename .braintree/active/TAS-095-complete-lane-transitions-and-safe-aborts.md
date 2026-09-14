@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:02:43Z
+updated: 2026-09-14T13:26:12Z
 summary: Complete configured lane or facility transitions with bounded abort, braking, and return.
-next: Implement the cross-facility return leg so a change of lane that crossed out returns to the source facility.
+next: [[TAS-113-return-a-cross-facility-change-of-lane-to-the-so]]
 ---
 
 Parent [[TAS-092-passing-and-lane-transition-behavior]].
@@ -159,3 +159,8 @@ total), `cargo test --workspace` (869 passed, 0 failed),
 `cargo clippy --workspace --all-targets --all-features -- -D warnings` (clean),
 `cargo fmt --all --check` (clean), and `scripts/check-dependency-direction.sh`
 (`dependency direction OK`) all pass.
+
+# Slices
+
+- [[TAS-113-return-a-cross-facility-change-of-lane-to-the-so]] Return crossing to the source band.
+- [[TAS-114-keep-destination-leader-follower-constraints-act]] Destination leader/follower constraints.

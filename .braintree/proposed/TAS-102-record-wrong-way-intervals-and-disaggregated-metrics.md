@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:12Z
 summary: Record wrong-way rule intervals, state, exposure, encounters, and conflicts.
-next: Carry wrong-way state and interval evidence through trajectories, events, metrics, and replay.
+next: [[TAS-123-record-the-wrong-way-interval-and-rule-state-tra]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].
@@ -36,3 +36,8 @@ Gated on [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]] and
 snapshot/trajectory fields, wrong-way interval tracking, metric
 definitions/aggregation, artifact consumers, and tests. Do not add viewer
 overlays or acceptance scenarios.
+
+# Slices
+
+- [[TAS-123-record-the-wrong-way-interval-and-rule-state-tra]] Wrong-way interval and rule-state trajectory.
+- [[TAS-124-add-disaggregated-wrong-way-metrics-and-version]] Disaggregated wrong-way metrics and version bumps.

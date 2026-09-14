@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T13:26:12Z
 summary: Bound maneuver-prediction error against analytic and fine-step executed clearance.
-next: Add the reference predictor fixtures and prove the declared error bound at F, S, and f.
+next: [[TAS-125-build-analytic-and-high-resolution-clearance-ref]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -38,3 +38,8 @@ events, metrics, or presenters.
 
 Gates my test artifact enters: Cargo's tangle-sim integration-test discovery and
 the workspace warnings-as-errors test gate.
+
+# Slices
+
+- [[TAS-125-build-analytic-and-high-resolution-clearance-ref]] Analytic and high-resolution reference cases.
+- [[TAS-126-compare-production-prediction-to-executed-cleara]] Production-vs-executed comparison and endpoint probe.
