@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T17:07:56Z
+updated: 2026-09-14T17:40:42Z
 summary: Version maneuver lifecycle, rule, boundary, and transition events across trace and replay.
-next: [[TAS-120-emit-maneuver-events-edge-triggered-with-stable]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].
@@ -31,11 +30,25 @@ rule violation with one documented version and stable within-tick order.
 
 # Context
 
-Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]] and
-[[TAS-098-route-wrong-way-agents-through-ordinary-interactions]]. Owns
-crates/tangle-sim/src/event.rs and emission seams, CLI event serialization and
-replay/summary consumers, presenter decoding as needed, and directly affected
-goldens. Do not compute close-pass or wrong-way aggregate metrics.
+Depends on [[TAS-095-complete-lane-transitions-and-safe-aborts]] at context_rev 1.
+Depends on [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]] at context_rev 1.
+Owns crates/tangle-sim/src/event.rs and emission seams, CLI event serialization
+and replay/summary consumers, presenter decoding as needed, and directly
+affected goldens. Do not compute close-pass or wrong-way aggregate metrics.
+
+# Result
+
+Complete. Both children resolved:
+[[TAS-119-add-the-maneuver-event-payloads-and-bump-event-v]] added the
+`Maneuver`, `FacilityTransition`, and `OpposingTraversal` payloads under the
+single `EVENT_VERSION` 2 -> 3 bump with the event-level `ManeuverReasonCode` and
+regenerated versioned goldens; and
+[[TAS-120-emit-maneuver-events-edge-triggered-with-stable]] emits `Maneuver` and
+`FacilityTransition` edge-triggered from the state changes the maneuver and
+handoff stages already compute, with explicit stable order keys and no golden
+change. Focused round-trip, ordering, lifecycle, replay, and old-fixture
+regressions pass. `OpposingTraversal` interval emission and the close-pass event
+belong to later children under the same version.
 
 # Slices
 

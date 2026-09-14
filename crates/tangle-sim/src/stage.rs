@@ -188,7 +188,7 @@ pub enum ManeuverEdge {
 }
 
 impl ManeuverEdge {
-    /// Stable lowercase label for diagnostics and later event emission.
+    /// Stable lowercase label for diagnostics and the event payload.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Attempted => "attempted",
@@ -224,7 +224,7 @@ pub enum ManeuverAbortReason {
 }
 
 impl ManeuverAbortReason {
-    /// Stable lowercase label for diagnostics and later event emission.
+    /// Stable lowercase label for diagnostics and the event payload.
     pub const fn label(self) -> &'static str {
         match self {
             Self::ClaimRejected => "claim_rejected",
@@ -240,9 +240,8 @@ impl ManeuverAbortReason {
 /// Which geometric handoff a facility transition took.
 ///
 /// `docs/schema-v2-contract.md` *Increment 2 events and metrics* fixes the
-/// `FacilityTransition` event's `via` field to these two kinds, so a later event
-/// surface names them without a second spelling. No public event is emitted
-/// here.
+/// `FacilityTransition` event's `via` field to these two kinds, and the event
+/// names them through [`Self::label`] and no second spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransitionKind {
     /// A lateral crossing of the shared boundary between two side-by-side
@@ -266,10 +265,11 @@ impl TransitionKind {
 /// `docs/schema-v2-contract.md` *Increment 2 events and metrics* fixes.
 ///
 /// The record is the kernel's own fact, produced once at the contract-defined
-/// geometric handoff step. It is exposed on [`crate::StepOutput`] so the event
-/// surface can emit it; no public event is produced here, and `permitted:
-/// false` is the forbidden-boundary fact the contract names (what `T-O3` reads
-/// for its zero-crossing-without-record requirement).
+/// geometric handoff step, and it is exposed on [`crate::StepOutput`]. The
+/// kernel emits one [`crate::Event::FacilityTransition`] per record, mapped from
+/// the record's every field; `permitted: false` is the forbidden-boundary fact
+/// the contract names (what `T-O3` reads for its zero-crossing-without-record
+/// requirement).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FacilityTransitionRecord {
     /// The agent that changed facility.
@@ -372,7 +372,7 @@ impl PassSide {
         }
     }
 
-    /// Stable lowercase label for diagnostics and later event emission.
+    /// Stable lowercase label for diagnostics and the event payload.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Left => "left",
@@ -384,8 +384,8 @@ impl PassSide {
 /// One recorded edge of one agent's maneuver lifecycle.
 ///
 /// Exactly one record is produced per state transition, in a deterministic
-/// order, so a later increment can emit one public event per transition without
-/// re-deriving it. No public event is emitted here.
+/// order, and the kernel emits exactly one [`crate::Event::Maneuver`] per record
+/// without re-deriving the edge.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ManeuverTransition {
     /// The agent whose maneuver moved.

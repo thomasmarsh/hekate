@@ -4,7 +4,8 @@
 //! kernel fixes the target and a candidate corridor, arbitrates the step's
 //! corridor claims as a batch, and drives the maneuver to its completion,
 //! return, or abort. Every state change is reported once through
-//! [`StepOutput::transitions`], and the maneuver state is observable on the full
+//! [`StepOutput::transitions`] and once through the [`Event::Maneuver`] record
+//! the kernel emits for it, and the maneuver state is observable on the full
 //! snapshot.
 //!
 //! This test drives the seam through the public API only: a version-2 bikeway
@@ -14,10 +15,12 @@
 //! where a fixture can place bodies exactly; this file pins the seam itself, the
 //! recorded transitions, and the order independence a caller can observe.
 
-use tangle_model::{CompiledScenario, parse_scenario_source, parse_scenario_source_v2};
+use tangle_model::{
+    CompiledScenario, FacilityId, TacticKind, parse_scenario_source, parse_scenario_source_v2,
+};
 use tangle_sim::{
-    AgentId, LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge, ManeuverState, RunConfig,
-    Simulation, SnapshotDetail, StepOutput,
+    AgentId, Event, LateralManeuverRequest, ManeuverAbortReason, ManeuverEdge, ManeuverReasonCode,
+    ManeuverState, PassSide, RunConfig, Simulation, SnapshotDetail, StepOutput,
 };
 
 /// The target offset a requested maneuver steers toward: inside the usable
@@ -405,4 +408,122 @@ fn the_request_seam_refuses_an_unusable_target() {
         ),
         "a slot that is not a live agent has no route state to maneuver with"
     );
+}
+
+/// One `Maneuver` event per recorded transition, carrying the maneuver's own
+/// facts and the reason of the edge, and the emitted stream is invariant to the
+/// order the requests were recorded in: emission is edge-triggered from the
+/// state change the maneuver stage already decided, so neither the request
+/// order nor a repeated step can duplicate or reorder a transition.
+#[test]
+fn every_recorded_edge_emits_one_maneuver_event_in_a_stable_key_order() {
+    let run = |reverse: bool| {
+        let mut sim = rider_sim();
+        let riders = three_riders(&mut sim);
+        let passed = riders[0];
+        let requests = if reverse {
+            [riders[2], riders[1]]
+        } else {
+            [riders[1], riders[2]]
+        };
+        for rider in requests {
+            assert!(sim.request_lateral_maneuver(
+                rider,
+                LateralManeuverRequest {
+                    target_offset_m: TARGET_OFFSET_M,
+                    passed_body: passed,
+                    target_facility: None,
+                },
+            ));
+        }
+        let mut events = Vec::new();
+        let mut recorded = 0;
+        for _ in 0..40 {
+            let output = sim.step();
+            // The documented within-tick order holds with the maneuver records
+            // in the buffer: ascending agent, then kind order, then key.
+            for window in output.events().windows(2) {
+                assert!(
+                    window[0].order_key() <= window[1].order_key(),
+                    "the buffer is non-decreasing by the documented order key"
+                );
+            }
+            events.extend(output.events().iter().copied());
+            recorded += output.transitions().len();
+        }
+        (events, recorded, passed, riders[1], riders[2])
+    };
+
+    let (forward, recorded, passed, nearer, farther) = run(false);
+    let (reversed, ..) = run(true);
+    assert_eq!(
+        forward, reversed,
+        "the emitted stream is invariant to request insertion order"
+    );
+    assert!(recorded > 0, "the batch recorded transitions");
+    let maneuvers: Vec<Event> = forward
+        .iter()
+        .filter(|event| matches!(event, Event::Maneuver { .. }))
+        .copied()
+        .collect();
+    assert_eq!(
+        maneuvers.len(),
+        recorded,
+        "exactly one Maneuver event per recorded transition"
+    );
+
+    // The winner's committing edge and the loser's rejected claim, both read
+    // from the public stream: the same-facility fixture's source facility, the
+    // passed body, the selected side, and the closed reason codes.
+    let committed = maneuvers
+        .iter()
+        .find(|event| {
+            matches!(
+                event,
+                Event::Maneuver {
+                    agent,
+                    edge: ManeuverEdge::Committed,
+                    ..
+                } if *agent == nearer
+            )
+        })
+        .copied()
+        .expect("the granted claimant's commit edge is emitted");
+    assert_eq!(
+        committed,
+        Event::Maneuver {
+            agent: nearer,
+            kind: TacticKind::Pass,
+            from: ManeuverState::Preparing,
+            to: ManeuverState::Committed,
+            edge: ManeuverEdge::Committed,
+            partner: Some(passed),
+            source_facility: FacilityId::from_index(0),
+            target_facility: None,
+            target_offset_m: TARGET_OFFSET_M,
+            side: PassSide::Left,
+            reason: ManeuverReasonCode::SlowerLeader,
+        }
+    );
+    let aborted = maneuvers
+        .iter()
+        .find(|event| {
+            matches!(
+                event,
+                Event::Maneuver {
+                    agent,
+                    edge: ManeuverEdge::Aborted,
+                    ..
+                } if *agent == farther
+            )
+        })
+        .copied()
+        .expect("the losing claimant's abort edge is emitted");
+    assert!(matches!(
+        aborted,
+        Event::Maneuver {
+            reason: ManeuverReasonCode::ClaimRejected,
+            ..
+        }
+    ));
 }

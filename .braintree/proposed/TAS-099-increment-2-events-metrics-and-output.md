@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T17:40:42Z
 summary: Emit versioned maneuver, close-pass, and wrong-way evidence through standard outputs.
-next: [[TAS-100-version-the-maneuver-event-and-trace-surface]]
+next: [[TAS-101-measure-close-passes-with-exact-clearance-evidence]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].

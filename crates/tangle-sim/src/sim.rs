@@ -41,7 +41,7 @@ use tangle_model::{
     CompiledPath, CompiledPedestrianRoute, CompiledReferencePath, CompiledScenario, CrossingId,
     DemandId, FacilityId, FacilityTraversal, LateralTransition, ModeTemplateId, MovementDirection,
     MovementId, PassingSide, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId,
-    PermissionEffect, PortalId, RuleKind, SignalColor, SignalId, TacticalCapability,
+    PermissionEffect, PortalId, RuleKind, SignalColor, SignalId, TacticKind, TacticalCapability,
     TraversalTransitions,
 };
 
@@ -51,7 +51,7 @@ use crate::config::RunConfig;
 use crate::control::{Constraint, IDM_STANDSTILL_GAP_M};
 use crate::controller::{ControllerModelNames, ControllerModels};
 use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, sample_route};
-use crate::event::{DespawnReason, Event, ViolationKind};
+use crate::event::{DespawnReason, Event, ManeuverReasonCode, ViolationKind};
 use crate::index::{self, SpatialIndex};
 use crate::metrics::InteractionMetrics;
 use crate::narrow::{self, sample_narrow_profile};
@@ -179,8 +179,9 @@ impl StepOutput<'_> {
     /// order: the attempts of every agent in ascending id order, then the
     /// committed clauses and the settle edges, then the decided claim batch.
     ///
-    /// One record is produced per state change, so a later increment can emit
-    /// one public event per transition; no event is emitted here.
+    /// One record is produced per state change, and the kernel emits exactly
+    /// one [`Event::Maneuver`] for each of them, from the state change this
+    /// record is; the record itself keeps the maneuver's own facts.
     pub fn transitions(&self) -> &[ManeuverTransition] {
         self.transitions
     }
@@ -189,8 +190,8 @@ impl StepOutput<'_> {
     ///
     /// Each record is the contract's `FacilityTransition` fact, produced once
     /// at the handoff step; `permitted: false` is the forbidden-boundary fact.
-    /// A later increment emits one public event per record; no event is emitted
-    /// here.
+    /// The kernel emits exactly one [`Event::FacilityTransition`] per record,
+    /// mapped from the record's every field.
     pub fn facility_transitions(&self) -> &[FacilityTransitionRecord] {
         self.facility_transitions
     }
@@ -298,13 +299,13 @@ pub struct Simulation {
     events: Vec<Event>,
     /// The maneuver state transitions this step produced, in a deterministic
     /// order. Cleared at the start of every tick, like [`Self::events`], and
-    /// exposed on [`StepOutput`] for the later event surface to emit; no public
-    /// event is produced here.
+    /// exposed on [`StepOutput`]; the kernel emits one [`Event::Maneuver`] per
+    /// record.
     transitions: Vec<ManeuverTransition>,
     /// The facility handoffs this step performed, in ascending agent id order.
     /// Cleared at the start of every tick, like [`Self::transitions`], and
-    /// exposed on [`StepOutput`] for the later event surface to emit; no public
-    /// event is produced here.
+    /// exposed on [`StepOutput`]; the kernel emits one
+    /// [`Event::FacilityTransition`] per record.
     facility_transitions: Vec<FacilityTransitionRecord>,
     population_announced: bool,
     spawned_total: u64,
@@ -1398,10 +1399,97 @@ impl Simulation {
         // the result is a pure function of the tick-start observation and the
         // batch, and every decided transition is recorded exactly once.
         for plan in plans {
+            let left = self.agents.route_state[plan.index]
+                .expect("a planned maneuver belongs to an agent carrying route state");
             self.agents.route_state[plan.index] = Some(plan.state);
             if let Some(transition) = plan.transition {
                 self.transitions.push(transition);
+                // The transition is the change this pass already decided, so
+                // exactly one event follows from it here and no later step
+                // re-derives it: a retry cannot duplicate a transition. The
+                // maneuver's facts are fixed at the attempt and never revised,
+                // so they are read from the state that carries them — the state
+                // the attempt enters, and the state every other edge leaves,
+                // which keeps them until the settle edge into `following`
+                // clears them.
+                let facts = if plan.state.target_offset_m.is_some() {
+                    plan.state
+                } else {
+                    left
+                };
+                self.events.push(self.maneuver_event(transition, facts));
             }
+        }
+    }
+
+    /// The `Maneuver` event of one recorded state change.
+    ///
+    /// The edge, its two states, its agent, and its reason are the recorded
+    /// transition's own; the maneuver's other facts are read from the route
+    /// state that carries them and fall back to the payload's absent values when
+    /// the maneuver has no fixed target — no partner, no target facility, the
+    /// agent's own reference centreline as its offset, and the positive-`d` side,
+    /// which is the side `narrow::pass_side` resolves an exact tie to. The source
+    /// facility is the traversal the maneuver was attempted on: the preserved
+    /// `return_facility` of a cross-facility maneuver names it even after the
+    /// outbound handoff has moved `facility` to the destination band.
+    ///
+    /// The reason is the transition's recorded termination reason on an `aborted`
+    /// edge, `settled` on a completing edge — the code `TAS-119` added for the
+    /// edge that ends the maneuver, which no source enum records — and the closed
+    /// set's selection code `slower_leader` on the attempt and commit edges,
+    /// because every lateral maneuver this kernel performs displaces past the
+    /// passed body the contract calls its target body.
+    fn maneuver_event(&self, transition: ManeuverTransition, state: RouteState) -> Event {
+        let target_offset_m = state.target_offset_m.unwrap_or(0.0);
+        let reason = match transition.reason {
+            Some(reason) => ManeuverReasonCode::from(reason),
+            None if transition.edge == ManeuverEdge::Completed => ManeuverReasonCode::Settled,
+            None => ManeuverReasonCode::SlowerLeader,
+        };
+        Event::Maneuver {
+            agent: transition.agent,
+            kind: self.maneuver_kind(state),
+            from: transition.from,
+            to: transition.to,
+            edge: transition.edge,
+            partner: state.passed_body,
+            source_facility: state.return_facility.unwrap_or(state.facility),
+            target_facility: state.target_facility,
+            target_offset_m,
+            side: if target_offset_m < 0.0 {
+                PassSide::Right
+            } else {
+                PassSide::Left
+            },
+            reason,
+        }
+    }
+
+    /// The tactic a recorded lateral maneuver belongs to.
+    ///
+    /// A maneuver that targets another facility, or whose `return_facility`
+    /// records that it has already crossed out of the band it was attempted from,
+    /// is the kernel's cross-facility `change_lane`, which is what distinguishes
+    /// the `preparing` state that fixed a target facility. The kernel's own
+    /// within-facility tactic serves a `pass` and an `overtake` from one code path
+    /// and the two differ only in which compiled capability admits them, so the
+    /// payload reports `pass` for a mode that compiles it and `overtake`
+    /// otherwise — the pair that tactic's own capability guard requires. The kind
+    /// reads components and compiled capabilities, never a mode, template, or
+    /// scenario name.
+    fn maneuver_kind(&self, state: RouteState) -> TacticKind {
+        if state.target_facility.is_some() || state.return_facility.is_some() {
+            return TacticKind::ChangeLane;
+        }
+        let tactics = self
+            .scenario
+            .mode_template(state.mode_template)
+            .map(|template| template.tactics());
+        if tactics.is_some_and(|tactics| tactics.supports(TacticalCapability::Pass)) {
+            TacticKind::Pass
+        } else {
+            TacticKind::Overtake
         }
     }
 
@@ -3508,6 +3596,32 @@ impl Simulation {
         .map(|crossing| crossing.transition.target())
     }
 
+    /// Record one facility handoff this step performed: the step's own fact on
+    /// the exposed record buffer, and the one [`Event::FacilityTransition`] for
+    /// it.
+    ///
+    /// The event maps the record's every field, so the event and
+    /// [`FacilityTransitionRecord`] never disagree, and it is pushed at the
+    /// handoff that performed the change — the change itself, not a per-step
+    /// poll of it — so exactly one event exists per handoff and no later step can
+    /// re-emit one.
+    fn record_facility_transition(&mut self, record: FacilityTransitionRecord) {
+        let event = Event::FacilityTransition {
+            agent: record.agent,
+            from_facility: record.from_facility,
+            to_facility: record.to_facility,
+            from_direction: record.from_direction,
+            to_direction: record.to_direction,
+            via: record.via,
+            side: record.side,
+            s_m: record.s_m,
+            d_m: record.d_m,
+            permitted: record.permitted,
+        };
+        self.facility_transitions.push(record);
+        self.events.push(event);
+    }
+
     /// The contract's connector handoff, performed when the agent has reached
     /// the leaving end of its traversal.
     ///
@@ -3572,7 +3686,7 @@ impl Simulation {
         next.d_m = coordinate.d() * travel_sign;
         self.agents.route_state[index] = Some(next);
 
-        self.facility_transitions.push(FacilityTransitionRecord {
+        self.record_facility_transition(FacilityTransitionRecord {
             agent: AgentId::from_index(index),
             from_facility: state.facility,
             to_facility: to.facility(),
@@ -3682,7 +3796,7 @@ impl Simulation {
         next.entering_facility = true;
         self.agents.route_state[index] = Some(next);
 
-        self.facility_transitions.push(FacilityTransitionRecord {
+        self.record_facility_transition(FacilityTransitionRecord {
             agent: AgentId::from_index(index),
             from_facility: state.facility,
             to_facility: destination_traversal.facility(),
@@ -6221,6 +6335,152 @@ mod tests {
         assert_eq!(sim.emergency_cap_steps(), 0);
     }
 
+    /// The `Maneuver` events one step emitted, in buffer order.
+    fn maneuver_events(output: &StepOutput<'_>) -> Vec<Event> {
+        output
+            .events()
+            .iter()
+            .filter(|event| matches!(event, Event::Maneuver { .. }))
+            .copied()
+            .collect()
+    }
+
+    /// One `Maneuver` event per recorded transition, and the event maps the
+    /// record's edge and the maneuver's own fixed facts: the passed body, the
+    /// source facility, the target offset, and the side. An abort carries its
+    /// termination reason and a completing edge carries `settled`, and a step
+    /// that records no transition emits no event, so no state a maneuver holds
+    /// can re-emit one.
+    #[test]
+    fn a_maneuver_transition_emits_one_event_carrying_the_maneuver_facts() {
+        let mut sim = rider_sim(0.25, 2.0);
+        // The passed obstacle is behind the rider, so the completion guard
+        // already holds once the claim is granted.
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        let passed = push_rider(&mut sim, 50.0, 0.0);
+        assert!(request_maneuver(&mut sim, rider, passed));
+        let fact = |from, to, edge, reason| Event::Maneuver {
+            agent: rider,
+            kind: TacticKind::Pass,
+            from,
+            to,
+            edge,
+            partner: Some(passed),
+            source_facility: FacilityId::from_index(0),
+            target_facility: None,
+            target_offset_m: MANEUVER_TARGET_M,
+            side: PassSide::Left,
+            reason,
+        };
+
+        // `following -> preparing`: the attempt is the step that fixes the
+        // target and the passed body, and the selection reason is the attempt's.
+        let output = sim.step();
+        assert_eq!(
+            maneuver_events(&output),
+            [fact(
+                ManeuverState::Following,
+                ManeuverState::Preparing,
+                ManeuverEdge::Attempted,
+                ManeuverReasonCode::SlowerLeader,
+            )]
+        );
+
+        // `preparing -> committed` on the granted claim.
+        let output = sim.step();
+        assert_eq!(
+            maneuver_events(&output),
+            [fact(
+                ManeuverState::Preparing,
+                ManeuverState::Committed,
+                ManeuverEdge::Committed,
+                ManeuverReasonCode::SlowerLeader,
+            )]
+        );
+
+        // `committed -> returning`, the completing edge, carries `settled`.
+        let output = sim.step();
+        assert_eq!(
+            maneuver_events(&output),
+            [fact(
+                ManeuverState::Committed,
+                ManeuverState::Returning,
+                ManeuverEdge::Completed,
+                ManeuverReasonCode::Settled,
+            )]
+        );
+
+        // `returning -> following` settles the maneuver, and the facts of the
+        // maneuver that ended are still the ones the event reports.
+        let mut settled = None;
+        for _ in 0..600 {
+            let output = sim.step();
+            settled = maneuver_events(&output).first().copied();
+            if settled.is_some() {
+                break;
+            }
+        }
+        assert_eq!(
+            settled,
+            Some(fact(
+                ManeuverState::Returning,
+                ManeuverState::Following,
+                ManeuverEdge::Completed,
+                ManeuverReasonCode::Settled,
+            ))
+        );
+
+        // A step that records no transition emits no `Maneuver` event: the event
+        // is the transition, never a per-step poll of the maneuver state.
+        for _ in 0..5 {
+            let output = sim.step();
+            assert!(output.transitions().is_empty());
+            assert!(maneuver_events(&output).is_empty());
+        }
+        assert_eq!(sim.emergency_cap_steps(), 0);
+    }
+
+    /// A transition whose maneuver has no fixed target reports the payload's
+    /// absent values: no partner, no target facility, the agent's own reference
+    /// centreline as its offset, and the positive-`d` side.
+    #[test]
+    fn a_transition_with_no_fixed_target_reports_the_payload_defaults() {
+        let mut sim = rider_sim(0.25, 2.0);
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        push_rider(&mut sim, 80.0, 0.0);
+        // A `preparing` maneuver that never fixed a target or a passed body: its
+        // due claim finds no target and aborts.
+        let mut state = rider_state(&sim, rider);
+        state.maneuver = ManeuverState::Preparing;
+        state.state_since = Some(SimTime::from_tick(0, DEFAULT_STEP));
+        state.corridor = Some(ManeuverCorridor {
+            facility: FacilityId::from_index(0),
+            s_min_m: 60.0,
+            s_max_m: 70.0,
+            d_min_m: -1.0,
+            d_max_m: 1.0,
+        });
+        sim.agents.route_state[rider.index()] = Some(state);
+
+        let output = sim.step();
+        assert_eq!(
+            maneuver_events(&output),
+            [Event::Maneuver {
+                agent: rider,
+                kind: TacticKind::Pass,
+                from: ManeuverState::Preparing,
+                to: ManeuverState::Aborted,
+                edge: ManeuverEdge::Aborted,
+                partner: None,
+                source_facility: FacilityId::from_index(0),
+                target_facility: None,
+                target_offset_m: 0.0,
+                side: PassSide::Left,
+                reason: ManeuverReasonCode::TargetLost,
+            }]
+        );
+    }
+
     /// Two riders claiming the same corridor are decided as a batch: the winner
     /// commits and the loser aborts with the documented rejection reason,
     /// without displacing at all.
@@ -6327,6 +6587,89 @@ mod tests {
         assert_eq!(
             reason_for(output.transitions(), second),
             Some(ManeuverAbortReason::ClaimRejected)
+        );
+    }
+
+    /// The maneuver edges one agent's events recorded, in buffer order.
+    fn maneuver_edges_for(stream: &[Event], agent: AgentId) -> Vec<ManeuverEdge> {
+        stream
+            .iter()
+            .filter_map(|event| match event {
+                Event::Maneuver {
+                    agent: record,
+                    edge,
+                    ..
+                } if *record == agent => Some(*edge),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The step buffer keeps the documented within-tick order with the new
+    /// records in it — ascending agent, then kind order, then the variant's own
+    /// stable key — and the whole stream is a property of the decisions rather
+    /// than of the order the maneuver requests were recorded in.
+    #[test]
+    fn the_event_buffer_is_key_ordered_and_invariant_to_request_order() {
+        let run = |reverse: bool| {
+            let mut sim = rider_sim(0.25, 2.0);
+            let passed = push_rider(&mut sim, 80.0, 0.0);
+            let near = push_rider(&mut sim, 60.0, 0.0);
+            let far = push_rider(&mut sim, 54.0, 0.0);
+            let requests = if reverse { [far, near] } else { [near, far] };
+            for rider in requests {
+                assert!(request_maneuver(&mut sim, rider, passed));
+            }
+            let mut stream = Vec::new();
+            let mut recorded = 0;
+            for _ in 0..6 {
+                let output = sim.step();
+                let events = output.events();
+                // The documented within-tick order: ascending agent, then kind
+                // order, then the variant's own stable key, with the new
+                // records in the buffer.
+                for window in events.windows(2) {
+                    assert!(
+                        window[0].order_key() <= window[1].order_key(),
+                        "the buffer is non-decreasing by the documented order key: {:?} then {:?}",
+                        window[0].order_key(),
+                        window[1].order_key()
+                    );
+                }
+                stream.extend(events.iter().copied());
+                recorded += output.transitions().len();
+            }
+            (stream, recorded, near, far)
+        };
+
+        let (forward, recorded, near, far) = run(false);
+        let (reversed, ..) = run(true);
+        assert_eq!(
+            forward, reversed,
+            "the emitted stream is invariant to request insertion order"
+        );
+
+        // One `Maneuver` event per recorded transition: the event is the state
+        // change, so no step can emit a second one for the same edge.
+        let maneuvers: Vec<Event> = forward
+            .iter()
+            .filter(|event| matches!(event, Event::Maneuver { .. }))
+            .copied()
+            .collect();
+        assert_eq!(
+            maneuvers.len(),
+            recorded,
+            "exactly one Maneuver event per recorded transition"
+        );
+        let winner = maneuver_edges_for(&forward, near);
+        assert!(
+            winner.contains(&ManeuverEdge::Attempted) && winner.contains(&ManeuverEdge::Committed),
+            "the granted claimant attempts and commits: {winner:?}"
+        );
+        let loser = maneuver_edges_for(&forward, far);
+        assert!(
+            loser.contains(&ManeuverEdge::Aborted),
+            "the losing claimant aborts: {loser:?}"
         );
     }
 

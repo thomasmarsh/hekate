@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use glam::DVec2;
 use tangle_model::{CompiledScenario, CrossingId, MovementDirection, parse_scenario_source_v2};
 use tangle_sim::{
-    AgentId, AgentMode, DespawnReason, Event, FacilityTransitionRecord, ManeuverState,
+    AgentId, AgentMode, DespawnReason, Event, EventKind, FacilityTransitionRecord, ManeuverState,
     NEAR_MISS_THRESHOLD_M, RouteStateSample, RunConfig, Simulation, SnapshotDetail, TransitionKind,
 };
 
@@ -498,6 +498,107 @@ fn a_reverse_rule_rider_completes_the_route_in_the_forward_direction() {
         despawned_reason,
         Some(tangle_sim::DespawnReason::ExitedPath),
         "the rider completes the opposing traversal at the far end"
+    );
+}
+
+/// A recorded handoff emits exactly one `FacilityTransition` event that maps the
+/// record's every field, and the event takes its documented place in the step's
+/// key order: the emission is the handoff fact the physical-advance stage already
+/// produced, so a repeated step cannot duplicate or reorder it.
+#[test]
+fn a_connector_handoff_emits_one_facility_transition_event_mapping_its_record() {
+    let mut sim = build(&forward_rule_scenario(72.0));
+    let (rider, _) = lone_rider_on(&mut sim, 0, 5.0..=20.0);
+    assert!(sim.request_wrong_way_entry(rider));
+
+    let mut records: Vec<FacilityTransitionRecord> = Vec::new();
+    let mut events: Vec<Event> = Vec::new();
+    for _ in 0..600 {
+        let output = sim.step();
+        for window in output.events().windows(2) {
+            assert!(
+                window[0].order_key() <= window[1].order_key(),
+                "the step buffer is non-decreasing by the documented order key"
+            );
+        }
+        // The rider's own records keep the documented kind order: nothing that
+        // sorts after a handoff precedes it within one step.
+        let mut handed_off = false;
+        for event in output
+            .events()
+            .iter()
+            .filter(|event| event.agent() == rider)
+        {
+            if event.kind() == EventKind::FacilityTransition {
+                handed_off = true;
+            } else {
+                assert!(
+                    !handed_off,
+                    "no kind after facility_transition precedes it: {:?}",
+                    event.kind()
+                );
+            }
+        }
+        records.extend(
+            output
+                .facility_transitions()
+                .iter()
+                .filter(|record| record.agent == rider)
+                .copied(),
+        );
+        events.extend(
+            output
+                .events()
+                .iter()
+                .filter(|event| event.agent() == rider)
+                .copied(),
+        );
+        if events
+            .iter()
+            .any(|event| matches!(event, Event::Despawned { .. }))
+        {
+            break;
+        }
+    }
+
+    assert!(
+        records
+            .iter()
+            .any(|record| record.via == TransitionKind::Connector),
+        "the wrong-way rider hands off through the reverse connector"
+    );
+    let handoff = records.first().copied().expect("the handoff was recorded");
+    let emitted = events
+        .iter()
+        .find_map(|event| match event {
+            Event::FacilityTransition { agent, .. } if *agent == rider => Some(*event),
+            _ => None,
+        })
+        .expect("the handoff emitted its event");
+    assert_eq!(
+        emitted,
+        Event::FacilityTransition {
+            agent: handoff.agent,
+            from_facility: handoff.from_facility,
+            to_facility: handoff.to_facility,
+            from_direction: handoff.from_direction,
+            to_direction: handoff.to_direction,
+            via: handoff.via,
+            side: handoff.side,
+            s_m: handoff.s_m,
+            d_m: handoff.d_m,
+            permitted: handoff.permitted,
+        },
+        "the event maps the record's every field"
+    );
+    let handoff_events = events
+        .iter()
+        .filter(|event| matches!(event, Event::FacilityTransition { .. }))
+        .count();
+    assert_eq!(
+        handoff_events,
+        records.len(),
+        "exactly one FacilityTransition event per recorded handoff"
     );
 }
 
