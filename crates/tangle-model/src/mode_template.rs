@@ -465,7 +465,8 @@ fn compiled_profile(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<AgentBehaviorProfile> {
     let mut missing = false;
-    for name in required_profile_params(&template.body, template.motion) {
+    let lateral = template.lateral.is_some();
+    for name in required_profile_params(&template.body, template.motion, lateral) {
         if !template.profiles.contains_key(*name) {
             missing = true;
             diagnostics.push(Diagnostic {

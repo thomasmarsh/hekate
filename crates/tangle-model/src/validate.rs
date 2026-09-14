@@ -14,13 +14,13 @@ use serde::{Deserialize, Serialize};
 use crate::compiled::CompiledReferencePath;
 use crate::mode_template::body_motion_pair_has_family;
 use crate::source::{
-    ConflictRegionSource, CrossingSource, DemandChoiceSource, DemandSpawnSource, FacilityDirection,
-    FacilityKind, FacilitySource, MIN_SUPPORTED_SCHEMA_VERSION, ModeBodySource, ModeTemplateSource,
-    MotionKind, MovementDirection, PathEnd, PathSource, PedestrianRouteShareSource,
-    PedestrianRouteSource, PermissionEffect, PermissionKind, PointSource, PolygonSource,
-    PortalSource, ProfileRangeSource, RouteShareSource, RuleKind, RuleSource,
-    SUPPORTED_SCHEMA_VERSION, ScenarioSource, ScenarioSourceV2, SignalColor, SignalSource,
-    WaitingAreaSource,
+    AdjacencySide, ConflictRegionSource, CrossingSource, DemandChoiceSource, DemandSpawnSource,
+    FacilityDirection, FacilityKind, FacilitySource, LateralUse, MIN_SUPPORTED_SCHEMA_VERSION,
+    ManeuverPolicySource, ModeBodySource, ModeTemplateSource, MotionKind, MovementDirection,
+    PassingSide, PathEnd, PathSource, PedestrianRouteShareSource, PedestrianRouteSource,
+    PermissionEffect, PermissionKind, PointSource, PolygonSource, PortalSource, ProfileRangeSource,
+    RouteShareSource, RuleKind, RuleSource, SUPPORTED_SCHEMA_VERSION, ScenarioSource,
+    ScenarioSourceV2, SignalColor, SignalSource, TacticKind, WaitingAreaSource,
 };
 use glam::DVec2;
 
@@ -196,6 +196,57 @@ pub enum DiagnosticCode {
     PermissionRouteProhibited,
     /// A profile range is non-finite, negative, or inverted.
     ProfileNonNegativeInvalid,
+    /// A version-2 mode template's `lateral` object is incompatible with its
+    /// motion family or its tactics.
+    ModeTemplateLateral,
+    /// A version-2 lateral target clearance is non-finite or negative.
+    ModeLateralClearance,
+    /// A version-2 lateral horizon is non-finite or non-positive.
+    ModeLateralHorizon,
+    /// A version-2 mode template declares a lateral tactic but no maneuver policy.
+    ManeuverPolicyMissing,
+    /// A version-2 mode template declares `reverse_direction` but no wrong-way policy.
+    WrongWayPolicyMissing,
+    /// A version-2 commit policy value is non-finite or out of range.
+    CommitPolicyInvalid,
+    /// A version-2 commit clearance floor exceeds a lateral mode's target clearance.
+    CommitClearanceExceedsTarget,
+    /// A version-2 wrong-way policy value is non-finite or out of range.
+    WrongWayPolicyInvalid,
+    /// A version-2 clearance band threshold is non-finite or non-positive.
+    ClearanceBandThreshold,
+    /// Version-2 clearance bands are not in strictly increasing threshold order.
+    ClearanceBandOrder,
+    /// A version-2 clearance band lists `applies_to_modes` but leaves it empty.
+    ClearanceBandModesEmpty,
+    /// A version-2 clearance band names a mode template that is not declared.
+    ClearanceBandUnknownMode,
+    /// A version-2 facility lateral policy has no reference path to name a side on.
+    FacilityLateralWithoutReference,
+    /// A version-2 centered facility declares a lateral policy.
+    FacilityLateralCentered,
+    /// A version-2 facility lateral policy names a side no eligible body can occupy.
+    FacilityPassingSideUnusable,
+    /// A version-2 facility adjacency names a facility that is not declared.
+    FacilityAdjacencyUnknownFacility,
+    /// A version-2 facility adjacency joins a facility to itself.
+    FacilityAdjacencySelf,
+    /// A version-2 facility adjacency attaches a facility with no reference path.
+    FacilityAdjacencyWithoutReference,
+    /// A version-2 facility adjacency's bands do not touch along a shared boundary.
+    FacilityAdjacencyDisjoint,
+    /// A version-2 facility adjacency's bands touch on the other side than authored.
+    FacilityAdjacencySide,
+    /// A version-2 permission's `kind` disagrees with its target object kind.
+    PermissionTargetKind,
+    /// Two version-2 permission statements share a `(kind, holder, target)`.
+    PermissionEffectConflict,
+    /// A version-2 overtake statement's holder lacks the overtake tactic.
+    PermissionOvertakeCapability,
+    /// A version-2 lane-use obligation needs a facility with a fixed passing side.
+    PermissionLaneUseObligation,
+    /// A version-2 nominal-direction statement targets an `either` object.
+    PermissionNominalEither,
 }
 
 impl DiagnosticCode {
@@ -287,6 +338,31 @@ impl DiagnosticCode {
             Self::PermissionUnknownTarget => "E_PERMISSION_UNKNOWN_TARGET",
             Self::PermissionRouteProhibited => "E_PERMISSION_ROUTE_PROHIBITED",
             Self::ProfileNonNegativeInvalid => "E_PROFILE_NON_NEGATIVE",
+            Self::ModeTemplateLateral => "E_MODE_TEMPLATE_LATERAL",
+            Self::ModeLateralClearance => "E_MODE_LATERAL_CLEARANCE",
+            Self::ModeLateralHorizon => "E_MODE_LATERAL_HORIZON",
+            Self::ManeuverPolicyMissing => "E_MANEUVER_POLICY_MISSING",
+            Self::WrongWayPolicyMissing => "E_WRONG_WAY_POLICY_MISSING",
+            Self::CommitPolicyInvalid => "E_COMMIT_POLICY",
+            Self::CommitClearanceExceedsTarget => "E_COMMIT_CLEARANCE",
+            Self::WrongWayPolicyInvalid => "E_WRONG_WAY_POLICY",
+            Self::ClearanceBandThreshold => "E_CLEARANCE_BAND_THRESHOLD",
+            Self::ClearanceBandOrder => "E_CLEARANCE_BAND_ORDER",
+            Self::ClearanceBandModesEmpty => "E_CLEARANCE_BAND_MODES_EMPTY",
+            Self::ClearanceBandUnknownMode => "E_CLEARANCE_BAND_UNKNOWN_MODE",
+            Self::FacilityLateralWithoutReference => "E_FACILITY_LATERAL_WITHOUT_REFERENCE",
+            Self::FacilityLateralCentered => "E_FACILITY_LATERAL_CENTERED",
+            Self::FacilityPassingSideUnusable => "E_FACILITY_PASSING_SIDE_UNUSABLE",
+            Self::FacilityAdjacencyUnknownFacility => "E_FACILITY_ADJACENCY_UNKNOWN_FACILITY",
+            Self::FacilityAdjacencySelf => "E_FACILITY_ADJACENCY_SELF",
+            Self::FacilityAdjacencyWithoutReference => "E_FACILITY_ADJACENCY_WITHOUT_REFERENCE",
+            Self::FacilityAdjacencyDisjoint => "E_FACILITY_ADJACENCY_DISJOINT",
+            Self::FacilityAdjacencySide => "E_FACILITY_ADJACENCY_SIDE",
+            Self::PermissionTargetKind => "E_PERMISSION_TARGET_KIND",
+            Self::PermissionEffectConflict => "E_PERMISSION_EFFECT_CONFLICT",
+            Self::PermissionOvertakeCapability => "E_PERMISSION_OVERTAKE_CAPABILITY",
+            Self::PermissionLaneUseObligation => "E_PERMISSION_LANE_USE_OBLIGATION",
+            Self::PermissionNominalEither => "E_PERMISSION_NOMINAL_EITHER",
         }
     }
 }
@@ -352,9 +428,16 @@ pub fn validate_v2(source: &ScenarioSourceV2) -> Vec<Diagnostic> {
     check_schema_version(source.schema_version, &source.id, &mut diagnostics);
     validate_ids(&source.id, v2_ids(source), &mut diagnostics);
     validate_common(&common_v2(source), &mut diagnostics);
-    validate_mode_templates(&source.mode_templates, &mut diagnostics);
+    validate_mode_templates(
+        &source.mode_templates,
+        source.maneuver_policy.as_ref(),
+        &mut diagnostics,
+    );
+    validate_maneuver_policy(source, &mut diagnostics);
+    validate_clearance_bands(source, &mut diagnostics);
     validate_facilities(source, &mut diagnostics);
     validate_facility_connectors(source, &mut diagnostics);
+    validate_facility_adjacencies(source, &mut diagnostics);
     validate_facility_reachability(source, &mut diagnostics);
     validate_permissions(source, &mut diagnostics);
     validate_demand_v2(source, &mut diagnostics);
@@ -1600,18 +1683,47 @@ fn validate_signals(common: &Common<'_>, diagnostics: &mut Vec<Diagnostic>) {
 /// parameters a family needs have a single definition. The narrow wheeled
 /// family — a capsule body steering on a reference path — additionally needs
 /// its steering response and lateral-clearance preference alongside the
-/// Increment 0 wheeled parameters; every other family keeps its Increment 0 set.
+/// Increment 0 wheeled parameters. A `single_body_wheeled` template that
+/// declares a `lateral` object additionally needs the lateral maneuver set —
+/// `steering_rate_max_rad_s`, `lateral_accel_max_mps2`, and
+/// `lateral_clearance_m` — whichever body it carries; every other family keeps
+/// its Increment 0 or Increment 1 set.
+///
+/// `lateral` is the caller's answer to whether the template declares a
+/// `lateral` object, so the required set depends only on the body/motion pair
+/// and that one fact, never on the template id.
 pub(crate) fn required_profile_params(
     body: &ModeBodySource,
     motion: MotionKind,
+    lateral: bool,
 ) -> &'static [&'static str] {
     match (body, motion) {
+        (ModeBodySource::Capsule { .. }, MotionKind::SingleBodyWheeled) if lateral => &[
+            "speed_mps",
+            "max_accel_mps2",
+            "comfortable_brake_mps2",
+            "time_gap_s",
+            "steering_rate_max_rad_s",
+            "lateral_accel_max_mps2",
+            "lateral_clearance_m",
+            "compliance",
+        ],
         (ModeBodySource::Capsule { .. }, MotionKind::SingleBodyWheeled) => &[
             "speed_mps",
             "max_accel_mps2",
             "comfortable_brake_mps2",
             "time_gap_s",
             "steering_rate_max_rad_s",
+            "lateral_clearance_m",
+            "compliance",
+        ],
+        (_, MotionKind::SingleBodyWheeled) if lateral => &[
+            "speed_mps",
+            "max_accel_mps2",
+            "comfortable_brake_mps2",
+            "time_gap_s",
+            "steering_rate_max_rad_s",
+            "lateral_accel_max_mps2",
             "lateral_clearance_m",
             "compliance",
         ],
@@ -1626,9 +1738,30 @@ pub(crate) fn required_profile_params(
     }
 }
 
-/// Validate version-2 mode templates: body and motion must coexist, and the
-/// profile parameters must be exactly those the motion family uses.
-fn validate_mode_templates(templates: &[ModeTemplateSource], diagnostics: &mut Vec<Diagnostic>) {
+/// Whether an authored tactic selects a lateral maneuver.
+///
+/// These are the four Increment 2 values whose presence couples a template to
+/// the scenario-scoped `maneuver_policy`; `follow`, `stop`, and `yield` keep
+/// their Increment 0 meaning.
+fn is_lateral_tactic(tactic: TacticKind) -> bool {
+    matches!(
+        tactic,
+        TacticKind::ChangeLane
+            | TacticKind::Overtake
+            | TacticKind::Pass
+            | TacticKind::ReverseDirection
+    )
+}
+
+/// Validate version-2 mode templates: body and motion must coexist, the
+/// profile parameters must be exactly those the motion family and lateral
+/// policy use, and a lateral template must be a wheeled, capable one with the
+/// maneuver policy it needs.
+fn validate_mode_templates(
+    templates: &[ModeTemplateSource],
+    maneuver_policy: Option<&ManeuverPolicySource>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for template in templates {
         if !body_motion_pair_has_family(&template.body, template.motion) {
             diagnostics.push(Diagnostic::new(
@@ -1641,7 +1774,73 @@ fn validate_mode_templates(templates: &[ModeTemplateSource], diagnostics: &mut V
             ));
         }
 
-        let required = required_profile_params(&template.body, template.motion);
+        let lateral_capable = template.tactics.iter().copied().any(is_lateral_tactic);
+        if template.lateral.is_some()
+            && (template.motion != MotionKind::SingleBodyWheeled || !lateral_capable)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ModeTemplateLateral,
+                Some(template.id.clone()),
+                format!(
+                    "mode template '{}' declares lateral maneuver parameters but is not a \
+                     wheeled template with a lateral tactic",
+                    template.id
+                ),
+            ));
+        }
+        if lateral_capable && maneuver_policy.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ManeuverPolicyMissing,
+                Some(template.id.clone()),
+                format!(
+                    "mode template '{}' declares a lateral tactic but the document authors no \
+                     maneuver_policy",
+                    template.id
+                ),
+            ));
+        }
+        if template.tactics.contains(&TacticKind::ReverseDirection)
+            && maneuver_policy
+                .and_then(|policy| policy.wrong_way)
+                .is_none()
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::WrongWayPolicyMissing,
+                Some(template.id.clone()),
+                format!(
+                    "mode template '{}' declares reverse_direction but the document authors no \
+                     maneuver_policy.wrong_way",
+                    template.id
+                ),
+            ));
+        }
+        if let Some(lateral) = &template.lateral {
+            if !lateral.target_clearance_m.is_finite() || lateral.target_clearance_m < 0.0 {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ModeLateralClearance,
+                    Some(template.id.clone()),
+                    format!(
+                        "mode template '{}' lateral.target_clearance_m must be finite and \
+                         non-negative, got {}",
+                        template.id, lateral.target_clearance_m
+                    ),
+                ));
+            }
+            if !lateral.horizon_s.is_finite() || lateral.horizon_s <= 0.0 {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ModeLateralHorizon,
+                    Some(template.id.clone()),
+                    format!(
+                        "mode template '{}' lateral.horizon_s must be finite and strictly \
+                         positive, got {}",
+                        template.id, lateral.horizon_s
+                    ),
+                ));
+            }
+        }
+
+        let required =
+            required_profile_params(&template.body, template.motion, template.lateral.is_some());
         for name in required {
             if !template.profiles.contains_key(*name) {
                 diagnostics.push(Diagnostic::new(
@@ -1674,6 +1873,144 @@ fn validate_mode_templates(templates: &[ModeTemplateSource], diagnostics: &mut V
             } else {
                 validate_profile_range(&template.id, name, *range, diagnostics);
             }
+        }
+    }
+}
+
+/// Validate the scenario-scoped maneuver policy: the commit and wrong-way
+/// values must be well-formed, and the commit clearance floor must not exceed
+/// any lateral mode's target clearance, which would abort every maneuver.
+fn validate_maneuver_policy(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    let Some(policy) = &source.maneuver_policy else {
+        return;
+    };
+
+    if let Some(commit) = &policy.commit {
+        if !commit.min_predicted_clearance_m.is_finite() || commit.min_predicted_clearance_m < 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::CommitPolicyInvalid,
+                None,
+                format!(
+                    "maneuver_policy.commit.min_predicted_clearance_m must be finite and \
+                     non-negative, got {}",
+                    commit.min_predicted_clearance_m
+                ),
+            ));
+        }
+        if !commit.hold_timeout_s.is_finite() || commit.hold_timeout_s <= 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::CommitPolicyInvalid,
+                None,
+                format!(
+                    "maneuver_policy.commit.hold_timeout_s must be finite and strictly positive, \
+                     got {}",
+                    commit.hold_timeout_s
+                ),
+            ));
+        }
+        for template in &source.mode_templates {
+            if let Some(lateral) = &template.lateral
+                && commit.min_predicted_clearance_m.is_finite()
+                && lateral.target_clearance_m.is_finite()
+                && commit.min_predicted_clearance_m > lateral.target_clearance_m
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::CommitClearanceExceedsTarget,
+                    Some(template.id.clone()),
+                    format!(
+                        "maneuver_policy.commit.min_predicted_clearance_m {} exceeds the target \
+                         clearance {} of mode '{}', which would abort every maneuver",
+                        commit.min_predicted_clearance_m, lateral.target_clearance_m, template.id
+                    ),
+                ));
+            }
+        }
+    }
+
+    if let Some(wrong_way) = &policy.wrong_way {
+        let valid = wrong_way.min_time_saving_s.is_finite()
+            && wrong_way.min_time_saving_s >= 0.0
+            && wrong_way.max_opposing_density_per_km.is_finite()
+            && wrong_way.max_opposing_density_per_km >= 0.0
+            && wrong_way.urgency.is_finite()
+            && (0.0..=1.0).contains(&wrong_way.urgency);
+        if !valid {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::WrongWayPolicyInvalid,
+                None,
+                format!(
+                    "maneuver_policy.wrong_way needs a finite non-negative min_time_saving_s and \
+                     max_opposing_density_per_km, and an urgency within [0, 1]; got {} s, {} \
+                     per km, {}",
+                    wrong_way.min_time_saving_s,
+                    wrong_way.max_opposing_density_per_km,
+                    wrong_way.urgency
+                ),
+            ));
+        }
+    }
+}
+
+/// Validate version-2 clearance bands: each threshold is finite and strictly
+/// positive, bands are declared in strictly increasing order, and every mode a
+/// band names is declared.
+fn validate_clearance_bands(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    for (index, band) in source.clearance_bands.iter().enumerate() {
+        let object = Some(band.id.clone());
+        if !band.threshold_m.is_finite() || band.threshold_m <= 0.0 {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ClearanceBandThreshold,
+                object.clone(),
+                format!(
+                    "clearance band '{}' threshold_m must be finite and strictly positive, got {}",
+                    band.id, band.threshold_m
+                ),
+            ));
+        }
+        if index > 0 {
+            let previous = source.clearance_bands[index - 1].threshold_m;
+            if band.threshold_m.is_finite() && previous.is_finite() && band.threshold_m <= previous
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ClearanceBandOrder,
+                    object.clone(),
+                    format!(
+                        "clearance band '{}' threshold_m {} must be strictly greater than the \
+                         preceding band's {}",
+                        band.id, band.threshold_m, previous
+                    ),
+                ));
+            }
+        }
+        match &band.applies_to_modes {
+            Some(modes) if modes.is_empty() => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ClearanceBandModesEmpty,
+                object.clone(),
+                format!(
+                    "clearance band '{}' declares an empty applies_to_modes; omit the field to \
+                     apply to every mode pair",
+                    band.id
+                ),
+            )),
+            Some(modes) => {
+                for mode in modes {
+                    if !source
+                        .mode_templates
+                        .iter()
+                        .any(|template| template.id == *mode)
+                    {
+                        diagnostics.push(Diagnostic::new(
+                            DiagnosticCode::ClearanceBandUnknownMode,
+                            object.clone(),
+                            format!(
+                                "clearance band '{}' applies to undeclared mode template '{}'",
+                                band.id, mode
+                            ),
+                        ));
+                    }
+                }
+            }
+            None => {}
         }
     }
 }
@@ -1967,6 +2304,11 @@ fn validate_demand_v2(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnosti
 
 /// Tolerance, in metres, within which two connector ends count as coincident.
 const CONNECTOR_CONTINUITY_TOLERANCE_M: f64 = 1e-6;
+
+/// Tolerance, in metres, within which two facility bands count as touching
+/// along a shared boundary, and within which a contact point counts as off a
+/// reference centerline.
+const ADJACENCY_TOLERANCE_M: f64 = 1e-6;
 
 /// Tolerance, in `1/m`, within which a reference curvature counts as within a
 /// mode's turning limit.
@@ -2296,6 +2638,54 @@ fn validate_facilities(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnost
             }
         }
 
+        // The Increment 2 lateral policy names a side a body displaces toward,
+        // so it needs a reference frame to name the side on, must not sit on a
+        // centered facility that offers no lateral target, and must name a side
+        // an eligible body can actually occupy.
+        if facility.lateral_policy.is_some() {
+            if facility.reference_path.is_none() {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::FacilityLateralWithoutReference,
+                    object.clone(),
+                    format!(
+                        "facility '{}' declares a lateral_policy without a reference_path; a \
+                         facility with no (s, d) frame has no side to name",
+                        facility.id
+                    ),
+                ));
+            }
+            if matches!(facility.lateral_use, LateralUse::Centered) {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::FacilityLateralCentered,
+                    object.clone(),
+                    format!(
+                        "facility '{}' is centered but declares a lateral_policy; a centered \
+                         facility offers no lateral target for the side to apply to",
+                        facility.id
+                    ),
+                ));
+            }
+            if facility.width_m.is_finite() && facility.width_m > 0.0 {
+                let side_usable = modes.iter().any(|template| {
+                    let half = facility.width_m * 0.5
+                        - body_envelope_width_m(&template.body) * 0.5
+                        - mode_lateral_clearance_m(template);
+                    half > 0.0
+                });
+                if !side_usable {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::FacilityPassingSideUnusable,
+                        object.clone(),
+                        format!(
+                            "facility '{}' lateral_policy names a side no permitted body can \
+                             occupy: every eligible body leaves no nonzero usable interval",
+                            facility.id
+                        ),
+                    ));
+                }
+            }
+        }
+
         // Curvature against the turning limits of every permitted mode.
         if let Some(reference) = facility_reference(source, facility) {
             diagnostics.extend(facility_curvature_diagnostics(
@@ -2379,6 +2769,186 @@ fn validate_facility_connectors(source: &ScenarioSourceV2, diagnostics: &mut Vec
     }
 }
 
+/// The midpoint of the longest collinear boundary segment two polygon rings
+/// share within [`ADJACENCY_TOLERANCE_M`], or `None` when they share none.
+///
+/// A shared boundary is what "the bands touch along a stretch of positive
+/// length" means: two rings touching at a single corner share no segment and
+/// return `None`.
+fn shared_boundary_midpoint(a: &[PointSource], b: &[PointSource]) -> Option<PointSource> {
+    if a.len() < 3 || b.len() < 3 {
+        return None;
+    }
+    let mut best: Option<(f64, PointSource)> = None;
+    for index in 0..a.len() {
+        let a0 = a[index];
+        let a1 = a[(index + 1) % a.len()];
+        let dx = a1.x - a0.x;
+        let dy = a1.y - a0.y;
+        let length = (dx * dx + dy * dy).sqrt();
+        if length <= ADJACENCY_TOLERANCE_M {
+            continue;
+        }
+        for other in 0..b.len() {
+            let b0 = b[other];
+            let b1 = b[(other + 1) % b.len()];
+            let off0 = ((b0.x - a0.x) * dy - (b0.y - a0.y) * dx).abs() / length;
+            let off1 = ((b1.x - a0.x) * dy - (b1.y - a0.y) * dx).abs() / length;
+            if off0 > ADJACENCY_TOLERANCE_M || off1 > ADJACENCY_TOLERANCE_M {
+                continue;
+            }
+            let length_sq = length * length;
+            let t0 = ((b0.x - a0.x) * dx + (b0.y - a0.y) * dy) / length_sq;
+            let t1 = ((b1.x - a0.x) * dx + (b1.y - a0.y) * dy) / length_sq;
+            let low = t0.min(t1).clamp(0.0, 1.0);
+            let high = t0.max(t1).clamp(0.0, 1.0);
+            let overlap = (high - low) * length;
+            if overlap <= ADJACENCY_TOLERANCE_M {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(longest, _)| overlap > *longest) {
+                let mid = 0.5 * (low + high);
+                best = Some((
+                    overlap,
+                    PointSource {
+                        x: a0.x + dx * mid,
+                        y: a0.y + dy * mid,
+                    },
+                ));
+            }
+        }
+    }
+    best.map(|(_, midpoint)| midpoint)
+}
+
+/// The side of `reference`'s forward direction on which a world point lies, or
+/// `None` when the point sits on the centerline within
+/// [`ADJACENCY_TOLERANCE_M`].
+fn reference_side_of(
+    reference: &CompiledReferencePath,
+    point: PointSource,
+) -> Option<AdjacencySide> {
+    let world = DVec2::new(point.x, point.y);
+    let s = reference.project(world).s();
+    let signed = (world - reference.position_at(s)).dot(reference.normal_at(s));
+    if signed > ADJACENCY_TOLERANCE_M {
+        Some(AdjacencySide::Left)
+    } else if signed < -ADJACENCY_TOLERANCE_M {
+        Some(AdjacencySide::Right)
+    } else {
+        None
+    }
+}
+
+/// Validate version-2 facility adjacencies: two declared, distinct facilities
+/// that each declare a reference path, whose bands touch along a shared
+/// boundary of positive length on the declared side.
+///
+/// This is what rejects a "transition" between two facilities that are not
+/// actually side by side; proximity of polygons is never inferred into a
+/// transition, and an omitted adjacency is how a document expresses "no lateral
+/// transitions exist".
+fn validate_facility_adjacencies(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    for adjacency in &source.facility_adjacencies {
+        let object = Some(adjacency.id.clone());
+        let first = source
+            .facilities
+            .iter()
+            .find(|facility| facility.id == adjacency.first);
+        let second = source
+            .facilities
+            .iter()
+            .find(|facility| facility.id == adjacency.second);
+        if first.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityAdjacencyUnknownFacility,
+                object.clone(),
+                format!(
+                    "adjacency '{}' names undeclared facility '{}'",
+                    adjacency.id, adjacency.first
+                ),
+            ));
+        }
+        if second.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityAdjacencyUnknownFacility,
+                object.clone(),
+                format!(
+                    "adjacency '{}' names undeclared facility '{}'",
+                    adjacency.id, adjacency.second
+                ),
+            ));
+        }
+        if adjacency.first == adjacency.second {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityAdjacencySelf,
+                object.clone(),
+                format!(
+                    "adjacency '{}' joins facility '{}' to itself",
+                    adjacency.id, adjacency.first
+                ),
+            ));
+        }
+        let (Some(first), Some(second)) = (first, second) else {
+            continue;
+        };
+        if first.reference_path.is_none() || second.reference_path.is_none() {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityAdjacencyWithoutReference,
+                object.clone(),
+                format!(
+                    "adjacency '{}' attaches a facility without a reference_path; a lateral \
+                     transition joins two reference bands",
+                    adjacency.id
+                ),
+            ));
+            continue;
+        }
+
+        // The bands are the two facility regions. An undeclared or malformed
+        // region is already reported by the facility and polygon rules, so the
+        // geometry rule stays out of their way.
+        let first_region = source
+            .regions
+            .iter()
+            .find(|region| region.id == first.region);
+        let second_region = source
+            .regions
+            .iter()
+            .find(|region| region.id == second.region);
+        let (Some(first_region), Some(second_region)) = (first_region, second_region) else {
+            continue;
+        };
+        let Some(midpoint) = shared_boundary_midpoint(&first_region.points, &second_region.points)
+        else {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityAdjacencyDisjoint,
+                object.clone(),
+                format!(
+                    "adjacency '{}' joins facilities '{}' and '{}', whose bands do not touch \
+                     along a shared boundary of positive length",
+                    adjacency.id, first.id, second.id
+                ),
+            ));
+            continue;
+        };
+        let Some(reference) = facility_reference(source, first) else {
+            continue;
+        };
+        if reference_side_of(&reference, midpoint) != Some(adjacency.side) {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::FacilityAdjacencySide,
+                object.clone(),
+                format!(
+                    "adjacency '{}' declares side {:?} of facility '{}', but the bands touch on \
+                     the other side",
+                    adjacency.id, adjacency.side, first.id
+                ),
+            ));
+        }
+    }
+}
+
 /// Validate that each facility's declared nominal direction is physically
 /// possible through the connector graph.
 ///
@@ -2429,16 +2999,89 @@ fn validate_facility_reachability(source: &ScenarioSourceV2, diagnostics: &mut V
     }
 }
 
-/// Validate version-2 permission statements: a declared holder, a declared
-/// target for the populated `nominal_direction` kind, and the legal-versus-
-/// physically-possible separation.
+/// The declared object kind a permission statement's `target` names, resolved
+/// without regard to the statement's `kind`.
+enum PermissionObject<'a> {
+    /// A continuous-width facility; the statement resolves against it.
+    Facility(&'a FacilitySource),
+    /// A movement connector.
+    Movement,
+    /// A pedestrian crossing.
+    Crossing,
+}
+
+/// Resolve a permission target id to the declared object it names, or `None`
+/// when no declared object carries that id.
+fn resolve_permission_object<'a>(
+    source: &'a ScenarioSourceV2,
+    target: &str,
+) -> Option<PermissionObject<'a>> {
+    if let Some(facility) = source
+        .facilities
+        .iter()
+        .find(|facility| facility.id == target)
+    {
+        return Some(PermissionObject::Facility(facility));
+    }
+    if source
+        .movements
+        .iter()
+        .any(|movement| movement.id == target)
+    {
+        return Some(PermissionObject::Movement);
+    }
+    if source
+        .crossings
+        .iter()
+        .any(|crossing| crossing.id == target)
+    {
+        return Some(PermissionObject::Crossing);
+    }
+    None
+}
+
+/// Validate version-2 permission statements: a declared holder, a target whose
+/// object kind its `kind` fixes, at most one statement per specificity, an
+/// `overtake` holder that can overtake, a `lane_use` obligation with a fixed
+/// passing side, a nominal direction with an opposite to name, and the
+/// legal-versus-physically-possible separation.
 ///
 /// A `prohibit` that contradicts a facility's granted access is an illegal
 /// route and is reported with [`DiagnosticCode::PermissionRouteProhibited`],
 /// distinct from the codes a physically impossible route carries
 /// ([`DiagnosticCode::FacilityUnreachableDirection`],
 /// [`DiagnosticCode::FacilityCurvature`], [`DiagnosticCode::FacilityTooNarrow`]).
+///
+/// A `nominal_direction` statement whose target has no physically connected
+/// opposing traversal is *not* rejected: the permitted set never leaves the
+/// physically possible set, so the statement is inert for that traversal and
+/// the runtime wrong-way decision closes the case with `no_opposing_path`.
 fn validate_permissions(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnostic>) {
+    // Specificity has exactly one axis, `(kind, holder, target)`. Two
+    // statements that agree on it — whatever their effects, identical or
+    // contradictory — are rejected rather than resolved by a silent override.
+    let mut specificity: Vec<(PermissionKind, &str, &str)> = Vec::new();
+    for permission in &source.permissions {
+        let key = (
+            permission.kind,
+            permission.holder.as_str(),
+            permission.target.as_str(),
+        );
+        if specificity.contains(&key) {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PermissionEffectConflict,
+                Some(permission.id.clone()),
+                format!(
+                    "permission '{}' repeats the (kind, holder, target) of another statement; a \
+                     second statement at equal specificity is rejected, not overridden",
+                    permission.id
+                ),
+            ));
+        } else {
+            specificity.push(key);
+        }
+    }
+
     for permission in &source.permissions {
         let object = Some(permission.id.clone());
         let holder = source
@@ -2456,21 +3099,13 @@ fn validate_permissions(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnos
             ));
         }
 
-        // Increment 1 populates only `nominal_direction`; the other kinds target
-        // objects owned by later increments and are shape-only here.
-        if permission.kind != PermissionKind::NominalDirection {
+        // `stop_service` targets a `bus_stop` Increment 4 owns, so it stays
+        // shape-only: its target is never resolved and it binds no traversal.
+        if permission.kind == PermissionKind::StopService {
             continue;
         }
 
-        let target_facility = source
-            .facilities
-            .iter()
-            .find(|facility| facility.id == permission.target);
-        let target_movement = source
-            .movements
-            .iter()
-            .find(|movement| movement.id == permission.target);
-        if target_facility.is_none() && target_movement.is_none() {
+        let Some(resolved) = resolve_permission_object(source, &permission.target) else {
             diagnostics.push(Diagnostic::new(
                 DiagnosticCode::PermissionUnknownTarget,
                 object.clone(),
@@ -2480,19 +3115,99 @@ fn validate_permissions(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnos
                 ),
             ));
             continue;
-        }
+        };
 
-        if permission.effect == PermissionEffect::Prohibit
-            && let (Some(facility), Some(holder)) = (target_facility, holder)
-            && facility.access.modes.iter().any(|mode| mode == &holder.id)
-        {
+        // `kind` fixes which object kind the target names.
+        let expected = match permission.kind {
+            PermissionKind::NominalDirection => matches!(
+                &resolved,
+                PermissionObject::Facility(_) | PermissionObject::Movement
+            ),
+            PermissionKind::LaneUse | PermissionKind::Overtake => {
+                matches!(&resolved, PermissionObject::Facility(_))
+            }
+            PermissionKind::Crossing => matches!(&resolved, PermissionObject::Crossing),
+            PermissionKind::StopService => false,
+        };
+        if !expected {
             diagnostics.push(Diagnostic::new(
-                DiagnosticCode::PermissionRouteProhibited,
+                DiagnosticCode::PermissionTargetKind,
                 object.clone(),
                 format!(
-                    "permission '{}' prohibits mode '{}' on facility '{}', which grants it \
-                     access; the route is illegal",
-                    permission.id, holder.id, facility.id
+                    "permission '{}' is a {:?} statement but target '{}' names a different \
+                     object kind",
+                    permission.id, permission.kind, permission.target
+                ),
+            ));
+            continue;
+        }
+
+        let PermissionObject::Facility(facility) = resolved else {
+            // A movement- or crossing-targeted statement never carries the
+            // facility rules below.
+            continue;
+        };
+
+        if permission.kind == PermissionKind::NominalDirection {
+            // A nominal-direction statement needs an opposite direction to
+            // permit, prohibit, or oblige; an `either` object has none.
+            if facility.nominal_direction == FacilityDirection::Either {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PermissionNominalEither,
+                    object.clone(),
+                    format!(
+                        "permission '{}' is a nominal_direction statement about 'either' \
+                         facility '{}', which has no opposite direction",
+                        permission.id, facility.id
+                    ),
+                ));
+            }
+            if permission.effect == PermissionEffect::Prohibit
+                && let Some(holder) = holder
+                && facility.access.modes.iter().any(|mode| mode == &holder.id)
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PermissionRouteProhibited,
+                    object.clone(),
+                    format!(
+                        "permission '{}' prohibits mode '{}' on facility '{}', which grants it \
+                         access; the route is illegal",
+                        permission.id, holder.id, facility.id
+                    ),
+                ));
+            }
+        }
+
+        if permission.kind == PermissionKind::LaneUse
+            && permission.effect == PermissionEffect::Obligate
+        {
+            let fixed_side = facility
+                .lateral_policy
+                .is_some_and(|policy| policy.passing_side != PassingSide::MostClearance);
+            if !fixed_side {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::PermissionLaneUseObligation,
+                    object.clone(),
+                    format!(
+                        "permission '{}' obligates lane use on facility '{}', which names no \
+                         fixed passing side (left or right)",
+                        permission.id, facility.id
+                    ),
+                ));
+            }
+        }
+
+        if permission.kind == PermissionKind::Overtake
+            && let Some(holder) = holder
+            && !holder.tactics.contains(&TacticKind::Overtake)
+        {
+            diagnostics.push(Diagnostic::new(
+                DiagnosticCode::PermissionOvertakeCapability,
+                object.clone(),
+                format!(
+                    "permission '{}' grants overtaking to mode '{}', which does not declare the \
+                     overtake tactic",
+                    permission.id, holder.id
                 ),
             ));
         }

@@ -105,6 +105,7 @@ const INCREMENT_2: &str = r#"{
                 comfortable_brake_mps2: { min: 2.0, max: 2.0 },
                 time_gap_s: { min: 1.0, max: 1.0 },
                 steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+                lateral_accel_max_mps2: { min: 1.9, max: 1.9 },
                 lateral_clearance_m: { min: 0.3, max: 0.3 },
                 compliance: { min: 0.8, max: 1.0 },
             },
@@ -115,7 +116,7 @@ const INCREMENT_2: &str = r#"{
             body: { kind: 'capsule', length_m: { min: 1.4, max: 1.4 },
                 radius_m: { min: 0.35, max: 0.35 } },
             motion: 'single_body_wheeled',
-            tactics: [ 'follow', 'stop', 'pass' ],
+            tactics: [ 'follow', 'stop', 'pass', 'overtake' ],
             access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
                 speed_policy: { limit_mps: null } },
             occupancy: 'operator_only',
@@ -125,6 +126,7 @@ const INCREMENT_2: &str = r#"{
                 comfortable_brake_mps2: { min: 2.0, max: 2.0 },
                 time_gap_s: { min: 1.0, max: 1.0 },
                 steering_rate_max_rad_s: { min: 0.8, max: 0.8 },
+                lateral_accel_max_mps2: { min: 1.6, max: 1.6 },
                 lateral_clearance_m: { min: 0.2, max: 0.2 },
                 compliance: { min: 0.9, max: 1.0 },
             },
@@ -152,7 +154,7 @@ const INCREMENT_2: &str = r#"{
         { id: 'bikeway_eastbound', region: 'east_band', reference_path: 'bikeway_east',
             width_m: 3.0, nominal_direction: 'forward',
             access: { modes: [ 'bicycle', 'scooter' ] }, lateral_use: 'shared',
-            lateral_policy: { passing_side: 'most_clearance' },
+            lateral_policy: { passing_side: 'left' },
             speed_policy: { limit_mps: null } },
         { id: 'bikeway_westbound', region: 'west_band', reference_path: 'bikeway_west',
             width_m: 3.0, nominal_direction: 'forward', access: { modes: [ 'bicycle' ] },
@@ -908,7 +910,7 @@ fn resolves_the_applicable_pass_lane_use_and_crossing_policy() {
     let scenario = increment_2();
 
     let eastbound = policy(&scenario, "bicycle", "bikeway_eastbound");
-    assert_eq!(eastbound.passing_side(), Some(PassingSide::MostClearance));
+    assert_eq!(eastbound.passing_side(), Some(PassingSide::Left));
     assert_eq!(eastbound.lane_use(), Some(PermissionEffect::Obligate));
     assert_eq!(eastbound.overtake(), None);
 
