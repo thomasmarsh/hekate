@@ -100,6 +100,18 @@ pub(crate) struct RouteState {
     pub(crate) target_offset_m: Option<f64>,
     /// The target facility of a cross-facility transition, once one is fixed.
     pub(crate) target_facility: Option<FacilityId>,
+    /// The band a cross-facility change of lane returns to: the source facility
+    /// the maneuver was attempted from, preserved across the outbound handoff
+    /// that moves ownership to the destination band.
+    ///
+    /// `None` for a within-facility maneuver, for the outbound leg while the
+    /// agent still rides the band it was attempted in, and again once the
+    /// return crossing has moved ownership back — so a change of lane performs
+    /// exactly one crossing out and one crossing back over the same compiled
+    /// adjacency, and never settles in the band it passed through. Its return
+    /// target is that crossing's own offset in the band the agent currently
+    /// rides, not an offset the destination frame cannot name.
+    pub(crate) return_facility: Option<FacilityId>,
     /// Predicted minimum clearance over the maneuver horizon, once predicted.
     pub(crate) predicted_min_clearance_m: Option<f64>,
     /// The mode's resolved target clearance, when its compiled policy declares
@@ -122,8 +134,11 @@ pub(crate) struct RouteState {
     /// The passed obstacle of the current maneuver, fixed at the attempt.
     pub(crate) passed_body: Option<AgentId>,
     /// The signed offset the agent held when the current maneuver was
-    /// attempted: the return target of `returning` and `aborted`, in the
-    /// agent's own travel frame.
+    /// attempted, in the agent's own travel frame at that moment: the target a
+    /// `returning` or `aborted` maneuver that stayed within one band steers
+    /// back to. A change of lane that has crossed into the destination band
+    /// returns over the compiled adjacency instead, so its return target is
+    /// that crossing's own offset in the destination's travel frame.
     pub(crate) pre_maneuver_offset_m: f64,
     /// Simulation time the current maneuver state was entered, or `None` while
     /// the agent is `following`. A claim is sought at the decision after the
@@ -201,6 +216,7 @@ impl RouteState {
             maneuver: ManeuverState::Following,
             target_offset_m: None,
             target_facility: None,
+            return_facility: None,
             predicted_min_clearance_m: None,
             target_clearance_m,
             horizon_s,

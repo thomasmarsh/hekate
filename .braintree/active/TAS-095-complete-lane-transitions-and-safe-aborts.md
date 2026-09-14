@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:12Z
+updated: 2026-09-14T14:22:55Z
 summary: Complete configured lane or facility transitions with bounded abort, braking, and return.
-next: [[TAS-113-return-a-cross-facility-change-of-lane-to-the-so]]
+next: [[TAS-114-keep-destination-leader-follower-constraints-act]]
 ---
 
 Parent [[TAS-092-passing-and-lane-transition-behavior]].
@@ -41,8 +41,11 @@ Do not define event payloads, close-pass aggregation, or acceptance scenarios.
 Partial: both facility handoffs, the forbidden-boundary fact, the compiled
 shared-boundary crossing, the cross-facility committed hazard matrix, and the
 return-obstruction policy have landed with a focused suite; the cross-facility
-return leg and the current+destination leader/follower constraints remain, so
-TAS-095 stays `active` with the `next` above.
+return leg landed in
+[[TAS-113-return-a-cross-facility-change-of-lane-to-the-so]] (one crossing out
+and one back over the same compiled adjacency), so only the current+destination
+leader/follower constraints remain and TAS-095 stays `active` with the `next`
+above.
 
 ## This session (TAS-112 unblocked the outbound hazard matrix)
 
@@ -145,12 +148,12 @@ changed, and no golden, baseline, or schema was regenerated.
 
 ## Remaining scope (the `next`)
 
-- **Cross-facility return leg**: the change of lane is outbound-only — the agent
-  remains on the destination. A pass out into an adjacent band and back is not
-  implemented.
+- **Cross-facility return leg**: landed by
+  [[TAS-113-return-a-cross-facility-change-of-lane-to-the-so]].
 - **Current and destination constraints together**: leader/follower selection
   reads the agent's current facility only; the destination's leaders and
-  followers are not considered before the handoff.
+  followers are not considered before the handoff. Owned by
+  [[TAS-114-keep-destination-leader-follower-constraints-act]].
 
 ## Validation
 

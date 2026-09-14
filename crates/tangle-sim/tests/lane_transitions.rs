@@ -590,6 +590,166 @@ fn return_obstruction_scenario() -> String {
     )
 }
 
+/// The authored shape of the cross-facility pass fixture.
+///
+/// `source_reference_y_m` and `destination_reference_y_m` place the two
+/// compiled reference paths inside the two side-by-side regions, so a caller can
+/// move a reference away from the middle of its region: the compiled shared
+/// boundary comes from the regions while each band's compiled band comes from
+/// `width_m` around the reference, and the two disagree exactly when a reference
+/// is offset inside its region.
+struct CrossingPass {
+    /// The source reference path's lateral position in metres.
+    source_reference_y_m: f64,
+    /// The destination reference path's lateral position in metres.
+    destination_reference_y_m: f64,
+    /// Whether the destination band carries the obstruction stream the return
+    /// leg crosses back through.
+    obstruct_return: bool,
+}
+
+impl Default for CrossingPass {
+    fn default() -> Self {
+        Self {
+            source_reference_y_m: 0.0,
+            destination_reference_y_m: 3.0,
+            obstruct_return: false,
+        }
+    }
+}
+
+/// The stretch of the destination band the obstruction stream occupies.
+///
+/// The stretch starts downstream of the outbound crossing and of the entry leg
+/// into the destination band, so only the return leg reads it: the entry leg
+/// holds its crossing without a prediction, and the committed leg's own lane
+/// stays clear of the stream's.
+const RETURN_OBSTRUCTION_ZONE_M: std::ops::RangeInclusive<f64> = 45.0..=85.0;
+
+/// Two side-by-side bands joined by an adjacency, with a lateral-capable rider
+/// inflow on the source band, a slower body stream on a parallel lane outside
+/// the source band, and, when the shape asks for it, a stream of rider-speed
+/// bodies along the stretch of the destination band a return crosses back
+/// through.
+///
+/// The source lane is 72 m apart in the rider's own inflow, so a returned rider
+/// reads no follower of its own in the corridor it returns through: every body
+/// the return can read is one the fixture placed there.
+fn crossing_pass_scenario(pass: CrossingPass) -> String {
+    let CrossingPass {
+        source_reference_y_m: source_y_m,
+        destination_reference_y_m: destination_y_m,
+        obstruct_return,
+    } = pass;
+    let rider_mode = lane_rider_mode(6.0);
+    // The obstruction lane lies in the destination band, one lane inside the
+    // committed offset, so the committed leg's own lane clearance stays above
+    // the mode's target and only the return corridor reaches the stream.
+    let block_lane_y_m = destination_y_m - 1.8;
+    let (block_lane, block_portals, block_movement, block_demand) = if obstruct_return {
+        (
+            r#"    { id: 'block_lane', points: [ { x: BLOCK_START, y: BLOCK_Y }, { x: BLOCK_END, y: BLOCK_Y } ] },
+"#,
+            r#"    { id: 'block_entry', path: 'block_lane', end: 'start', width_m: 3.0 },
+    { id: 'block_exit', path: 'block_lane', end: 'end', width_m: 3.0 },
+"#,
+            r#"    { id: 'block_through', from: 'block_entry', to: 'block_exit',
+      path: 'block_lane', priority: 0, direction: 'forward' },
+"#,
+            r#"    { id: 'block_inflow', mode: 'companion',
+      spawn: { rate: {
+        portal: 'block_entry',
+        rate_per_hour: 1500.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'block_through', weight: 1.0 } ] },
+      } } },
+"#,
+        )
+    } else {
+        ("", "", "", "")
+    };
+    format!(
+        r#"{{
+  schema_version: 2,
+  id: 'crossing_pass_v2',
+  coordinate_system: {{ x: 'east_m', y: 'north_m' }},
+  paths: [
+    {{ id: 'guide_a', points: [ {{ x: 0.0, y: {source_y_m:?} }}, {{ x: 400.0, y: {source_y_m:?} }} ] }},
+    {{ id: 'slow_lane', points: [ {{ x: 40.0, y: SLOW_Y }}, {{ x: 640.0, y: SLOW_Y }} ] }},
+    {{ id: 'guide_b', points: [ {{ x: 0.0, y: {destination_y_m:?} }}, {{ x: 400.0, y: {destination_y_m:?} }} ] }},
+{block_lane}  ],
+  portals: [
+    {{ id: 'entry', path: 'guide_a', end: 'start', width_m: 3.0 }},
+    {{ id: 'exit', path: 'guide_a', end: 'end', width_m: 3.0 }},
+    {{ id: 'slow_entry', path: 'slow_lane', end: 'start', width_m: 3.0 }},
+    {{ id: 'slow_exit', path: 'slow_lane', end: 'end', width_m: 3.0 }},
+{block_portals}  ],
+  boundaries: [
+    {{ id: 'world', points: [
+      {{ x: -10.0, y: -10.0 }}, {{ x: 650.0, y: -10.0 }},
+      {{ x: 650.0, y: 10.0 }}, {{ x: -10.0, y: 10.0 }},
+    ] }},
+  ],
+  regions: [
+    {{ id: 'band_a', points: [
+      {{ x: 0.0, y: -1.5 }}, {{ x: 400.0, y: -1.5 }},
+      {{ x: 400.0, y: 1.5 }}, {{ x: 0.0, y: 1.5 }},
+    ] }},
+    {{ id: 'band_b', points: [
+      {{ x: 0.0, y: 1.5 }}, {{ x: 400.0, y: 1.5 }},
+      {{ x: 400.0, y: 4.5 }}, {{ x: 0.0, y: 4.5 }},
+    ] }},
+  ],
+  facilities: [
+    {{ id: 'a', region: 'band_a', reference_path: 'guide_a',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: {{ modes: [ 'rider', 'companion', 'through_rider' ] }},
+      lateral_use: 'shared', lateral_policy: {{ passing_side: 'left' }},
+      speed_policy: {{ limit_mps: null }} }},
+    {{ id: 'b', region: 'band_b', reference_path: 'guide_b',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: {{ modes: [ 'rider', 'companion', 'through_rider' ] }},
+      lateral_use: 'shared', lateral_policy: {{ passing_side: 'left' }},
+      speed_policy: {{ limit_mps: null }} }},
+  ],
+  facility_adjacencies: [
+    {{ id: 'a_beside_b', first: 'a', second: 'b', side: 'left' }},
+  ],
+  movements: [
+    {{ id: 'through', from: 'entry', to: 'exit', path: 'guide_a', priority: 0,
+      direction: 'forward' }},
+    {{ id: 'slow_through', from: 'slow_entry', to: 'slow_exit',
+      path: 'slow_lane', priority: 0, direction: 'forward' }},
+{block_movement}  ],
+  mode_templates: [ {rider_mode}, {RETURN_COMPANION_MODE}, {THROUGH_RIDER_MODE} ],
+  maneuver_policy: {{
+    commit: {{ min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 }},
+  }},
+  demand: [
+    {{ id: 'rider_inflow', mode: 'rider',
+      spawn: {{ rate: {{
+        portal: 'entry',
+        rate_per_hour: 300.0,
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'through', weight: 1.0 }} ] }},
+      }} }} }},
+    {{ id: 'slow_inflow', mode: 'companion',
+      spawn: {{ rate: {{
+        portal: 'slow_entry',
+        rate_per_hour: 300.0,
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'slow_through', weight: 1.0 }} ] }},
+      }} }} }},
+{block_demand}  ],
+}}
+"#
+    )
+    .replace("SLOW_Y", &format!("{:?}", source_y_m - 2.0))
+    .replace("BLOCK_Y", &format!("{block_lane_y_m:?}"))
+    .replace("BLOCK_START", &format!("{:?}", RETURN_OBSTRUCTION_ZONE_M.start()))
+    .replace("BLOCK_END", &format!("{:?}", RETURN_OBSTRUCTION_ZONE_M.end()))
+}
+
 /// One agent's compiled guide path, arc-length progress, and world position.
 struct Placement {
     id: AgentId,
@@ -1297,4 +1457,218 @@ fn no_change_without_an_authored_lateral_capability() {
             .all(|record| record.via == TransitionKind::Connector),
         "no lateral handoff is recorded without a lateral policy"
     );
+}
+
+/// The compiled-path index of the obstruction lane in the cross-facility pass
+/// fixture: its paths are `guide_a`, `slow_lane`, `guide_b`, and the obstruction
+/// lane is appended last when the shape asks for it.
+const BLOCK_LANE_PATH: usize = 3;
+
+/// The longitudinal reach of the obstruction a return reads: the compiled
+/// crossing corridor sweeps the stretch of the destination band a few body
+/// lengths ahead of the rider, so a body there is a body the corridor holds the
+/// return for, and one outside it is not.
+const RETURN_CORRIDOR_REACH_M: std::ops::RangeInclusive<f64> = 3.0..=13.0;
+
+/// A requested cross-facility change of lane completes the pass it was made for
+/// and returns over the compiled shared boundary: the outbound crossing carries
+/// the rider into the adjacent band, and the return crossing carries it back to
+/// the band it was attempted from, where it settles at the offset it held there.
+///
+/// Both crossings fire at the adjacency's compiled shared boundary rather than
+/// at either band's half-width: the source reference runs half a metre above the
+/// middle of its region and the destination reference half a metre above the
+/// middle of its, so the boundary is 1.0 m from the source reference and 2.0 m
+/// from the destination reference — neither is the 1.5 m half-width of the two
+/// compiled bands.
+#[test]
+fn a_cross_facility_change_of_lane_returns_over_the_shared_boundary() {
+    let mut sim = build(&crossing_pass_scenario(CrossingPass {
+        source_reference_y_m: 0.5,
+        destination_reference_y_m: 3.5,
+        obstruct_return: false,
+    }));
+    let (rider, slow) =
+        rider_before_a_slow_body(&mut sim).expect("a rider approaches a slower body");
+    assert!(sim.request_lateral_maneuver(
+        rider,
+        LateralManeuverRequest {
+            target_offset_m: 0.0,
+            passed_body: slow,
+            target_facility: Some(FacilityId::from_index(1)),
+        },
+    ));
+
+    let trace = drive(&mut sim, 900);
+    let crossings: Vec<FacilityTransitionRecord> = trace
+        .transitions
+        .iter()
+        .filter(|record| record.via == TransitionKind::Lateral)
+        .copied()
+        .collect();
+    assert_eq!(
+        crossings.len(),
+        2,
+        "the change of lane crosses out and back exactly once: {crossings:?}"
+    );
+
+    let outbound = crossings[0];
+    assert_eq!(outbound.from_facility, FacilityId::from_index(0));
+    assert_eq!(outbound.to_facility, FacilityId::from_index(1));
+    assert_eq!(outbound.side, tangle_sim::PassSide::Left);
+    assert!(outbound.permitted, "the destination permits forward travel");
+    assert!(
+        (outbound.d_m - 1.0).abs() < 0.05,
+        "the outbound crossing fires at the compiled shared boundary: {}",
+        outbound.d_m
+    );
+
+    let returning = crossings[1];
+    assert_eq!(returning.from_facility, FacilityId::from_index(1));
+    assert_eq!(returning.to_facility, FacilityId::from_index(0));
+    assert_eq!(
+        returning.side,
+        tangle_sim::PassSide::Right,
+        "the return crosses the boundary from the other band's own frame"
+    );
+    assert!(
+        returning.permitted,
+        "the source band permits forward travel"
+    );
+    assert!(
+        (returning.d_m + 2.0).abs() < 0.05,
+        "the return crossing fires at the compiled shared boundary: {}",
+        returning.d_m
+    );
+    assert!(
+        returning.d_m < -1.5 - 0.1,
+        "the destination band's half-width is not the crossing bound: {}",
+        returning.d_m
+    );
+    // A settled rider is inside the settle tolerance of its target offset, so
+    // its last bounded-steering step carries that residual alongside the step
+    // its speed allows: the bound is one step at the mode's speed plus the
+    // tolerance the settle edge itself accepts.
+    assert!(
+        trace.max_step_m <= 6.0 * DT + tangle_sim::SETTLE_TOLERANCE_M,
+        "no rider teleported across either handoff: max step {} m",
+        trace.max_step_m
+    );
+
+    // The rider carries the whole lifecycle through and settles at the offset it
+    // held in the source band before the attempt: it is never despawned or
+    // re-spawned, and the return leaves it on the band it started from rather
+    // than in the band it passed through.
+    let frame = sim.snapshot(SnapshotDetail::Full);
+    let sample = frame
+        .agents()
+        .iter()
+        .find(|sample| sample.id == rider)
+        .expect("the rider is still in the world");
+    let state = route_state(frame.agents(), rider).expect("the rider carries route state");
+    assert_eq!(state.maneuver_state, ManeuverState::Following);
+    assert!(
+        state.d_m.abs() <= 0.05,
+        "the return settles at the offset the rider held: {}",
+        state.d_m
+    );
+    assert!(
+        (sample.position.y - 0.5).abs() <= 0.05,
+        "the rider is back on the source band's reference: {}",
+        sample.position.y
+    );
+    assert_eq!(sim.emergency_cap_steps(), 0);
+}
+
+/// A requested cross-facility change of lane whose return corridor a body
+/// occupies holds the offset it occupies and re-decides, rather than steering
+/// back into the body: the return-obstruction policy a same-facility maneuver
+/// already follows, read through the compiled crossing corridor instead of the
+/// destination band's own interval.
+///
+/// The obstruction stream rides the stretch of the destination band the
+/// crossing corridor sweeps back through, so only a return reads it: the
+/// outbound crossing is upstream of the stretch, the entry leg ascends away from
+/// it at its far end, and the committed leg's own lane stays two metres clear of
+/// it.
+#[test]
+fn a_cross_facility_returns_obstructed_corridor_holds_and_re_decides() {
+    let mut sim = build(&crossing_pass_scenario(CrossingPass {
+        obstruct_return: true,
+        ..CrossingPass::default()
+    }));
+    let (rider, slow) =
+        rider_before_a_slow_body(&mut sim).expect("a rider approaches a slower body");
+    assert!(sim.request_lateral_maneuver(
+        rider,
+        LateralManeuverRequest {
+            target_offset_m: 0.0,
+            passed_body: slow,
+            target_facility: Some(FacilityId::from_index(1)),
+        },
+    ));
+
+    let mut crossed_out = false;
+    let mut returned = false;
+    let mut held_steps = 0;
+    let mut held_offset_m = None;
+    let mut max_step_m: f64 = 0.0;
+    let mut previous: Option<DVec2> = None;
+    for _ in 0..1200 {
+        let output = sim.step();
+        crossed_out |= output.facility_transitions().iter().any(|record| {
+            record.agent == rider
+                && record.via == TransitionKind::Lateral
+                && record.from_facility == FacilityId::from_index(0)
+        });
+        returned |= output.facility_transitions().iter().any(|record| {
+            record.agent == rider
+                && record.via == TransitionKind::Lateral
+                && record.from_facility == FacilityId::from_index(1)
+        });
+        let frame = sim.snapshot(SnapshotDetail::Full);
+        let Some(sample) = frame.agents().iter().find(|sample| sample.id == rider) else {
+            break;
+        };
+        if let Some(before) = previous {
+            max_step_m = max_step_m.max((sample.position - before).length());
+        }
+        previous = Some(sample.position);
+        if returned {
+            break;
+        }
+        let Some(state) = route_state(frame.agents(), rider) else {
+            break;
+        };
+        // The obstruction the return leg reads: a body on the stream's stretch
+        // inside the crossing corridor's own longitudinal reach.
+        let obstructing = placements(&sim).iter().any(|body| {
+            body.path == BLOCK_LANE_PATH
+                && RETURN_CORRIDOR_REACH_M.contains(&(body.x_m - sample.position.x))
+        });
+        if !crossed_out || state.maneuver_state != ManeuverState::Returning || !obstructing {
+            continue;
+        }
+        held_steps += 1;
+        let held_m = *held_offset_m.get_or_insert(state.d_m);
+        assert!(
+            (state.d_m - held_m).abs() <= 0.02,
+            "the return holds the offset it occupies while the obstruction is in its corridor: {} not {held_m}",
+            state.d_m
+        );
+    }
+    assert!(crossed_out, "the rider crossed into the adjacent band");
+    assert!(
+        returned,
+        "a return whose corridor clears crosses back over the shared boundary"
+    );
+    assert!(
+        held_steps >= 20,
+        "the obstructed return holds until its corridor clears: {held_steps} steps"
+    );
+    assert!(
+        max_step_m <= 6.0 * DT + tangle_sim::SETTLE_TOLERANCE_M,
+        "no rider teleported across either handoff: max step {max_step_m} m"
+    );
+    assert_eq!(sim.emergency_cap_steps(), 0);
 }

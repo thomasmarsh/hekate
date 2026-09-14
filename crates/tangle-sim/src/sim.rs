@@ -1241,11 +1241,14 @@ impl Simulation {
             // that obstructs the offset it would return to. It settles only once
             // the same prediction clears the return corridor again, and a return
             // that has nowhere left to move — the agent already sits at its target
-            // — completes instead of deadlocking in the maneuver.
-            let at_target = (state.d_m - state.pre_maneuver_offset_m).abs() <= SETTLE_TOLERANCE_M;
+            // — completes instead of deadlocking in the maneuver. A change of
+            // lane that crossed into the adjacent band returns over the same
+            // compiled shared boundary, so its return target is that crossing's
+            // own offset and the corridor that holds it is the crossing's own.
+            let at_target =
+                (state.d_m - self.return_offset_m(index, &state)).abs() <= SETTLE_TOLERANCE_M;
             if !at_target {
-                let obstructed =
-                    !state.entering_facility && self.return_leg_obstructed(index, &state, &batch);
+                let obstructed = self.return_leg_obstructed(index, &state, &batch);
                 plans.push(ManeuverPlan {
                     index,
                     state: RouteState {
@@ -1749,24 +1752,107 @@ impl Simulation {
         })
     }
 
+    /// The offset one agent's return leg steers toward and settles at, in the
+    /// agent's own current travel frame.
+    ///
+    /// A maneuver that stayed within one band returns to the offset the agent
+    /// held before the attempt. A change of lane that has crossed into the
+    /// destination band returns over the same compiled adjacency it crossed:
+    /// while the agent rides that band the target is the crossing's own steering
+    /// offset back over the shared boundary, and `pre_maneuver_offset_m` names
+    /// the target again once the return crossing has moved ownership back to the
+    /// source band. A return
+    /// whose crossing no compiled adjacency carries falls back to that offset,
+    /// because there is no crossing to steer to.
+    fn return_offset_m(&self, index: usize, state: &RouteState) -> f64 {
+        let Some(return_facility) = state.return_facility else {
+            return state.pre_maneuver_offset_m;
+        };
+        let Some(clearance_m) = state.target_clearance_m else {
+            return state.pre_maneuver_offset_m;
+        };
+        self.crossing_lateral(
+            state.facility,
+            self.agents.direction[index],
+            return_facility,
+        )
+        .map_or(state.pre_maneuver_offset_m, |crossing| {
+            crossing.target_offset_m(clearance_m)
+        })
+    }
+
     /// Whether a body obstructs the return leg's target, so a `returning` or
     /// `aborted` maneuver holds rather than steering back into it.
     ///
     /// The check is the ordinary predictor's own verdict on the candidate motion
     /// the return leg integrates — the compiled bounded-steering envelope
-    /// steering from the current pose to `pre_maneuver_offset_m` under the
-    /// facility's compiled usable interval — so no second geometry path decides
-    /// it. A body whose progress interval overlaps the return corridor, or the
-    /// pre-maneuver offset itself, leaves the swept clearance below the mode's
-    /// target clearance over the horizon and holds the return.
+    /// steering from the current pose to the return offset — so no second
+    /// geometry path decides it. A maneuver that stayed within one band reads the
+    /// compiled constant-width band of the facility it rides. A change of lane
+    /// that has crossed out reads the compiled crossing corridor back over the
+    /// adjacency it crossed, bounded by the two bands' combined edges, so a body
+    /// anywhere in the corridor the return sweeps holds the return rather than
+    /// only a body inside the destination band's own compiled interval.
+    ///
+    /// A body the return corridor sweeps closer than the mode's target clearance
+    /// over the horizon holds the return. The band edge alone never does: the
+    /// corridor the return integrates is the one the bounded step keeps it
+    /// inside, and the compiled band edge a return crosses back over is the
+    /// shared boundary itself, so a body centre still on it would otherwise hold
+    /// a return that has nowhere to go but home. The entry transient is the one
+    /// leg with no verdict: the just-entered band's own corridor does not hold
+    /// the body centre yet, so a return that stays in that band has no ordinary
+    /// prediction to read.
     fn return_leg_obstructed(
         &self,
         index: usize,
         state: &RouteState,
         batch: &ManeuverBatch<'_>,
     ) -> bool {
-        self.predict_maneuver(index, state.pre_maneuver_offset_m, batch)
-            .is_some_and(|prediction| !prediction.is_feasible())
+        let Some(steering) = self.steering_envelope(index) else {
+            return false;
+        };
+        let Some(target_clearance_m) = state.target_clearance_m else {
+            return false;
+        };
+        let band_bounds_m = match state.return_facility {
+            Some(return_facility) => {
+                let Some(crossing) = self.crossing_lateral(
+                    state.facility,
+                    self.agents.direction[index],
+                    return_facility,
+                ) else {
+                    return false;
+                };
+                Some(crossing.band_bounds_m)
+            }
+            None => {
+                if state.entering_facility {
+                    return false;
+                }
+                None
+            }
+        };
+        let Some(prediction) = self.predict_candidate(
+            index,
+            self.return_offset_m(index, state),
+            steering,
+            band_bounds_m,
+            batch,
+        ) else {
+            return false;
+        };
+        // The classes partition the bodies, so folding over the front, side, and
+        // rear facts is exactly the least clearance of every body the corridor
+        // sweeps, without the band-edge fact the swept minimum also carries.
+        [
+            prediction.clears.front,
+            prediction.clears.side,
+            prediction.clears.rear,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|fact| fact.clearance_m < target_clearance_m)
     }
 
     /// Fix one agent's lateral target and candidate corridor, or report why the
@@ -3167,7 +3253,8 @@ impl Simulation {
 
     /// Perform the contract's lateral handoff when a committed cross-facility
     /// change of lane's body centre has crossed the compiled shared boundary
-    /// between the two bands.
+    /// between the two bands, or when a `returning` or `aborted` one has crossed
+    /// back over that same boundary to the band the maneuver was attempted from.
     ///
     /// The compiled adjacency names the destination traversal, the crossing
     /// side, and the shared boundary, so the crossing is the body centre
@@ -3176,21 +3263,31 @@ impl Simulation {
     /// unchanged — the destination progress is the projection of that same pose
     /// onto the destination reference, so there is no despawn, no re-spawn, and
     /// no snap — and the maneuver continues on the destination with its target
-    /// and return offset re-expressed in the destination's own frame. Returns
-    /// `false` when no committed cross-facility maneuver is crossing.
+    /// and its policy re-expressed in the destination's own frame. The source
+    /// band and the offset the agent held before the attempt are preserved
+    /// across the outbound move, so the return leg crosses back over the same
+    /// adjacency instead of settling in the band the maneuver passed through,
+    /// and the return move clears that intent again so a change of lane crosses
+    /// out and back exactly once. Returns `false` when no committed, returning,
+    /// or aborted cross-facility maneuver is crossing.
     fn handoff_lateral(&mut self, index: usize) -> bool {
         let Some(state) = self.agents.route_state[index] else {
             return false;
         };
-        if state.maneuver != ManeuverState::Committed {
-            return false;
-        }
-        let Some(target_facility) = state.target_facility else {
-            return false;
+        // A committed change of lane crosses out to the destination traversal it
+        // was attempted for; a returning or aborted one crosses back to the band
+        // it was attempted from.
+        let (target_facility, returning) = match state.maneuver {
+            ManeuverState::Committed => match state.target_facility {
+                Some(target_facility) => (target_facility, false),
+                None => return false,
+            },
+            ManeuverState::Returning | ManeuverState::Aborted => match state.return_facility {
+                Some(return_facility) => (return_facility, true),
+                None => return false,
+            },
+            ManeuverState::Following | ManeuverState::Preparing => return false,
         };
-        if target_facility == state.facility {
-            return false;
-        }
         let from_direction = movement_direction(self.agents.direction[index]);
         let Some(crossing) = self.crossing_lateral(
             state.facility,
@@ -3232,14 +3329,20 @@ impl Simulation {
         next.facility = destination_traversal.facility();
         next.s_m = coordinate.s();
         next.d_m = coordinate.d() * to_sign;
-        // The maneuver continues on the destination; its target is now in the
-        // destination's own frame, and the return leg settles at that target
-        // rather than at the source offset the destination frame cannot name.
-        // The body centre is still on the shared boundary, so the entry
-        // transient holds the ordinary destination corridor back until it is
-        // inside the destination's usable interval.
-        next.target_facility = None;
-        next.pre_maneuver_offset_m = state.target_offset_m.unwrap_or(next.d_m);
+        // The return leg settles at the source band's own offset again once the
+        // return crossing has carried ownership back, and no further crossing
+        // is owed. On the outbound crossing the maneuver keeps the source band
+        // and the offset the agent held before the attempt, so the return leg
+        // crosses back over this same adjacency rather than settling in the
+        // destination frame. Either way the body centre is still on the shared
+        // boundary, so the entry transient holds the ordinary destination
+        // corridor back until it is inside that band's usable interval.
+        if returning {
+            next.return_facility = None;
+        } else {
+            next.target_facility = None;
+            next.return_facility = Some(state.facility);
+        }
         next.entering_facility = true;
         self.agents.route_state[index] = Some(next);
 
@@ -3287,12 +3390,13 @@ impl Simulation {
     /// steers toward its fixed target — except on the outbound leg of a
     /// cross-facility change of lane, where it steers just past the shared
     /// boundary — a `returning` or `aborted` one steers back to the offset the
-    /// agent held before the attempt, and a `preparing` or `following` agent
-    /// displaces nothing at all: a preparing maneuver has fixed a target but has
-    /// not been granted a corridor for it. A return leg the ordinary predictor
-    /// holds obstructed steers to the offset the agent already occupies
-    /// instead, so it holds its place rather than displacing into the body the
-    /// return corridor is not clear of.
+    /// agent held before the attempt, or back over the compiled shared boundary
+    /// when the maneuver has crossed into the adjacent band, and a `preparing` or
+    /// `following` agent displaces nothing at all: a preparing maneuver has fixed
+    /// a target but has not been granted a corridor for it. A return leg the
+    /// ordinary predictor holds obstructed steers to the offset the agent already
+    /// occupies instead, so it holds its place rather than displacing into the
+    /// body the return corridor is not clear of.
     fn lateral_request(&self, index: usize) -> Option<f64> {
         let state = self.agents.route_state.get(index).copied().flatten()?;
         match state.maneuver {
@@ -3300,7 +3404,7 @@ impl Simulation {
             ManeuverState::Returning | ManeuverState::Aborted => Some(if state.return_blocked {
                 state.d_m
             } else {
-                state.pre_maneuver_offset_m
+                self.return_offset_m(index, &state)
             }),
             ManeuverState::Following | ManeuverState::Preparing => None,
         }
@@ -3325,20 +3429,28 @@ impl Simulation {
     }
 
     /// The compiled bounded-steering envelope of an agent this step, widened on
-    /// the crossing side while it is on the outbound leg of a cross-facility
-    /// change of lane, so the bounded step may cross the compiled shared
-    /// boundary.
+    /// the crossing side while it crosses the compiled shared boundary of a
+    /// cross-facility change of lane — on the outbound committed leg toward the
+    /// destination traversal, and again on the `returning` or `aborted` leg back
+    /// to the band the maneuver was attempted from — so the bounded step may
+    /// reach the crossing's own target.
     fn steering_envelope(&self, index: usize) -> Option<BoundedSteering> {
         let state = self.agents.route_state.get(index).copied().flatten()?;
         let mut steering = state.bounded_steering?;
-        if state.maneuver == ManeuverState::Committed
-            && let Some(target_facility) = state.target_facility
-            && target_facility != state.facility
+        // The crossing the maneuver is making this step: the committed leg's
+        // destination traversal, or the returning leg's source band.
+        let crossing_facility = match state.maneuver {
+            ManeuverState::Committed => state.target_facility,
+            ManeuverState::Returning | ManeuverState::Aborted => state.return_facility,
+            ManeuverState::Following | ManeuverState::Preparing => None,
+        }
+        .filter(|facility| *facility != state.facility);
+        if let Some(crossing_facility) = crossing_facility
             && let Some(clearance) = state.target_clearance_m
             && let Some(crossing) = self.crossing_lateral(
                 state.facility,
                 self.agents.direction[index],
-                target_facility,
+                crossing_facility,
             )
         {
             let bound = self.agents.direction[index] * crossing.target_offset_m(clearance);
