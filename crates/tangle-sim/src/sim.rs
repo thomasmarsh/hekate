@@ -2775,14 +2775,17 @@ impl Simulation {
         false
     }
 
-    /// Nearest live leader ahead on the same path travelling the same way, and,
-    /// for an agent whose active maneuver crosses to another facility, the
-    /// nearest leader on the far side of that crossing too.
+    /// Nearest live leader ahead on the same path in this agent's direction of
+    /// travel, and, for an agent whose active maneuver crosses to another
+    /// facility, the nearest leader on the far side of that crossing too.
     ///
     /// The gap is bumper to bumper along the path. Iterating in ascending agent
     /// order means the lowest agent id wins a tie, which keeps tie-breaking
-    /// stable across runs. Opposite-direction and crossing-path interaction is
-    /// later work.
+    /// stable across runs. A body travelling the reference the other way is a
+    /// leader too, because it is ahead in this agent's travel frame; its
+    /// constraint speed is the leader's speed along that same axis, so a
+    /// head-on body closes at the sum of the two speeds. Crossing-path
+    /// interaction is later work.
     ///
     /// A body on the far side of an active cross-facility maneuver is a leader
     /// before the handoff moves ownership there, so both facilities' leader
@@ -2859,7 +2862,17 @@ impl Simulation {
                 AgentId::from_index(other),
                 Constraint {
                     gap_m: gap.max(0.0),
-                    speed_mps: self.agents.speed_mps[other],
+                    // The leader's speed along the agent's own travel axis. A
+                    // body riding the same reference the other way closes on
+                    // this agent at the sum of the two speeds, so a same-way
+                    // leader keeps its own speed and an oncoming one carries the
+                    // opposite sign. That closure is what the longitudinal
+                    // model's closing-speed term reads, so a wrong-way rider's
+                    // approach to oncoming traffic is bounded by the ordinary
+                    // leader constraint rather than by the anti-overlap cap.
+                    speed_mps: direction
+                        * self.agents.direction[other]
+                        * self.agents.speed_mps[other],
                     standstill_m: IDM_STANDSTILL_GAP_M,
                 },
             )

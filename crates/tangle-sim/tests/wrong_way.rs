@@ -29,8 +29,8 @@ use std::collections::BTreeMap;
 use glam::DVec2;
 use tangle_model::{CompiledScenario, CrossingId, MovementDirection, parse_scenario_source_v2};
 use tangle_sim::{
-    AgentId, AgentMode, Event, FacilityTransitionRecord, ManeuverState, RouteStateSample,
-    RunConfig, Simulation, SnapshotDetail, TransitionKind,
+    AgentId, AgentMode, DespawnReason, Event, FacilityTransitionRecord, ManeuverState,
+    NEAR_MISS_THRESHOLD_M, RouteStateSample, RunConfig, Simulation, SnapshotDetail, TransitionKind,
 };
 
 /// The fixed step the fixtures run at, which is [`RunConfig`]'s own default.
@@ -1139,4 +1139,722 @@ fn the_turned_riders_own_records_keep_one_order_in_both_reference_directions() {
         spawned_at(&reverse),
         "the two fixtures must report the rider at mirrored arc lengths"
     );
+}
+
+// ---------------------------------------------------------------------------
+// TAS-118: an occupied opposing corridor and the ordinary lifecycle.
+// ---------------------------------------------------------------------------
+//
+// The contract makes an occupied opposing corridor a decision input, never a
+// precondition failure: the agent still selects the opposing traversal, and the
+// ordinary leader, collision, clearance, and safety machinery bounds the
+// attempt. These fixtures put a body in the corridor a turned rider drives into
+// — a rider that entered the same facility after it and still travels the
+// nominal direction, which is exactly the traffic the opposing traversal meets
+// head-on — and assert that the outcome comes from that ordinary machinery: no
+// flag is authored, nothing scripts a trajectory, and no query is disabled.
+//
+// [`RIDER_MODE`] turns around, so the turned rider and the body it turned into
+// are head-on on one reference: the rider's arc length falls while the body
+// ahead of it in that travel direction climbs. The sections below assert the
+// bounded brake, the collision scan's visibility of the pair, the identity and
+// lifecycle the turn preserves, the capability gate on a shared facility, and
+// the disconnected rejection.
+
+/// One live rider's state on a facility, read from a full snapshot.
+#[derive(Clone, Copy)]
+struct LiveRider {
+    id: AgentId,
+    /// Arc length along the facility reference in metres.
+    s_m: f64,
+    speed_mps: f64,
+    position: DVec2,
+    body_length_m: f64,
+}
+
+/// Every live rider on `path`, ascending by arc length.
+fn live_riders(sim: &Simulation, path: usize) -> Vec<LiveRider> {
+    let mut riders: Vec<LiveRider> = sim
+        .snapshot(SnapshotDetail::Full)
+        .agents()
+        .iter()
+        .filter_map(|sample| {
+            let motion = sample.motion.as_ref()?;
+            (motion.path.index() == path).then_some(LiveRider {
+                id: sample.id,
+                s_m: motion.path_distance_m,
+                speed_mps: motion.speed_mps,
+                position: sample.position,
+                body_length_m: motion.body_length_m,
+            })
+        })
+        .collect();
+    riders.sort_by(|first, second| first.s_m.total_cmp(&second.s_m));
+    riders
+}
+
+/// The bumper-to-bumper gap between two bodies on one path, in metres.
+fn bumper_gap_m(first: LiveRider, second: LiveRider) -> f64 {
+    (first.s_m - second.s_m).abs() - (first.body_length_m + second.body_length_m) * 0.5
+}
+
+/// Step until exactly two riders ride `path`, the leading one lies inside
+/// `subject_window`, and its bumper gap to the other lies inside `gap_window`;
+/// return the leading rider and the body it turns into.
+///
+/// The pair is deterministic for the fixture's fixed seed: the leading rider is
+/// the earlier arrival and the other entered `path` later, so it is the
+/// oncoming occupancy of the traversal the leading rider is about to enter.
+fn leading_pair_on(
+    sim: &mut Simulation,
+    path: usize,
+    subject_window: std::ops::RangeInclusive<f64>,
+    gap_window: std::ops::RangeInclusive<f64>,
+) -> (LiveRider, LiveRider) {
+    for _ in 0..8000 {
+        sim.step();
+        let riders = live_riders(sim, path);
+        if let [occupancy, subject] = riders[..] {
+            let gap_m = bumper_gap_m(subject, occupancy);
+            if subject_window.contains(&subject.s_m) && gap_window.contains(&gap_m) {
+                return (subject, occupancy);
+            }
+        }
+    }
+    panic!(
+        "two riders must ride path {path} with the leading one in {subject_window:?} \
+         and a bumper gap in {gap_window:?}"
+    );
+}
+
+/// The contact and near-miss records one tick's events carry about one pair.
+#[derive(Default)]
+struct PairScan {
+    /// Reported clearance and edge flag of every contact record.
+    contacts: Vec<(f64, bool)>,
+    /// Reported clearance and edge flag of every near-miss record.
+    near_misses: Vec<(f64, bool)>,
+}
+
+impl PairScan {
+    /// The records `events` carry about the pair `first`/`second`, in either
+    /// argument order.
+    fn of(events: &[Event], first: AgentId, second: AgentId) -> Self {
+        let is_pair = |agent: &AgentId, other: &AgentId| {
+            (*agent == first && *other == second) || (*agent == second && *other == first)
+        };
+        let mut scan = Self::default();
+        for event in events {
+            match event {
+                Event::Collision {
+                    agent,
+                    other,
+                    clearance_m,
+                    contacting,
+                } if is_pair(agent, other) => scan.contacts.push((*clearance_m, *contacting)),
+                Event::NearMiss {
+                    agent,
+                    other,
+                    clearance_m,
+                    entering,
+                } if is_pair(agent, other) => scan.near_misses.push((*clearance_m, *entering)),
+                _ => {}
+            }
+        }
+        scan
+    }
+
+    /// Extend this scan with another tick's records.
+    fn extend(&mut self, other: Self) {
+        self.contacts.extend(other.contacts);
+        self.near_misses.extend(other.near_misses);
+    }
+
+    /// Whether the scan opened the contact band for the pair.
+    fn opened_contact(&self) -> bool {
+        self.contacts.iter().any(|(_, contacting)| *contacting)
+    }
+
+    /// Whether the scan opened the near-miss band for the pair.
+    fn opened_near_miss(&self) -> bool {
+        self.near_misses.iter().any(|(_, entering)| *entering)
+    }
+
+    /// The least clearance the scan reported for the pair, or `None` when it
+    /// reported no record at all.
+    fn minimum_clearance_m(&self) -> Option<f64> {
+        self.contacts
+            .iter()
+            .chain(&self.near_misses)
+            .map(|(clearance_m, _)| *clearance_m)
+            .reduce(f64::min)
+    }
+}
+
+/// An occupied opposing corridor bounds the turned rider through the ordinary
+/// leader constraint.
+///
+/// The fixture leaves the ordinary model room to stop, so nothing but the
+/// leader ahead of the turned rider holds it: the rider brakes to a standstill
+/// behind the oncoming body, keeps a positive gap, and never comes within the
+/// collision scan's near-miss band. The anti-overlap position cap never binds,
+/// which is what makes this a bounded brake of the ordinary machinery rather
+/// than the kernel's documented backstop.
+#[test]
+fn an_occupied_opposing_corridor_bounds_the_turned_rider() {
+    let mut sim = build(&forward_rule_scenario(720.0));
+    let (subject, occupancy) = leading_pair_on(&mut sim, 0, 30.0..=48.0, 25.0..=60.0);
+    let desired_speed_mps = sim
+        .agent_profile(subject.id)
+        .expect("a demand rider carries a sampled profile")
+        .desired_speed_mps;
+    assert!(
+        (desired_speed_mps - 6.0).abs() < 1e-9,
+        "the fixture's rider desires {desired_speed_mps} m/s"
+    );
+    assert!(
+        sim.request_wrong_way_entry(subject.id),
+        "a reverse-capable rider on a two-way facility can request the entry"
+    );
+
+    let mut previous_position = subject.position;
+    let mut subject_s_m = subject.s_m;
+    let mut occupancy_s_m = occupancy.s_m;
+    let mut min_gap_m = f64::INFINITY;
+    let mut min_speed_mps = f64::INFINITY;
+    let mut scan = PairScan::default();
+    let mut turned = false;
+    for _ in 0..400 {
+        let events: Vec<Event> = sim.step().events().to_vec();
+        scan.extend(PairScan::of(&events, subject.id, occupancy.id));
+        let riders = live_riders(&sim, 0);
+        let (Some(subject_now), Some(occupancy_now)) = (
+            riders.iter().find(|rider| rider.id == subject.id),
+            riders.iter().find(|rider| rider.id == occupancy.id),
+        ) else {
+            panic!("both riders stay alive through the encounter");
+        };
+        // The turn lands on the first step after the request: the rider's arc
+        // length falls while the body it turned into still climbs the
+        // reference, so the two travel one corridor head-on.
+        if subject_now.s_m < subject_s_m {
+            turned = true;
+        }
+        assert!(
+            turned,
+            "the requested entry turns the rider onto the opposing traversal"
+        );
+        assert!(
+            subject_now.s_m <= subject_s_m + 1e-9,
+            "the turned rider never travels the nominal direction again: {} -> {}",
+            subject_s_m,
+            subject_now.s_m
+        );
+        assert!(
+            occupancy_now.s_m >= occupancy_s_m - 1e-9,
+            "the body it turned into keeps its nominal traversal: {} -> {}",
+            occupancy_s_m,
+            occupancy_now.s_m
+        );
+        assert!(
+            (subject_now.position - previous_position).length() <= 6.0 * DT + 1e-6,
+            "no rider teleported through the turn"
+        );
+        previous_position = subject_now.position;
+        subject_s_m = subject_now.s_m;
+        occupancy_s_m = occupancy_now.s_m;
+        min_gap_m = min_gap_m.min(bumper_gap_m(*subject_now, *occupancy_now));
+        min_speed_mps = min_speed_mps.min(subject_now.speed_mps);
+    }
+
+    assert!(
+        subject_s_m < subject.s_m - 5.0,
+        "the turned rider travels the opposing traversal: {} -> {}",
+        subject.s_m,
+        subject_s_m
+    );
+    assert!(
+        occupancy_s_m > occupancy.s_m + 5.0,
+        "the occupancy travels the nominal traversal: {} -> {}",
+        occupancy.s_m,
+        occupancy_s_m
+    );
+    // Nothing else can hold the rider: the turn leaves the movement behind, so
+    // it carries no crossing yield, no signal decision, and no lateral
+    // maneuver, and its own desired speed is the fixture's free-flow 6 m/s. The
+    // body ahead of it in its actual travel direction is the only constraint.
+    assert_eq!(sim.agent_yield_crossing(subject.id), None);
+    assert_eq!(sim.agent_decision(subject.id), None);
+    assert_eq!(
+        sim.agent_route(subject.id),
+        None,
+        "the turn leaves the movement behind"
+    );
+    assert_eq!(
+        sim.snapshot(SnapshotDetail::Full)
+            .agents()
+            .iter()
+            .find(|sample| sample.id == subject.id)
+            .and_then(|sample| sample.motion.as_ref())
+            .and_then(|motion| motion.route_state)
+            .map(|state| state.maneuver_state),
+        Some(ManeuverState::Following),
+        "the turn performs no lateral maneuver"
+    );
+    assert!(
+        min_speed_mps <= 0.01,
+        "the leader ahead holds the turned rider at rest: least speed {min_speed_mps} m/s"
+    );
+    assert!(
+        min_gap_m > 1.0,
+        "the turned rider keeps a positive gap to the body it meets: {min_gap_m} m"
+    );
+    assert!(
+        scan.contacts.is_empty() && scan.near_misses.is_empty(),
+        "the ordinary leader constraint holds the pair clear of the scan's bands: {scan_contacts:?}",
+        scan_contacts = scan.contacts
+    );
+    assert_eq!(
+        sim.emergency_cap_steps(),
+        0,
+        "the ordinary leader constraint, not the anti-overlap cap, bounds the approach"
+    );
+}
+
+/// A wrong-way rider that turns into an oncoming body with no room to stop is
+/// still bounded and stays visible to the ordinary collision scan.
+///
+/// Two 6 m/s bodies closing head-on 17 m apart cannot stop inside that gap under
+/// the fixture's 2 m/s² comfortable braking, so the encounter is unavoidable
+/// whatever the leader constraint says. The ordinary machinery still carries it:
+/// the collision scan reports the pair in its near-miss band and then in its
+/// contact band, the anti-overlap cap keeps the bodies from overlapping, and
+/// the interaction metrics observe the pair under its ordinary agent-pair
+/// dimension. Nothing here disables the scan or excludes the pair from it.
+#[test]
+fn the_collision_scan_reports_the_encounter_the_turned_rider_cannot_avoid() {
+    let mut sim = build(&forward_rule_scenario(720.0));
+    let (subject, occupancy) = leading_pair_on(&mut sim, 0, 30.0..=42.0, 8.0..=18.0);
+    assert!(
+        sim.request_wrong_way_entry(subject.id),
+        "the entry is decided before any occupancy is read"
+    );
+
+    let mut scan = PairScan::default();
+    let mut min_gap_m = f64::INFINITY;
+    for _ in 0..300 {
+        let events: Vec<Event> = sim.step().events().to_vec();
+        scan.extend(PairScan::of(&events, subject.id, occupancy.id));
+        let riders = live_riders(&sim, 0);
+        let (Some(subject_now), Some(occupancy_now)) = (
+            riders.iter().find(|rider| rider.id == subject.id),
+            riders.iter().find(|rider| rider.id == occupancy.id),
+        ) else {
+            break;
+        };
+        min_gap_m = min_gap_m.min(bumper_gap_m(*subject_now, *occupancy_now));
+    }
+
+    assert!(
+        scan.opened_near_miss(),
+        "the collision scan reports the pair inside its near-miss band"
+    );
+    assert!(
+        scan.opened_contact(),
+        "the collision scan reports the pair inside its contact band"
+    );
+    assert!(
+        scan.minimum_clearance_m()
+            .is_some_and(|clearance| clearance >= -1e-9),
+        "the pair never overlaps: least reported clearance {:?}",
+        scan.minimum_clearance_m()
+    );
+    assert!(
+        min_gap_m >= -1e-9,
+        "the anti-overlap cap holds the bodies apart: least measured gap {min_gap_m} m"
+    );
+    // The pair is observed under its ordinary agent-pair dimension, not a
+    // wrong-way one.
+    let separation_m = sim
+        .interaction_metrics()
+        .pair_minimum_separation_m(subject.id, occupancy.id)
+        .expect("the encounter is inside the interaction range");
+    assert!(
+        separation_m <= NEAR_MISS_THRESHOLD_M,
+        "the pair's recorded separation is {separation_m} m"
+    );
+}
+
+/// One fixture run from admission to the wrong-way completion, with every
+/// record it emitted.
+struct EntryRun {
+    /// The rider the entry was requested for.
+    rider: AgentId,
+    /// The rider's sampled profile at the decision instant, before the turn.
+    profile: tangle_sim::VehicleProfile,
+    /// Every tick's records, in the order the step emitted them.
+    ticks: Vec<(u64, Vec<Event>)>,
+    /// The reason the rider despawned, once it did.
+    despawned: Option<DespawnReason>,
+}
+
+/// Drive `forward_rule_scenario` as a lone rider: request the wrong-way entry
+/// the first time the rider is inside `window`, then keep stepping until that
+/// rider despawns, collecting every record the run emitted.
+fn run_lone_entry(window: std::ops::RangeInclusive<f64>) -> (Simulation, EntryRun) {
+    let mut sim = build(&forward_rule_scenario(72.0));
+    let mut rider = None;
+    let mut profile = None;
+    let mut ticks: Vec<(u64, Vec<Event>)> = Vec::new();
+    let mut despawned = None;
+    for _ in 0..4000 {
+        let tick = sim.time().tick();
+        let events: Vec<Event> = sim.step().events().to_vec();
+        ticks.push((tick, events));
+        let Some(rider) = rider else {
+            let riders = live_riders(&sim, 0);
+            if let [only] = riders[..]
+                && window.contains(&only.s_m)
+            {
+                profile = sim.agent_profile(only.id);
+                assert!(
+                    sim.request_wrong_way_entry(only.id),
+                    "a lone reverse-capable rider can request the entry"
+                );
+                rider = Some(only.id);
+            }
+            continue;
+        };
+        if let Some(reason) = ticks.last().and_then(|(_, events)| {
+            events.iter().find_map(|event| match event {
+                Event::Despawned { agent, reason, .. } if *agent == rider => Some(*reason),
+                _ => None,
+            })
+        }) {
+            despawned = Some(reason);
+            break;
+        }
+    }
+    let rider = rider.expect("the fixture admits a rider");
+    let profile = profile.expect("the rider carries a sampled profile");
+    (
+        sim,
+        EntryRun {
+            rider,
+            profile,
+            ticks,
+            despawned,
+        },
+    )
+}
+
+/// A wrong-way rider keeps its stable identity, mode, sampled profile, ordinary
+/// metric dimensions, event order, and spawn-to-despawn lifecycle.
+///
+/// The turn changes the travel direction and the route coordinates and nothing
+/// else: one spawn and one despawn record name the same `AgentId`, the mode and
+/// the profile admission sampled are unchanged, every tick's records keep the
+/// documented within-tick order, and the completed trip is served under the
+/// ordinary mode and run dimensions.
+#[test]
+fn a_wrong_way_rider_keeps_its_identity_profile_and_lifecycle() {
+    let (sim, run) = run_lone_entry(20.0..=30.0);
+    let rider = run.rider;
+
+    let spawned: Vec<Event> = run
+        .ticks
+        .iter()
+        .flat_map(|(_, events)| events.iter())
+        .filter(|event| matches!(event, Event::Spawned { agent, .. } if *agent == rider))
+        .copied()
+        .collect();
+    assert_eq!(
+        spawned.len(),
+        1,
+        "the rider is admitted once and never re-spawned: {spawned:?}"
+    );
+    let Event::Spawned { mode, path, .. } = spawned[0] else {
+        unreachable!("the filtered record is a spawn");
+    };
+    assert_eq!(mode, AgentMode::Vehicle);
+    assert_eq!(path, tangle_model::PathId::from_index(0));
+    assert_eq!(
+        run.despawned,
+        Some(DespawnReason::ExitedPath),
+        "the turned rider completes the opposing traversal at the far end"
+    );
+
+    // The mode and the profile are exactly what admission chose: the turn
+    // neither re-modes the rider nor re-samples its profile.
+    assert_eq!(sim.agent_mode(rider), Some(AgentMode::Vehicle));
+    assert_eq!(
+        sim.agent_profile(rider),
+        Some(run.profile),
+        "the rider keeps the profile it was admitted with"
+    );
+
+    // Every tick's records keep the documented within-tick order, and the
+    // turned rider's own records are the same two lifecycle edges.
+    for (tick, events) in &run.ticks {
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].order_key() <= pair[1].order_key()),
+            "tick {tick} is out of order: {events:?}"
+        );
+    }
+    assert!(
+        run.ticks
+            .iter()
+            .flat_map(|(_, events)| events.iter())
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::Despawned { agent, .. } if *agent == rider
+                )
+            })
+            .count()
+            == 1,
+        "the rider despawns once"
+    );
+
+    // The trip is served under the ordinary mode dimension, exactly as any
+    // other vehicle's completed trip is.
+    let operation = sim.interaction_metrics().operation();
+    let served = operation.values().served_agents;
+    assert!(
+        served >= 1,
+        "the completed trip is served in the run dimension: {served}"
+    );
+    assert_eq!(
+        operation.mode_values(AgentMode::Vehicle).served_agents,
+        served,
+        "the turned rider is served under its ordinary mode dimension"
+    );
+}
+
+/// The rider's own mode without `reverse_direction`: the same family, motion,
+/// speed, and longitudinal tactics, one capability short, with a longer body so
+/// the two participants are distinguishable from the public seam.
+fn nominal_only_mode() -> String {
+    RIDER_MODE
+        .replace(", 'reverse_direction'", "")
+        .replace("id: 'rider'", "id: 'nominal_only'")
+        .replace(
+            "length_m: { min: 1.8, max: 1.8 }",
+            "length_m: { min: 2.6, max: 2.6 }",
+        )
+        .replace(
+            "radius_m: { min: 0.35, max: 0.35 }",
+            "radius_m: { min: 0.45, max: 0.45 }",
+        )
+}
+
+/// [`forward_rule_scenario`] with a second participant on facility `a`: one
+/// wrong-way-capable mode and one mode that carries no `reverse_direction`.
+///
+/// Both modes reach the same facility through the same movement, so the
+/// capability gate is the only thing that separates them. The anchors below are
+/// the fixture's own text, and the result is asserted to carry both templates
+/// and both facility accesses, so a fixture edit fails here rather than
+/// silently leaving one participant.
+fn mixed_capability_scenario(rate_per_hour: f64) -> String {
+    // The fixture's demand tail, which the second participant's source is
+    // spliced into; the anchor is built from it, so the two cannot drift apart.
+    let demand_tail =
+        "        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },\n      } } },\n";
+    let demand_close = format!("{demand_tail}  ],");
+    let second_demand = r#"    { id: 'nominal_only_inflow', mode: 'nominal_only',
+      spawn: { rate: {
+        portal: 'a_entry',
+        rate_per_hour: RATE_PER_HOUR,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+"#
+    .replace("RATE_PER_HOUR", &format!("{rate_per_hour:?}"));
+    let mixed = forward_rule_scenario(rate_per_hour)
+        .replacen(
+            "access: { modes: [ 'rider' ] }",
+            "access: { modes: [ 'rider', 'nominal_only' ] }",
+            1,
+        )
+        .replacen(
+            "    } ],\n  maneuver_policy:",
+            &("    },\n".to_string() + &nominal_only_mode() + " ],\n  maneuver_policy:"),
+            1,
+        )
+        .replacen(
+            &demand_close,
+            &(demand_tail.to_string() + &second_demand + "  ],"),
+            1,
+        );
+    assert!(
+        mixed.contains("access: { modes: [ 'rider', 'nominal_only' ] }")
+            && mixed.contains("id: 'nominal_only'")
+            && mixed.contains("mode: 'nominal_only'"),
+        "the mixed-capability fixture must author the second participant"
+    );
+    mixed
+}
+
+/// A wrong-way-capable participant and a participant that is not, on one
+/// facility: the capability gate is per agent and never leaks.
+///
+/// This is the mixed-capability acceptance input. The capable rider's request
+/// is accepted and its traversal turns; the nominal-only participant's request
+/// is rejected outright and it never travels the opposing traversal, while both
+/// share the facility, the movement, and the profile stream. Neither mode
+/// declares a lateral tactic, so the refusal's only possible outcome is that
+/// the participant keeps its nominal traversal.
+#[test]
+fn a_nominal_only_participant_sharing_the_facility_never_reaches_the_entry() {
+    let mut sim = build(&mixed_capability_scenario(240.0));
+    let mut placed = None;
+    for _ in 0..8000 {
+        sim.step();
+        let riders = live_riders(&sim, 0);
+        if let [behind, ahead] = riders[..] {
+            let capable = sim.agent_profile(ahead.id).map(|profile| profile.length_m);
+            let nominal = sim.agent_profile(behind.id).map(|profile| profile.length_m);
+            if capable == Some(1.8) && nominal == Some(2.6) && (20.0..=45.0).contains(&ahead.s_m) {
+                placed = Some((ahead, behind));
+                break;
+            }
+        }
+    }
+    let (rider, nominal_only) = placed
+        .expect("the fixture must place the reverse-capable rider ahead of the nominal-only rider");
+
+    assert!(
+        sim.request_wrong_way_entry(rider.id),
+        "the reverse-capable rider can request the entry"
+    );
+    assert!(
+        !sim.request_wrong_way_entry(nominal_only.id),
+        "a mode without `reverse_direction` never reaches the entry"
+    );
+
+    // The rejection is total: on the very next step the capable rider is
+    // already travelling the opposing traversal while the refused participant
+    // still climbs the reference, and it never reverses afterwards.
+    sim.step();
+    let after = live_riders(&sim, 0);
+    let rider_now = after
+        .iter()
+        .find(|other| other.id == rider.id)
+        .expect("the turned rider stays alive");
+    let nominal_now = after
+        .iter()
+        .find(|other| other.id == nominal_only.id)
+        .expect("the refused rider stays alive");
+    assert!(
+        rider_now.s_m < rider.s_m,
+        "the accepted request turns the capable rider: {} -> {}",
+        rider.s_m,
+        rider_now.s_m
+    );
+    assert!(
+        nominal_now.s_m > nominal_only.s_m,
+        "the refused participant keeps its nominal traversal: {} -> {}",
+        nominal_only.s_m,
+        nominal_now.s_m
+    );
+
+    let mut s_m = nominal_now.s_m;
+    for _ in 0..100 {
+        sim.step();
+        let Some(follow) = live_riders(&sim, 0)
+            .iter()
+            .find(|other| other.id == nominal_only.id)
+            .copied()
+        else {
+            break;
+        };
+        assert!(
+            follow.s_m >= s_m - 1e-9,
+            "the refused participant never travels the opposing traversal: {s_m} -> {}",
+            follow.s_m
+        );
+        s_m = follow.s_m;
+    }
+}
+
+/// A disconnected opposing traversal is refused, and the refusal is total: the
+/// rider keeps its nominal traversal and completes its nominal route with the
+/// ordinary spawn-to-despawn lifecycle.
+#[test]
+fn a_disconnected_opposing_traversal_is_refused_and_the_rider_completes_its_nominal_route() {
+    let disconnected = forward_rule_scenario(72.0).replace(A_BACK_TO_LEFT_ENTRY, "");
+    let mut sim = build(&disconnected);
+    let (rider, before) = lone_rider_on(&mut sim, 0, 20.0..=30.0);
+    assert!(
+        !sim.request_wrong_way_entry(rider),
+        "a facility with no connected opposing traversal has no wrong-way entry"
+    );
+
+    let mut despawned = None;
+    let mut s_m = before.s_m;
+    for _ in 0..600 {
+        let events: Vec<Event> = sim.step().events().to_vec();
+        for event in &events {
+            if let Event::Despawned { agent, reason, .. } = event
+                && *agent == rider
+            {
+                despawned = Some(*reason);
+            }
+        }
+        if let Some(after) = sim
+            .snapshot(SnapshotDetail::Full)
+            .agents()
+            .iter()
+            .find(|sample| sample.id == rider)
+            .and_then(|sample| sample.motion.as_ref())
+            .map(|motion| motion.path_distance_m)
+        {
+            assert!(
+                after >= s_m - 1e-9,
+                "the refused rider keeps its nominal traversal: {s_m} -> {after}"
+            );
+            s_m = after;
+        }
+        if despawned.is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        despawned,
+        Some(DespawnReason::ExitedPath),
+        "the refused rider completes its nominal route"
+    );
+    assert!(
+        s_m > before.s_m,
+        "the rider travelled forward on the facility"
+    );
+}
+
+/// No authored flag disables the collision, clearance, safety, or leader
+/// queries.
+///
+/// The wrong-way policy carries the contract's three thresholds and nothing
+/// else, and the version-2 document rejects an unknown key instead of ignoring
+/// it, so a flag that would switch a query off cannot be authored at all. The
+/// probes are the whole-token flag names in the exact place a wrong-way flag
+/// would live.
+#[test]
+fn no_authored_flag_can_disable_a_query() {
+    for flag in ["disable_collision: true,", "skip_leader_query: true,"] {
+        let flagged = forward_rule_scenario(72.0).replace(
+            "      urgency: 1.0 },",
+            &format!("      urgency: 1.0,\n      {flag} }},"),
+        );
+        assert!(
+            flagged.contains(flag),
+            "the probe must reach the wrong-way policy: {flag}"
+        );
+        assert!(
+            parse_scenario_source_v2(&flagged).is_err(),
+            "a flag that would disable a query is rejected, not accepted: {flag}"
+        );
+    }
 }

@@ -1,9 +1,9 @@
 ---
 context_rev: 2
 priority: P1
-updated: 2026-09-14T15:01:12Z
+updated: 2026-09-14T16:29:43Z
 summary: Add continuous lateral motion, passing evidence, and contextual wrong-way travel.
-next: [[TAS-096-contextual-wrong-way-travel]]
+next: [[TAS-099-increment-2-events-metrics-and-output]]
 ---
 
 # Outcome
