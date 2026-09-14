@@ -86,6 +86,7 @@ use crate::steering::{
 };
 use crate::time::SimTime;
 use crate::units::Seconds;
+use crate::wrong_way::{self, WrongWayInputs, WrongWayOption};
 
 /// Extra clearance in metres demanded beyond two bodies' half-lengths when a
 /// portal admits a vehicle.
@@ -852,6 +853,13 @@ impl Simulation {
         // It is inert unless a maneuver is in flight or an intent is recorded.
         self.resolve_maneuvers(dt);
 
+        // The wrong-way entry pass reads the same tick-start state as the
+        // maneuver pass, so a selected opposing option moves route and
+        // direction ownership before any agent command is produced and no
+        // decision reads a pose another decision already moved. It is inert
+        // unless the scenario authors `maneuver_policy.wrong_way`.
+        self.resolve_wrong_way_entries();
+
         for index in 0..self.agents.len() {
             if !self.agents.alive[index] {
                 continue;
@@ -941,6 +949,56 @@ impl Simulation {
         }
         self.agents.route_state[index] = Some(RouteState {
             intent: Some(request),
+            ..state
+        });
+        true
+    }
+
+    /// Record a wrong-way entry request for one agent.
+    ///
+    /// This is the seam a tactical leaf supplies for the contextual wrong-way
+    /// decision, mirroring [`Self::request_lateral_maneuver`]: the leaf records
+    /// that the agent asks for the decision, and the kernel's wrong-way pass
+    /// evaluates the documented decision from the compiled policy and the
+    /// tick-start observation and, on a selected opposing option, moves the
+    /// agent's route state onto the connected opposing traversal. The kernel
+    /// decides, so a requester asks for the entry and names nothing about the
+    /// traversal.
+    ///
+    /// Returns `false`, and records nothing, when the agent can never reach the
+    /// decision: it is not alive, it carries no route state, its mode's compiled
+    /// tactics carry no `reverse_direction`, the scenario authors no
+    /// `maneuver_policy.wrong_way`, or the compiled topology connects no
+    /// opposing traversal.
+    pub fn request_wrong_way_entry(&mut self, agent: AgentId) -> bool {
+        if self.scenario.wrong_way_policy().is_none() {
+            return false;
+        }
+        let index = agent.index();
+        if index >= self.agents.len() || !self.agents.alive[index] {
+            return false;
+        }
+        let Some(state) = self.agents.route_state[index] else {
+            return false;
+        };
+        let Some(template) = self.scenario.mode_template(state.mode_template) else {
+            return false;
+        };
+        if !template
+            .tactics()
+            .supports(TacticalCapability::ReverseNominalDirection)
+        {
+            return false;
+        }
+        let current = movement_direction(self.agents.direction[index]);
+        if self
+            .opposing_traversal_direction(state.facility, current)
+            .is_none()
+        {
+            return false;
+        }
+        self.agents.route_state[index] = Some(RouteState {
+            wrong_way_entry_requested: true,
             ..state
         });
         true
@@ -1345,6 +1403,206 @@ impl Simulation {
                 self.transitions.push(transition);
             }
         }
+    }
+
+    /// The kernel's wrong-way entry pass: evaluate every recorded wrong-way
+    /// entry request against one immutable view of the tick-start state and, on
+    /// a selected opposing option, move that agent's route state onto the
+    /// connected opposing traversal.
+    ///
+    /// It runs once at the start of a tick, immediately after the maneuver pass
+    /// and before any agent command, so every decision reads the same tick-start
+    /// state as the maneuver batch and no decision reads a state another
+    /// decision wrote. Requests are evaluated in ascending agent id order, and
+    /// each agent's draw is the keyed `maneuver`-stream value for its own
+    /// decision ordinal ([`crate::wrong_way::maneuver_draw`]), so an agent's
+    /// decision never depends on how many other agents were evaluated or in what
+    /// order. The pass is inert unless the scenario authors
+    /// `maneuver_policy.wrong_way`, so a scenario that authors none has no
+    /// wrong-way machinery at all.
+    fn resolve_wrong_way_entries(&mut self) {
+        if self.scenario.wrong_way_policy().is_none() {
+            return;
+        }
+        for index in 0..self.agents.len() {
+            if !self.agents.alive[index] {
+                continue;
+            }
+            let Some(state) = self.agents.route_state[index] else {
+                continue;
+            };
+            if !state.wrong_way_entry_requested {
+                continue;
+            }
+            let agent = AgentId::from_index(index);
+            let ordinal = state.wrong_way_decisions;
+            let draw = wrong_way::maneuver_draw(self.config.seed(), agent, ordinal);
+            let decision = self
+                .wrong_way_inputs(index, &state)
+                .map(|inputs| wrong_way::decide(inputs, draw));
+            // Every evaluation consumes its request and advances the agent's
+            // decision ordinal, so a later request draws its own value rather
+            // than reusing the first, exactly as the decision record fixes.
+            self.agents.route_state[index] = Some(RouteState {
+                wrong_way_entry_requested: false,
+                wrong_way_decisions: ordinal + 1,
+                ..state
+            });
+            if let Some(decision) = decision
+                && decision.option == WrongWayOption::Opposing
+            {
+                self.enter_opposing_traversal(index);
+            }
+        }
+    }
+
+    /// The decision-instant wrong-way context of one agent, read from the
+    /// compiled policy and the agent's tick-start route state.
+    ///
+    /// Every input is the contract's own: the opposing traversal's physical
+    /// connectivity from the compiled topology, the facility's authored nominal
+    /// direction, the nominal and opposing remaining lengths and expected
+    /// speeds, the observed opposing density, the applicable permission effect,
+    /// the agent's sampled compliance and desired speed, and the scenario's
+    /// thresholds. The nominal option is the agent's own current travel
+    /// direction, which is the rule direction an entering agent holds. `None`
+    /// when the traversal has no compiled policy to decide from, so no decision
+    /// is taken.
+    fn wrong_way_inputs(&self, index: usize, state: &RouteState) -> Option<WrongWayInputs> {
+        let facility = self.scenario.facility(state.facility)?;
+        let profile = self.agents.profile[index]?;
+        let policy = self.scenario.wrong_way_policy()?;
+        let reference = facility.reference()?;
+        let length_m = reference.geometry().length();
+
+        let nominal = movement_direction(self.agents.direction[index]);
+        let opposing = opposite_movement_direction(nominal);
+        let opposing_connected = self
+            .opposing_traversal_direction(state.facility, nominal)
+            .is_some();
+
+        // Remaining length to the leaving end of the reference in each travel
+        // direction: a forward traversal leaves at the reference end and a
+        // reverse one at its start.
+        let remaining = |direction: MovementDirection| match direction {
+            MovementDirection::Forward => (length_m - state.s_m).max(0.0),
+            MovementDirection::Reverse => state.s_m.max(0.0),
+        };
+        let nominal_remaining_length_m = remaining(nominal);
+        let opposing_remaining_length_m = remaining(opposing);
+
+        // The expected speed is the agent's own desired free-flow speed capped
+        // by the facility's enforced limit; the same cap applies to both
+        // options, so the time saving is the difference of the two travel
+        // times at that speed.
+        let limit_mps = facility.speed_policy().limit_mps().unwrap_or(f64::INFINITY);
+        let expected_speed_mps = profile.desired_speed_mps.min(limit_mps).max(0.0);
+
+        Some(WrongWayInputs {
+            opposing_connected,
+            nominal_direction: facility.nominal_direction(),
+            nominal_remaining_length_m,
+            nominal_expected_speed_mps: expected_speed_mps,
+            opposing_remaining_length_m,
+            opposing_expected_speed_mps: expected_speed_mps,
+            observed_opposing_density_per_km: self.opposing_density_per_km(index, state.facility),
+            permission: self
+                .scenario
+                .traversal_policy(
+                    state.mode_template,
+                    state.facility,
+                    self.agents.movement[index],
+                )
+                .and_then(|policy| policy.nominal_effect()),
+            compliance: profile.compliance,
+            desired_speed_mps: profile.desired_speed_mps,
+            policy,
+            facility: state.facility,
+            movement: self.agents.movement[index],
+        })
+    }
+
+    /// The observed opposing density the wrong-way decision reads: the live
+    /// bodies whose traversal on `facility` is oncoming to the opposing
+    /// traversal, per kilometre of that facility's compiled reference.
+    ///
+    /// A body is oncoming when it rides `facility` travelling the rule
+    /// direction, which is the traffic an agent entering the opposing traversal
+    /// would meet. A facility with no reference, or one of zero length, has no
+    /// length to measure against, so the density is zero.
+    fn opposing_density_per_km(&self, index: usize, facility: FacilityId) -> f64 {
+        let Some(reference) = self
+            .scenario
+            .facility(facility)
+            .and_then(|facility| facility.reference())
+        else {
+            return 0.0;
+        };
+        let length_m = reference.geometry().length();
+        if length_m <= 0.0 {
+            return 0.0;
+        }
+        let oncoming = self.agents.direction[index];
+        let count = (0..self.agents.len())
+            .filter(|other| *other != index && self.agents.alive[*other])
+            .filter(|other| self.agents.direction[*other] == oncoming)
+            .filter(|other| {
+                self.agents.route_state[*other].is_some_and(|state| state.facility == facility)
+            })
+            .count();
+        count as f64 / (length_m / 1000.0)
+    }
+
+    /// The opposing traversal direction connected to `(facility, direction)` in
+    /// the compiled topology, or `None` when the topology connects none.
+    ///
+    /// The reverse traversal of the same facility is connected when
+    /// [`tangle_model::CompiledFacility::physically_possible_directions`] names
+    /// it, which a connector leaving or entering along that direction produces;
+    /// an adjacency can carry the same connection laterally. The wrong-way
+    /// entry moves route ownership on the same reference, so this slice resolves
+    /// the same-facility case and a laterally connected opposing traversal is
+    /// left to the ordinary lateral maneuver.
+    fn opposing_traversal_direction(
+        &self,
+        facility: FacilityId,
+        direction: MovementDirection,
+    ) -> Option<MovementDirection> {
+        let opposing = opposite_movement_direction(direction);
+        self.scenario
+            .facility(facility)
+            .filter(|compiled| compiled.is_physically_possible(opposing))
+            .map(|_| opposing)
+    }
+
+    /// Move one agent's route state onto its connected opposing traversal,
+    /// through the same one-step ownership move the facility handoffs perform.
+    ///
+    /// The move changes the travel direction and the route coordinates only: the
+    /// world pose is the integrated truth and is never moved, and the new
+    /// coordinates are that same pose projected onto the same reference in the
+    /// new travel frame, so there is no despawn, no re-spawn, and no snap. The
+    /// stored heading stays the reference tangent, exactly as every other stage
+    /// keeps it, so the travel heading is [`travel_heading`] of the new sign. The
+    /// movement route is left behind, exactly as a handoff does, because the
+    /// agent now travels against the movement's own direction. Returns `false`
+    /// when no opposing traversal is connected.
+    fn enter_opposing_traversal(&mut self, index: usize) -> bool {
+        let Some(state) = self.agents.route_state[index] else {
+            return false;
+        };
+        let current = movement_direction(self.agents.direction[index]);
+        let Some(opposing) = self.opposing_traversal_direction(state.facility, current) else {
+            return false;
+        };
+        let sign = travel_sign(opposing);
+        self.agents.direction[index] = sign;
+        self.agents.movement[index] = None;
+        self.reproject_route_state(index, sign);
+        if let Some(next) = self.agents.route_state[index] {
+            self.agents.distance_m[index] = next.s_m;
+        }
+        true
     }
 
     /// Whether any live agent holds a maneuver or a recorded intent, so the
@@ -3713,6 +3971,15 @@ fn movement_direction(sign: f64) -> MovementDirection {
         MovementDirection::Reverse
     } else {
         MovementDirection::Forward
+    }
+}
+
+/// The traversal direction opposite `direction`: the opposing traversal of the
+/// same facility traversal.
+fn opposite_movement_direction(direction: MovementDirection) -> MovementDirection {
+    match direction {
+        MovementDirection::Forward => MovementDirection::Reverse,
+        MovementDirection::Reverse => MovementDirection::Forward,
     }
 }
 

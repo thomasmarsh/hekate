@@ -186,6 +186,15 @@ pub(crate) struct RouteState {
     /// through [`crate::Simulation`] and is not written to any output artifact
     /// here.
     pub(crate) maneuver_reason: Option<ManeuverReason>,
+    /// Whether [`crate::Simulation::request_wrong_way_entry`] has recorded a
+    /// wrong-way entry request the kernel's wrong-way pass has not yet
+    /// evaluated. `false` when no entry is requested.
+    pub(crate) wrong_way_entry_requested: bool,
+    /// The number of wrong-way decisions this agent has evaluated, which is the
+    /// agent's own zero-based decision ordinal in the versioned `maneuver`
+    /// stream ([`crate::wrong_way::maneuver_draw`]). A repeated entry request
+    /// therefore draws its own value rather than reusing the first.
+    pub(crate) wrong_way_decisions: u32,
 }
 
 impl RouteState {
@@ -232,6 +241,8 @@ impl RouteState {
             settled_since: None,
             entering_facility: false,
             maneuver_reason: None,
+            wrong_way_entry_requested: false,
+            wrong_way_decisions: 0,
         }
     }
 
