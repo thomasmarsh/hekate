@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T15:06:36Z
+updated: 2026-09-14T15:15:01Z
 summary: Make contextual bicycle and scooter wrong-way decisions reproducible and inspectable.
-next: [[TAS-116-key-the-wrong-way-draw-and-reject-impossible-opp]]
 ---
 
 Parent [[TAS-096-contextual-wrong-way-travel]].
@@ -33,10 +32,26 @@ type, observed density, urgency, and its stable compliance profile.
 
 # Context
 
-Gated on [[TAS-086-validate-increment-2-lateral-and-wrong-way-policy]] and
-[[TAS-091-resolve-gap-claims-and-maneuver-transitions]]. Owns wrong-way
-observation/decision logic, the maneuver RNG stream, and focused tests. Do not
-execute the route or emit public events.
+Depends on [[TAS-086-validate-increment-2-lateral-and-wrong-way-policy]] at context_rev 1.
+Depends on [[TAS-091-resolve-gap-claims-and-maneuver-transitions]] at context_rev 1.
+Owns wrong-way observation/decision logic, the maneuver RNG stream, and focused
+tests. Do not execute the route or emit public events.
+
+# Result
+
+Complete. Both children resolved:
+[[TAS-115-define-contextual-wrong-way-decision-inputs-and]] landed the
+reason-coded decision inputs and output (`crates/tangle-sim/src/wrong_way.rs`),
+and [[TAS-116-key-the-wrong-way-draw-and-reject-impossible-opp]] landed the
+versioned `maneuver` stream, the order-independent per-agent keyed draw
+(`maneuver_draw`), the explicit `no_opposing_path` rejection, and the
+fixed-seed/reversed-declaration-order/unrelated-agent isolation tests. The
+decision reads only the observer-stage context and adds no perception model; the
+runtime consumer is [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]].
+Validation: `cargo test -p tangle-sim --lib` (215 passed), `cargo clippy
+--workspace --all-targets --all-features -- -D warnings` (clean), `cargo fmt
+--all --check` (clean), `scripts/check-dependency-direction.sh` (OK), and the
+coordinator's `cargo test --workspace`.
 
 # Slices
 

@@ -45,7 +45,11 @@
 //! field: the contract takes one draw `u` in `[0, 1)` from the versioned
 //! `maneuver` stream keyed by the root seed, the run ID, the stable `AgentId`,
 //! and the agent's decision ordinal, and the keyed draw is supplied by the
-//! caller so this procedure stays a pure function of its context.
+//! caller so this procedure stays a pure function of its context. This module
+//! owns that keyed draw as [`maneuver_draw`], a pure function of
+//! `(root_seed, agent, ordinal)` built on the crate's named-stream derivation;
+//! the run-id component of the key has no field in [`crate::RunConfig`] yet and
+//! is documented rather than invented there.
 //!
 //! ## Rule
 //!
@@ -54,7 +58,12 @@
 //! 1. A physically disconnected opposing traversal rejects as
 //!    [`WrongWayReason::NoOpposingPath`], and an `either` nominal direction
 //!    rejects as [`WrongWayReason::NoNominalDirection`]. Neither takes a draw,
-//!    and both select [`WrongWayOption::Nominal`].
+//!    and both select [`WrongWayOption::Nominal`]. Together these are the
+//!    physical precondition [`WrongWayInputs::physical_rejection`] reports.
+//!    It is deliberately separate from legality: a connected traversal a
+//!    `prohibit` statement forbids still admits an opposing option, so the
+//!    decision reaches the draw and a selected opposing option yields
+//!    [`WrongWayReason::NoncompliantChoice`] rather than a physical rejection.
 //! 2. An estimated time saving strictly below `min_time_saving_s` rejects as
 //!    [`WrongWayReason::InsufficientTimeSaving`], and an observed opposing
 //!    density strictly above `max_opposing_density_per_km` rejects as
@@ -100,6 +109,9 @@
 use tangle_model::{
     FacilityId, MovementId, NominalDirection, PermissionEffect, WrongWayPolicySource,
 };
+
+use crate::agent::AgentId;
+use crate::rng::{STREAM_MANEUVER, derive_stream, uniform01};
 
 /// Why a wrong-way decision selected its option.
 ///
@@ -233,6 +245,28 @@ impl WrongWayInputs {
         self.nominal_remaining_length_m / self.nominal_expected_speed_mps
             - self.opposing_remaining_length_m / self.opposing_expected_speed_mps
     }
+
+    /// The explicit rejection a physically impossible opposing option produces
+    /// before any draw, or `None` when an opposing option exists and the
+    /// decision must proceed to the keyed draw.
+    ///
+    /// This is the contract's physical precondition — a connected opposing
+    /// traversal and a nominal direction that is not `either` — and it is
+    /// deliberately separate from legality: a connected traversal that a
+    /// `prohibit` statement forbids still admits an opposing option, so it
+    /// returns `None` and a selected opposing option yields
+    /// [`WrongWayReason::NoncompliantChoice`]. The disconnected case is named
+    /// first, so an `either` object that is also disconnected reports
+    /// [`WrongWayReason::NoOpposingPath`].
+    pub fn physical_rejection(&self) -> Option<WrongWayReason> {
+        if !self.opposing_connected {
+            Some(WrongWayReason::NoOpposingPath)
+        } else if self.nominal_direction == NominalDirection::Either {
+            Some(WrongWayReason::NoNominalDirection)
+        } else {
+            None
+        }
+    }
 }
 
 /// Record of one wrong-way decision.
@@ -299,21 +333,8 @@ impl WrongWayDecision {
 pub fn decide(inputs: WrongWayInputs, draw: f64) -> WrongWayDecision {
     let time_saving_s = inputs.time_saving_s();
 
-    if !inputs.opposing_connected {
-        return WrongWayDecision::record(
-            inputs,
-            WrongWayOption::Nominal,
-            WrongWayReason::NoOpposingPath,
-            time_saving_s,
-        );
-    }
-    if inputs.nominal_direction == NominalDirection::Either {
-        return WrongWayDecision::record(
-            inputs,
-            WrongWayOption::Nominal,
-            WrongWayReason::NoNominalDirection,
-            time_saving_s,
-        );
+    if let Some(reason) = inputs.physical_rejection() {
+        return WrongWayDecision::record(inputs, WrongWayOption::Nominal, reason, time_saving_s);
     }
     if time_saving_s < inputs.policy.min_time_saving_s {
         return WrongWayDecision::record(
@@ -348,6 +369,28 @@ pub fn decide(inputs: WrongWayInputs, draw: f64) -> WrongWayDecision {
             time_saving_s,
         )
     }
+}
+
+/// The keyed `maneuver` draw `u` in `[0, 1)` for one wrong-way decision.
+///
+/// The value is a pure function of `(root_seed, `[`STREAM_MANEUVER`]`, agent,
+/// ordinal)` and of nothing else: it is the `ordinal`-th draw of the agent's own
+/// `maneuver` substream, so an agent's value never depends on how many other
+/// agents drew, on their identifiers, or on the order the decisions were
+/// evaluated. `ordinal` is the agent's own zero-based decision ordinal, so two
+/// agents' first decisions both carry ordinal `0` and draw independently.
+///
+/// The contract's draw key is the root seed, the run ID, the stable `AgentId`,
+/// and the agent's decision ordinal. [`crate::RunConfig`] carries only a root
+/// seed and a step and has no run-id field today, so this key omits the run ID:
+/// adding one would first widen the run configuration and the run provenance,
+/// rather than being invented here.
+pub fn maneuver_draw(root_seed: u64, agent: AgentId, ordinal: u32) -> f64 {
+    let mut rng = derive_stream(root_seed, STREAM_MANEUVER, agent.get());
+    for _ in 0..ordinal {
+        let _ = uniform01(&mut rng);
+    }
+    uniform01(&mut rng)
 }
 
 #[cfg(test)]
@@ -389,6 +432,36 @@ mod tests {
     /// Draw values spanning the whole `[0, 1)` domain, used to prove a
     /// rejection ignores the draw.
     const ALL_DRAWS: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 0.999_999_999_999_999_9];
+
+    /// A connected opposing traversal a `prohibit` statement forbids: an
+    /// opposing option physically exists, so the decision reaches the draw.
+    fn prohibited_but_connected() -> WrongWayInputs {
+        let mut inputs = base();
+        inputs.permission = Some(PermissionEffect::Prohibit);
+        inputs
+    }
+
+    /// A physically disconnected opposing traversal: no opposing option exists.
+    fn disconnected() -> WrongWayInputs {
+        let mut inputs = base();
+        inputs.opposing_connected = false;
+        inputs
+    }
+
+    /// Evaluate the keyed-draw pipeline for one declaration order, returning
+    /// each agent's decision keyed by its stable id so two orders are
+    /// comparable regardless of evaluation order.
+    fn evaluate(
+        seed: u64,
+        order: &[(AgentId, WrongWayInputs)],
+    ) -> Vec<(AgentId, WrongWayDecision)> {
+        let mut results: Vec<(AgentId, WrongWayDecision)> = order
+            .iter()
+            .map(|(agent, inputs)| (*agent, decide(*inputs, maneuver_draw(seed, *agent, 0))))
+            .collect();
+        results.sort_by_key(|(agent, _)| agent.get());
+        results
+    }
 
     #[test]
     fn reason_labels_are_the_contract_codes() {
@@ -647,5 +720,118 @@ mod tests {
         for draw in ALL_DRAWS {
             assert_eq!(decide(base(), draw), decide(base(), draw), "draw {draw}");
         }
+    }
+
+    #[test]
+    fn the_maneuver_draw_is_a_reproducible_unit_interval_value() {
+        for seed in [0u64, 7, u64::MAX] {
+            for agent in [AgentId::from_index(0), AgentId::from_index(5)] {
+                for ordinal in [0u32, 1, 9] {
+                    let value = maneuver_draw(seed, agent, ordinal);
+                    assert_eq!(value, maneuver_draw(seed, agent, ordinal), "reproducible");
+                    assert!((0.0..1.0).contains(&value), "{value} is out of [0, 1)");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_maneuver_draw_is_keyed_by_seed_agent_and_ordinal() {
+        let first = maneuver_draw(7, AgentId::from_index(3), 0);
+        assert_ne!(first, maneuver_draw(8, AgentId::from_index(3), 0), "seed");
+        assert_ne!(first, maneuver_draw(7, AgentId::from_index(4), 0), "agent");
+        assert_ne!(
+            first,
+            maneuver_draw(7, AgentId::from_index(3), 1),
+            "ordinal"
+        );
+    }
+
+    #[test]
+    fn unrelated_agents_cannot_change_each_others_draws() {
+        let seed = 11;
+        let a = AgentId::from_index(1);
+        let b = AgentId::from_index(2);
+
+        let a_first = maneuver_draw(seed, a, 0);
+        let a_second = maneuver_draw(seed, a, 1);
+        // Interleave B's whole stream between A's draws.
+        let b_values: Vec<f64> = (0..8)
+            .map(|ordinal| maneuver_draw(seed, b, ordinal))
+            .collect();
+        let b_before: Vec<f64> = (0..8)
+            .map(|ordinal| maneuver_draw(seed, b, ordinal))
+            .collect();
+
+        assert_eq!(a_first, maneuver_draw(seed, a, 0), "A's first draw moved");
+        assert_eq!(a_second, maneuver_draw(seed, a, 1), "A's second draw moved");
+        assert_eq!(b_values, b_before, "B's stream moved");
+        assert_ne!(
+            a_first,
+            maneuver_draw(seed, b, 0),
+            "agents share a substream"
+        );
+    }
+
+    #[test]
+    fn a_reversed_declaration_order_does_not_change_a_decision() {
+        let seed = 5;
+        let forward = [
+            (AgentId::from_index(3), base()),
+            (AgentId::from_index(1), prohibited_but_connected()),
+            (AgentId::from_index(2), disconnected()),
+        ];
+        let mut reversed = forward;
+        reversed.reverse();
+        assert_eq!(evaluate(seed, &forward), evaluate(seed, &reversed));
+        // The same keyed pipeline on the same order is stable across runs.
+        assert_eq!(evaluate(seed, &forward), evaluate(seed, &forward));
+    }
+
+    #[test]
+    fn a_disconnected_opposing_option_rejects_before_any_draw() {
+        let inputs = disconnected();
+        assert_eq!(
+            inputs.physical_rejection(),
+            Some(WrongWayReason::NoOpposingPath)
+        );
+        // No draw selects the opposing option: the rejection precedes the draw.
+        for draw in ALL_DRAWS {
+            let decision = decide(inputs, draw);
+            assert_eq!(
+                decision.reason,
+                WrongWayReason::NoOpposingPath,
+                "draw {draw}"
+            );
+            assert_eq!(decision.option, WrongWayOption::Nominal);
+        }
+    }
+
+    #[test]
+    fn an_either_direction_is_a_physical_rejection() {
+        let mut inputs = base();
+        inputs.nominal_direction = NominalDirection::Either;
+        assert_eq!(
+            inputs.physical_rejection(),
+            Some(WrongWayReason::NoNominalDirection)
+        );
+    }
+
+    #[test]
+    fn a_connected_prohibited_traversal_still_takes_the_draw() {
+        let inputs = prohibited_but_connected();
+        assert_eq!(
+            inputs.physical_rejection(),
+            None,
+            "a legal prohibition does not remove the opposing option"
+        );
+        let selected = decide(inputs, ACCEPTING_DRAW);
+        assert_eq!(selected.option, WrongWayOption::Opposing);
+        assert_eq!(selected.reason, WrongWayReason::NoncompliantChoice);
+        // The same prohibition is a compliant choice when the draw keeps the
+        // nominal option: legality never becomes a physical rejection.
+        let kept = decide(inputs, REFUSING_DRAW);
+        assert_eq!(kept.option, WrongWayOption::Nominal);
+        assert_eq!(kept.reason, WrongWayReason::CompliantChoice);
     }
 }

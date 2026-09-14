@@ -106,6 +106,8 @@ pub use steering::{
 pub use swept::{SweptBody, TOI_TIME_TOLERANCE, TimeOfImpact, band_entry, time_of_impact};
 pub use time::SimTime;
 pub use units::Seconds;
-pub use wrong_way::{WrongWayDecision, WrongWayInputs, WrongWayOption, WrongWayReason, decide};
+pub use wrong_way::{
+    WrongWayDecision, WrongWayInputs, WrongWayOption, WrongWayReason, decide, maneuver_draw,
+};
 
 pub use tangle_model::MODEL_VERSION;

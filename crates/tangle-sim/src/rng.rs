@@ -9,7 +9,8 @@
 //! This module owns the derivation for the streams drawn from so far: one
 //! `demand` substream per vehicle demand source, one `pedestrian_demand`
 //! substream per pedestrian demand source, one `profile` substream per agent
-//! of either mode, and one `compliance` substream per agent. The `perception`
+//! of either mode, one `compliance` substream per agent, and one `maneuver`
+//! substream per agent for the contextual wrong-way draw. The `perception`
 //! stream belongs to a later increment and is not derived here.
 
 use rand_chacha::ChaCha20Rng;
@@ -39,6 +40,14 @@ pub const STREAM_PROFILE: &str = "profile";
 /// stream carries the stable per-agent draw rather than a fresh coin flip each
 /// decision. See [`crate::compliance`].
 pub const STREAM_COMPLIANCE: &str = "compliance";
+
+/// Stream name for the contextual wrong-way `maneuver` draw.
+///
+/// The draw is keyed by the root seed, the stable agent id, and the agent's own
+/// decision ordinal, so one agent's value never depends on how many other
+/// agents drew or in what order the decisions were evaluated. See
+/// [`crate::wrong_way::maneuver_draw`].
+pub const STREAM_MANEUVER: &str = "maneuver";
 
 /// FNV-1a 64-bit offset basis.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -116,6 +125,23 @@ mod tests {
         assert_ne!(draw(42, STREAM_DEMAND, 0), draw(42, STREAM_DEMAND, 1));
         assert_ne!(draw(42, STREAM_DEMAND, 0), draw(43, STREAM_DEMAND, 0));
         assert_ne!(draw(42, STREAM_COMPLIANCE, 0), draw(42, STREAM_PROFILE, 0));
+    }
+
+    #[test]
+    fn maneuver_stream_is_independent_of_the_other_named_streams() {
+        fn draw(root: u64, name: &str, id: u32) -> u64 {
+            let mut rng = derive_stream(root, name, id);
+            rng.next_u64()
+        }
+        let maneuver = draw(42, STREAM_MANEUVER, 0);
+        for name in [
+            STREAM_DEMAND,
+            STREAM_PEDESTRIAN_DEMAND,
+            STREAM_PROFILE,
+            STREAM_COMPLIANCE,
+        ] {
+            assert_ne!(maneuver, draw(42, name, 0), "{name}");
+        }
     }
 
     #[test]

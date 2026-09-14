@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T00:17:21Z
+updated: 2026-09-14T15:15:01Z
 summary: Select and execute contextual wrong-way travel through ordinary opposing-flow systems.
-next: [[TAS-097-make-contextual-wrong-way-decisions-reproducible]]
+next: [[TAS-098-route-wrong-way-agents-through-ordinary-interactions]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].
