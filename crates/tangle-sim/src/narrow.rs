@@ -49,9 +49,11 @@
 //! - `comfortable_brake_mps2` is `b` (authored 1.5–3.0 m/s²);
 //! - `length_m` and `radius_m` size the capsule body (authored 1.6–1.9 m long,
 //!   0.30–0.40 m radius), so the bicycle is the longer, slimmer narrow mode;
-//! - `steering_rate_max_rad_s` (authored 0.6–1.2 rad/s) and
-//!   `lateral_clearance_m` (authored 0.20–0.50 m) are carried for the
-//!   Increment 2 lateral machinery and are not read by this longitudinal model;
+//! - `steering_rate_max_rad_s` (authored 0.6–1.2 rad/s),
+//!   `lateral_accel_max_mps2`, and `lateral_clearance_m` (authored 0.20–0.50 m)
+//!   are carried for the Increment 2 lateral machinery and are not read by this
+//!   longitudinal model; `lateral_accel_max_mps2` is present only when the
+//!   template's compiled profile declares it;
 //! - `compliance` (authored 0.8–1.0) belongs to the signal-compliance decision
 //!   ([`crate::compliance`]), not to this longitudinal model.
 //!
@@ -201,9 +203,9 @@
 //!   0.25–0.35 m radius), so the scooter is the shorter, more compact narrow
 //!   mode;
 //! - `steering_rate_max_rad_s` (authored 0.8–1.5 rad/s, quicker than a
-//!   bicycle's) and `lateral_clearance_m` (authored 0.20–0.50 m) are carried
-//!   for the Increment 2 lateral machinery and are not read by this
-//!   longitudinal model;
+//!   bicycle's), `lateral_accel_max_mps2`, and `lateral_clearance_m` (authored
+//!   0.20–0.50 m) are carried for the Increment 2 lateral machinery and are not
+//!   read by this longitudinal model;
 //! - `compliance` (authored 0.6–1.0, wider and lower than a bicycle's) belongs
 //!   to the signal-compliance decision ([`crate::compliance`]), not to this
 //!   longitudinal model.
@@ -333,8 +335,8 @@ use crate::rng::uniform01;
 /// A narrow wheeled body is a capsule: a segment of `length_m` with a constant
 /// `radius_m`, so its bounding width is twice the radius. The longitudinal
 /// parameters are the ones the shared IDM law reads; the steering rate and
-/// lateral clearance are the narrow family's extra parameters, carried for the
-/// Increment 2 lateral machinery. Values are built once from the mode template
+/// lateral clearance and acceleration are the narrow family's extra parameters,
+/// carried for the Increment 2 lateral machinery. Values are built once from the mode template
 /// and never resampled, so a body and its behavior are stable for a run.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NarrowProfile {
@@ -356,6 +358,11 @@ pub struct NarrowProfile {
     /// Preferred lateral clearance from a facility edge in metres. Carried for
     /// the Increment 2 lateral machinery; unread by the longitudinal model.
     pub lateral_clearance_m: f64,
+    /// Maximum lateral acceleration in metres per second squared, when the
+    /// template's compiled profile declares one; `None` leaves the mode without
+    /// a bounded-steering envelope, exactly as Increment 1. Carried for the
+    /// Increment 2 lateral machinery; unread by the longitudinal model.
+    pub lateral_accel_max_mps2: Option<f64>,
     /// Signal-compliance propensity in `[0, 1]`. Read by the signal-compliance
     /// decision ([`crate::compliance`]), not by the longitudinal model.
     pub compliance: f64,
@@ -438,6 +445,12 @@ pub(crate) fn sample_narrow_profile(
             .lateral_clearance_m()
             .expect("a narrow wheeled template carries a lateral clearance")
             .sample(uniform01(profile_rng)),
+        // Appended after the Increment 1 draws so an existing narrow profile is
+        // unchanged; a template with no compiled lateral acceleration draws
+        // nothing and keeps the Increment 1 longitudinal-only behaviour.
+        lateral_accel_max_mps2: profile
+            .lateral_accel_max_mps2()
+            .map(|range| range.sample(uniform01(profile_rng))),
         compliance: profile.compliance().sample(uniform01(compliance_rng)),
     }
 }

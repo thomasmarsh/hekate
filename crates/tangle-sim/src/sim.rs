@@ -37,9 +37,9 @@
 
 use glam::DVec2;
 use tangle_model::{
-    AgentFamily, CompiledMovement, CompiledPath, CompiledPedestrianRoute, CompiledScenario,
-    CrossingId, DemandId, ModeTemplateId, MovementId, PathEnd, PathId, PedestrianDemandId,
-    PedestrianRouteId, PortalId, RuleKind, SignalColor, SignalId,
+    AgentFamily, CompiledMovement, CompiledPath, CompiledPedestrianRoute, CompiledReferencePath,
+    CompiledScenario, CrossingId, DemandId, ModeTemplateId, MovementId, PathEnd, PathId,
+    PedestrianDemandId, PedestrianRouteId, PortalId, RuleKind, SignalColor, SignalId,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
@@ -51,7 +51,7 @@ use crate::demand::{DemandRuntime, MAX_PENDING_SPAWNS, sample_pedestrian_route, 
 use crate::event::{DespawnReason, Event, ViolationKind};
 use crate::index::{self, SpatialIndex};
 use crate::metrics::InteractionMetrics;
-use crate::narrow::{self, sample_narrow_profile};
+use crate::narrow::{self, NarrowProfile, sample_narrow_profile};
 use crate::pedestrian::{self, Conflict, PedestrianState, PedestrianWaypoint, PedestrianZone};
 use crate::pedestrian_compliance::{self, PedestrianComplianceDecision, PedestrianSignalAction};
 use crate::profile::{
@@ -68,6 +68,9 @@ use crate::stage::{
     AbortCondition, ManeuverState, MotionCommand, MotionControl, Observation,
     PedestrianObservation, PhysicalAdvance, RelevantWorldQuery, Tactic, TacticReason, TacticTarget,
     TacticalChoice, VehicleObservation,
+};
+use crate::steering::{
+    BoundedSteering, LateralCorridor, SteeringLimits, SteeringRequest, bounded_steering_step,
 };
 use crate::time::SimTime;
 use crate::units::Seconds;
@@ -1406,8 +1409,9 @@ impl Simulation {
         // coordinates by projecting the entry pose onto the facility reference.
         // The family check inside keeps passenger cars and narrow agents on one
         // code path; a version-1 demand has no mode and carries no state.
-        let route_state =
-            mode.and_then(|mode| self.route_state_for(mode, path_id, position, direction));
+        let route_state = mode.and_then(|mode| {
+            self.route_state_for(mode, path_id, position, direction, narrow_profile)
+        });
 
         self.agents.push(AgentInit {
             mode: AgentMode::Vehicle,
@@ -1588,13 +1592,16 @@ impl Simulation {
     /// wheeled capsule, and a future articulated chain share the one path, and
     /// a holonomic walking body carries no route coordinates. The mode's
     /// resolved lateral policy seeds the target clearance and horizon when it
-    /// declares one, and `None` leaves them absent exactly as Increment 1.
+    /// declares one, and its sampled narrow profile seeds the bounded-steering
+    /// limits and usable corridor; `None` leaves each of them absent exactly as
+    /// Increment 1.
     fn route_state_for(
         &self,
         mode: ModeTemplateId,
         path: PathId,
         position: DVec2,
         direction: f64,
+        narrow: Option<NarrowProfile>,
     ) -> Option<RouteState> {
         let template = self.scenario.mode_template(mode)?;
         if template.family() == Some(AgentFamily::HolonomicCircle) {
@@ -1605,14 +1612,37 @@ impl Simulation {
         })?;
         let geometry = facility.reference()?.geometry();
         let lateral = template.lateral();
-        Some(RouteState::project(
+        let state = RouteState::project(
             facility.id(),
             geometry,
             position,
             direction,
             lateral.map(|policy| policy.target_clearance_m()),
             lateral.map(|policy| policy.horizon_s()),
-        ))
+        );
+        // Only a mode whose sampled profile carries a lateral-acceleration limit
+        // can steer laterally; the corridor is the facility's usable interval
+        // for its envelope width and preferred clearance. A template with no
+        // compiled limit stays longitudinal-only.
+        let bounded = narrow.and_then(|narrow| {
+            let lateral_accel_max_mps2 = narrow.lateral_accel_max_mps2?;
+            let interval =
+                facility.usable_lateral_interval(narrow.body_width_m(), narrow.lateral_clearance_m);
+            Some(BoundedSteering {
+                limits: SteeringLimits {
+                    heading_rate_max_rad_s: narrow.steering_rate_max_rad_s,
+                    lateral_accel_max_mps2,
+                },
+                corridor: LateralCorridor {
+                    d_min: interval.d_min(),
+                    d_max: interval.d_max(),
+                },
+            })
+        });
+        Some(match bounded {
+            Some(bounded) => state.with_bounded_steering(bounded),
+            None => state,
+        })
     }
 
     /// Reproject one agent's integrated world pose into its facility route
@@ -1637,6 +1667,29 @@ impl Simulation {
         };
         state.reproject(geometry, position, direction);
         self.agents.route_state[index] = Some(state);
+    }
+
+    /// The facility reference geometry of an agent's route state, when it has
+    /// one; `None` for an agent with no route state.
+    fn route_geometry(&self, index: usize) -> Option<&CompiledReferencePath> {
+        let state = self.agents.route_state[index]?;
+        self.scenario
+            .facility(state.facility)
+            .and_then(|facility| facility.reference())
+            .map(|reference| reference.geometry())
+    }
+
+    /// An agent's fixed lateral target offset, when a maneuver has requested one.
+    ///
+    /// The target is the tactical stage's request; this leaf only integrates it
+    /// under the compiled limits and never selects it.
+    fn lateral_request(&self, index: usize) -> Option<f64> {
+        self.agents
+            .route_state
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|state| state.target_offset_m)
     }
 }
 
@@ -1837,7 +1890,7 @@ impl MotionControl for Simulation {
     /// applied here, outside the model.
     fn command_motion(
         &mut self,
-        _index: usize,
+        index: usize,
         observation: &Observation,
         tactic: &Tactic,
         dt: f64,
@@ -1912,6 +1965,36 @@ impl MotionControl for Simulation {
                 if new_speed < comfort_floor - 1e-9 {
                     self.emergency_cap_steps += 1;
                 }
+
+                // A fixed lateral target turns this step into a bounded steering
+                // step. The longitudinal speed above has already applied the
+                // leader, stop-line, and crossing-yield caps, so the corridor
+                // check and those caps constrain the same proposed world step; a
+                // step that would leave the corridor holds instead of clipping.
+                if let Some(target_offset_m) = self.lateral_request(index)
+                    && let Some(steering) =
+                        self.agents.route_state[index].and_then(|state| state.bounded_steering)
+                    && let Some(geometry) = self.route_geometry(index)
+                {
+                    let request = SteeringRequest {
+                        position: self.agents.position[index],
+                        heading_rad: self.agents.heading_rad[index],
+                        speed_mps: new_speed,
+                        target_offset_m,
+                        direction: self.agents.direction[index],
+                    };
+                    return match bounded_steering_step(geometry, request, steering, dt) {
+                        Some(step) => MotionCommand::RouteSteering {
+                            heading_rad: step.heading_rad,
+                            speed_mps: step.speed_mps,
+                        },
+                        None => MotionCommand::RouteSteering {
+                            heading_rad: self.agents.heading_rad[index],
+                            speed_mps: 0.0,
+                        },
+                    };
+                }
+
                 MotionCommand::Longitudinal {
                     speed_mps: new_speed,
                 }
@@ -1967,44 +2050,80 @@ impl PhysicalAdvance for Simulation {
         dt: f64,
     ) {
         match observation {
-            Observation::Vehicle(_) => {
-                let MotionCommand::Longitudinal { speed_mps } = *command else {
-                    return;
-                };
-                let path_id = self.agents.path[index];
-                let direction = self.agents.direction[index];
-                let Some(path) = self.scenario.path(path_id) else {
-                    return;
-                };
-                let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
-                let length = path.length();
-                let distance_m = if direction < 0.0 {
-                    travelled.max(0.0)
-                } else {
-                    travelled.min(length)
-                };
+            Observation::Vehicle(_) => match *command {
+                MotionCommand::Longitudinal { speed_mps } => {
+                    let path_id = self.agents.path[index];
+                    let direction = self.agents.direction[index];
+                    let Some(path) = self.scenario.path(path_id) else {
+                        return;
+                    };
+                    let travelled = self.agents.distance_m[index] + speed_mps * direction * dt;
+                    let length = path.length();
+                    let distance_m = if direction < 0.0 {
+                        travelled.max(0.0)
+                    } else {
+                        travelled.min(length)
+                    };
 
-                self.agents.speed_mps[index] = speed_mps;
-                self.agents.distance_m[index] = distance_m;
-                self.agents.position[index] = path.position_at(distance_m);
-                self.agents.heading_rad[index] = path.heading_at(distance_m);
-                self.reproject_route_state(index, direction);
+                    self.agents.speed_mps[index] = speed_mps;
+                    self.agents.distance_m[index] = distance_m;
+                    self.agents.position[index] = path.position_at(distance_m);
+                    self.agents.heading_rad[index] = path.heading_at(distance_m);
+                    self.reproject_route_state(index, direction);
 
-                let exited = if direction < 0.0 {
-                    travelled <= 0.0
-                } else {
-                    travelled >= length
-                };
-                if exited {
-                    self.agents.alive[index] = false;
-                    self.despawned_total += 1;
-                    self.events.push(Event::Despawned {
-                        agent: AgentId::from_index(index),
-                        path: path_id,
-                        reason: DespawnReason::ExitedPath,
-                    });
+                    let exited = if direction < 0.0 {
+                        travelled <= 0.0
+                    } else {
+                        travelled >= length
+                    };
+                    if exited {
+                        self.agents.alive[index] = false;
+                        self.despawned_total += 1;
+                        self.events.push(Event::Despawned {
+                            agent: AgentId::from_index(index),
+                            path: path_id,
+                            reason: DespawnReason::ExitedPath,
+                        });
+                    }
                 }
-            }
+                MotionCommand::RouteSteering {
+                    heading_rad,
+                    speed_mps,
+                } => {
+                    // The world pose is the integrated truth: step the heading
+                    // and position in world coordinates from the commanded step,
+                    // then project the result back onto the route frame. No
+                    // target offset is written to the pose or to `d`.
+                    let path_id = self.agents.path[index];
+                    let direction = self.agents.direction[index];
+                    let length = self
+                        .scenario
+                        .path(path_id)
+                        .map_or(0.0, |path| path.length());
+                    let position = self.agents.position[index]
+                        + DVec2::from_angle(heading_rad) * (speed_mps * dt);
+
+                    self.agents.speed_mps[index] = speed_mps;
+                    self.agents.heading_rad[index] = heading_rad;
+                    self.agents.position[index] = position;
+                    self.reproject_route_state(index, direction);
+                    if let Some(state) = self.agents.route_state[index] {
+                        self.agents.distance_m[index] = state.s_m;
+                    }
+
+                    let s_m = self.agents.distance_m[index];
+                    if s_m <= 0.0 || s_m >= length {
+                        self.agents.alive[index] = false;
+                        self.despawned_total += 1;
+                        self.events.push(Event::Despawned {
+                            agent: AgentId::from_index(index),
+                            path: path_id,
+                            reason: DespawnReason::ExitedPath,
+                        });
+                    }
+                }
+                MotionCommand::Idle | MotionCommand::Steering { .. } => {}
+            },
             Observation::Pedestrian(mut pedestrian) => {
                 let MotionCommand::Steering {
                     heading_rad,
@@ -3079,6 +3198,154 @@ mod tests {
         assert!(
             deceleration <= profile.comfortable_brake_mps2 + 1e-9,
             "the altered braking bound did not cap the command: {deceleration}"
+        );
+    }
+
+    /// A version-2 bikeway so a capsule rider spawns with route state and a
+    /// sampled bounded-steering envelope; its demand puts the rider on the
+    /// facility's reference path.
+    const BOUNDED_STEERING_V2: &str = r#"
+    {
+      schema_version: 2,
+      id: 'bounded_steering_v2',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [ { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] } ],
+      portals: [
+        { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+        { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+      ],
+      boundaries: [
+        { id: 'world', points: [
+          { x: -10.0, y: -10.0 }, { x: 210.0, y: -10.0 },
+          { x: 210.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+        ] },
+      ],
+      regions: [
+        { id: 'band', points: [
+          { x: 0.0, y: -1.5 }, { x: 200.0, y: -1.5 },
+          { x: 200.0, y: 1.5 }, { x: 0.0, y: 1.5 },
+        ] },
+      ],
+      facilities: [
+        { id: 'bikeway', region: 'band', reference_path: 'guide',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: { modes: [ 'rider' ] }, lateral_use: 'shared',
+          lateral_policy: { passing_side: 'left' },
+          speed_policy: { limit_mps: null } },
+      ],
+      movements: [
+        { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+          direction: 'forward' },
+      ],
+      mode_templates: [
+        {
+          id: 'rider',
+          body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+            radius_m: { min: 0.35, max: 0.35 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield', 'pass' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 6.0, max: 6.0 },
+            max_accel_mps2: { min: 1.2, max: 1.2 },
+            comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+            time_gap_s: { min: 1.0, max: 1.0 },
+            steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+            lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+            lateral_clearance_m: { min: 0.3, max: 0.3 },
+            compliance: { min: 1.0, max: 1.0 },
+          },
+          lateral: { target_clearance_m: 0.75, horizon_s: 4.0 },
+        },
+      ],
+      permissions: [],
+      maneuver_policy: {
+        commit: { min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 },
+      },
+      demand: [
+        { id: 'rider_inflow', mode: 'rider',
+          spawn: { rate: {
+            portal: 'entry',
+            rate_per_hour: 900.0,
+            interval_s: { start_s: 0.0, end_s: null },
+            choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+          } } },
+      ],
+    }
+    "#;
+
+    /// A fixed lateral target turns the step into a bounded steering step: the
+    /// world pose integrates from the commanded heading and speed, and the
+    /// route coordinates are projected back from that pose. The offset closes
+    /// continuously over many ticks and never snaps to the target in one.
+    #[test]
+    fn a_bounded_steering_request_integrates_in_world_and_reprojects_without_snapping() {
+        let source =
+            parse_scenario_source_v2(BOUNDED_STEERING_V2).expect("the document is version 2");
+        let scenario = CompiledScenario::compile_v2(source).expect("the scenario compiles");
+        let mut sim = Simulation::new(scenario, RunConfig::new(0)).expect("the simulation builds");
+
+        // Advance until the first rider has spawned with route state and a
+        // sampled bounded-steering envelope.
+        let mut rider = None;
+        for _ in 0..1200 {
+            sim.step();
+            if let Some(index) = (0..sim.agents.len())
+                .find(|&index| sim.agents.alive[index] && sim.agents.route_state[index].is_some())
+            {
+                rider = Some(index);
+                break;
+            }
+        }
+        let index = rider.expect("a rider arrives within 60 s");
+        let mut state = sim.agents.route_state[index].expect("the rider carries route state");
+        assert!(
+            state.bounded_steering.is_some(),
+            "the rider carries a bounded-steering envelope"
+        );
+        state.target_offset_m = Some(0.6);
+        sim.agents.route_state[index] = Some(state);
+
+        let dt = sim.config().step().as_secs();
+        let speed_limit = sim.agents.profile[index]
+            .expect("a rider profile")
+            .desired_speed_mps;
+        let direction = sim.agents.direction[index];
+        let mut previous_d = sim.agents.route_state[index].expect("route state").d_m;
+        let mut first_d = None;
+        for _ in 0..200 {
+            let before = sim.agents.position[index];
+            sim.step_agent(index, dt);
+
+            // The route coordinates are exactly the projection of the
+            // integrated world pose: world pose is the truth, projection is the
+            // drift check.
+            let state = sim.agents.route_state[index].expect("route state survives the step");
+            let geometry = sim.route_geometry(index).expect("the facility reference");
+            let coordinate = geometry.project(sim.agents.position[index]);
+            assert!((coordinate.s() - state.s_m).abs() < 1e-9);
+            assert!((coordinate.d() * direction - state.d_m).abs() < 1e-9);
+
+            // The offset advances toward the target continuously and never
+            // regresses or jumps further than the bounded step allows.
+            assert!(state.d_m >= previous_d - 1e-12, "offset regressed");
+            assert!(state.d_m - previous_d <= speed_limit * dt + 1e-9);
+            if first_d.is_none() {
+                first_d = Some(state.d_m);
+            }
+            previous_d = state.d_m;
+            assert!(sim.agents.position[index] != before, "the pose advanced");
+        }
+
+        assert!(
+            first_d.expect("at least one step") < 0.1,
+            "no one-tick lane-centre snap"
+        );
+        assert!(
+            previous_d > 0.3,
+            "the bounded request made continuous progress, at {previous_d} m"
         );
     }
 }

@@ -53,6 +53,7 @@ mod signal;
 mod sim;
 mod snapshot;
 mod stage;
+pub mod steering;
 mod swept;
 mod time;
 mod units;
@@ -87,6 +88,10 @@ pub use snapshot::{
     AgentSample, BodySegmentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail,
 };
 pub use stage::ManeuverState;
+pub use steering::{
+    BoundedSteering, LATERAL_APPROACH_S, LateralCorridor, MIN_SPEED_FOR_LATERAL_BOUND_MPS,
+    SteeringLimits, SteeringRequest, SteeringStep, bounded_steering_step,
+};
 pub use swept::{SweptBody, TOI_TIME_TOLERANCE, TimeOfImpact, band_entry, time_of_impact};
 pub use time::SimTime;
 pub use units::Seconds;

@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T02:02:52Z
+updated: 2026-09-14T02:25:47Z
 summary: Build continuous lateral motion, clearance prediction, and deterministic gap claims.
-next: [[TAS-089-integrate-bounded-single-body-steering]]
+next: [[TAS-090-predict-maneuver-corridors-and-clearance]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].

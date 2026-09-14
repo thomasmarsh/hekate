@@ -15,6 +15,7 @@ use crate::narrow::NarrowProfile;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
 use crate::profile::{PedestrianProfile, VehicleProfile};
 use crate::stage::ManeuverState;
+use crate::steering::BoundedSteering;
 
 /// Which mode of agent a slot holds.
 ///
@@ -101,6 +102,11 @@ pub(crate) struct RouteState {
     /// The mode's resolved feasible horizon in seconds, when its compiled policy
     /// declares one; `None` for a mode with no free lateral motion.
     pub(crate) horizon_s: Option<f64>,
+    /// The mode's compiled bounded-steering limits and usable corridor, present
+    /// exactly when the agent can steer laterally. `None` for a mode with no
+    /// free lateral motion, so no bounded steering request is produced and the
+    /// longitudinal command path is unchanged.
+    pub(crate) bounded_steering: Option<BoundedSteering>,
 }
 
 impl RouteState {
@@ -131,7 +137,18 @@ impl RouteState {
             predicted_min_clearance_m: None,
             target_clearance_m,
             horizon_s,
+            bounded_steering: None,
         }
+    }
+
+    /// Attach the mode's compiled bounded-steering envelope.
+    ///
+    /// A projection with no envelope keeps the Increment 1 longitudinal-only
+    /// behaviour, exactly as a projection with no lateral policy carries no
+    /// target clearance.
+    pub(crate) fn with_bounded_steering(mut self, bounded_steering: BoundedSteering) -> Self {
+        self.bounded_steering = Some(bounded_steering);
+        self
     }
 
     /// Reproject an integrated world pose back into the facility route frame.

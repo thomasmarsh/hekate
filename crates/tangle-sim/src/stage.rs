@@ -224,6 +224,21 @@ pub(crate) enum MotionCommand {
         /// Speed in metres per second after the per-step bound.
         speed_mps: f64,
     },
+    /// A bounded route-relative steering step for a wheeled agent that carries
+    /// route state.
+    ///
+    /// The heading and speed come from [`crate::steering::bounded_steering_step`],
+    /// so the per-step heading change obeys the mode's `heading_rate_max_rad_s`
+    /// and `lateral_accel_max_mps2` limits and the proposed world step stays
+    /// inside the usable corridor. The physical advance integrates this command
+    /// in world coordinates and projects the result back onto the route; it
+    /// never writes a target offset to `d` or to a world position.
+    RouteSteering {
+        /// Commanded world heading in radians.
+        heading_rad: f64,
+        /// Speed in metres per second used for the step.
+        speed_mps: f64,
+    },
 }
 
 /// Stage 1: relevant-world query.
