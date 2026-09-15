@@ -26,11 +26,14 @@ use hekate_cli::{
     RunMetricsRecorder, SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, WrongWayValues,
     canonical_run_captured, load_scenario_provenance, replay_run_directory, write_run_directory,
 };
-use hekate_model::{CompiledScenario, PermissionEffect, TacticKind, parse_scenario_source_v2};
+use hekate_model::{
+    CompiledScenario, FacilityId, MovementDirection, MovementId, NominalDirection,
+    PermissionEffect, TacticKind, parse_scenario_source_v2,
+};
 use hekate_sim::{
-    AgentId, AgentMode, Event, ManeuverEdge, ManeuverState, MetricMinimum, ModePair, MovementKey,
-    OperationValues, OvertakeObservation, PostEncroachment, RunConfig, Simulation, SnapshotDetail,
-    wrong_way::OpposingTraversalObservation,
+    AgentId, AgentMode, DespawnReason, Event, ManeuverEdge, ManeuverState, MetricMinimum, ModePair,
+    MovementKey, OperationValues, OvertakeObservation, PostEncroachment, RunConfig, Simulation,
+    SnapshotDetail, WrongWayReason, wrong_way::OpposingTraversalObservation,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -2514,4 +2517,985 @@ fn an_interval_open_at_the_run_end_is_counted() {
     // The version decision of this slice: the families land under the existing
     // metric definition v3, so the definition declares no new revision.
     assert_eq!(METRIC_DEFINITION_VERSION, 3);
+}
+
+// ---------------------------------------------------------------------------
+// The checked-in contextual wrong-way fixture (TAS-131)
+// ---------------------------------------------------------------------------
+//
+// `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` is Increment 2's
+// `CC-OPPOSE` reference: four isolated corridors author the permitted,
+// prohibited-but-connected, disconnected, and occupied opposing cases the
+// contract's *Contextual wrong-way traversal* section fixes. This suite loads
+// the checked-in file through the CLI's own scenario loader and drives one entry
+// per case.
+//
+// The entry is recorded through `Simulation::request_wrong_way_entry`, the seam
+// a tactical leaf supplies, exactly as the landed TAS-124 fixture's tests do: a
+// checked-in scenario authors no request and the kernel owns the decision, so
+// the test supplies the request and every input the decision reads — the
+// compiled wrong-way policy, the compiled topology, the authored `permissions[]`
+// — stays the fixture's. Every profile entry is authored constant (`min == max`)
+// with zero compliance under full urgency, so every draw selects the opposing
+// option and no case depends on a particular stream value.
+
+/// The checked-in Increment 2 wrong-way fixture, relative to the repo root.
+const WRONG_WAY_FIXTURE: &str = "scenarios/phase2/inc2/narrow_wrong_way_v2.json5";
+
+/// Load the checked-in wrong-way fixture through the CLI's own loader, so the
+/// suite reads the file the CLI reads rather than a re-typed copy.
+fn wrong_way_fixture() -> CompiledScenario {
+    load(WRONG_WAY_FIXTURE).0
+}
+
+/// The dense index of the fixture's guide path named `name`.
+fn guide_path(scenario: &CompiledScenario, name: &str) -> usize {
+    scenario
+        .paths()
+        .iter()
+        .position(|path| path.name() == name)
+        .unwrap_or_else(|| panic!("the fixture authors a guide path named '{name}'"))
+}
+
+/// The dense index of the fixture's facility named `name`.
+fn fixture_facility(scenario: &CompiledScenario, name: &str) -> usize {
+    scenario
+        .facilities()
+        .iter()
+        .position(|facility| facility.name() == name)
+        .unwrap_or_else(|| panic!("the fixture authors a facility named '{name}'"))
+}
+
+/// The compiled movement the fixture authors as `name`.
+fn fixture_movement(scenario: &CompiledScenario, name: &str) -> MovementId {
+    scenario
+        .movements()
+        .iter()
+        .find(|movement| movement.name() == name)
+        .unwrap_or_else(|| panic!("the fixture authors a movement named '{name}'"))
+        .id()
+}
+
+/// Whether an agent is still live in the run.
+fn live(sim: &Simulation, agent: AgentId) -> bool {
+    sim.snapshot(SnapshotDetail::Full)
+        .agents()
+        .iter()
+        .any(|sample| sample.id == agent)
+}
+
+/// One interval boundary of one agent, as the test reads the run's records.
+#[derive(Debug, Clone, PartialEq)]
+struct WrongWayBoundary {
+    tick: u64,
+    entering: bool,
+    facility: usize,
+    movement: Option<usize>,
+    direction: MovementDirection,
+    nominal_direction: NominalDirection,
+    perceived_rule: Option<PermissionEffect>,
+    reason: WrongWayReason,
+    violating: bool,
+}
+
+/// One agent's records across a hand-driven run: its interval boundaries, the
+/// ticks of its facility handoffs, and the tick and reason of its despawn.
+#[derive(Debug, Default)]
+struct SubjectRecords {
+    boundaries: Vec<WrongWayBoundary>,
+    handoffs: Vec<u64>,
+    despawned: Option<(u64, DespawnReason)>,
+}
+
+/// Read one agent's wrong-way boundaries, facility handoffs, and despawn from
+/// the run's own records.
+///
+/// A step advances one tick and the run reports every step in order with the
+/// tick the last one completed, so the step at index `i` completed tick
+/// `final_tick - (steps.len() - 1 - i)`; the interval assertions check that
+/// mapping against the tracker's own tick records rather than assuming it.
+fn subject_records(run: &WrongWayRun, agent: AgentId) -> SubjectRecords {
+    let mut records = SubjectRecords::default();
+    for (index, events) in run.steps.iter().enumerate() {
+        let tick = run.final_tick - (run.steps.len() - 1 - index) as u64;
+        for event in events {
+            match event {
+                Event::OpposingTraversal {
+                    agent: subject,
+                    facility,
+                    movement,
+                    direction,
+                    nominal_direction,
+                    perceived_rule,
+                    reason,
+                    violating,
+                    entering,
+                } if *subject == agent => records.boundaries.push(WrongWayBoundary {
+                    tick,
+                    entering: *entering,
+                    facility: facility.index(),
+                    movement: movement.map(MovementId::index),
+                    direction: *direction,
+                    nominal_direction: *nominal_direction,
+                    perceived_rule: *perceived_rule,
+                    reason: *reason,
+                    violating: *violating,
+                }),
+                Event::FacilityTransition { agent: subject, .. } if *subject == agent => {
+                    records.handoffs.push(tick);
+                }
+                Event::Despawned {
+                    agent: subject,
+                    reason,
+                    ..
+                } if *subject == agent => records.despawned = Some((tick, *reason)),
+                _ => {}
+            }
+        }
+    }
+    records
+}
+
+/// The tracker's closed intervals for one agent, as `(facility, start tick, end
+/// tick)` tuples.
+fn interval_ticks(run: &WrongWayRun, agent: AgentId) -> Vec<(usize, u64, u64)> {
+    run.sim
+        .opposing_traversal_tracker()
+        .intervals()
+        .iter()
+        .filter(|interval| interval.agent == agent)
+        .map(|interval| {
+            (
+                interval.facility.index(),
+                interval.start_tick,
+                interval.end_tick,
+            )
+        })
+        .collect()
+}
+
+/// The total seconds the tracker's closed intervals cover.
+fn interval_duration(run: &WrongWayRun) -> f64 {
+    run.sim
+        .opposing_traversal_tracker()
+        .intervals()
+        .iter()
+        .map(OpposingTraversalObservation::duration_s)
+        .sum()
+}
+
+/// Step until two adjacent bodies ride `path` with the leading one inside
+/// `lead_window` and their bumper gap inside `gap_window`, returning the leading
+/// body (the one the test turns) and the body it turns into.
+///
+/// The fixture's occupied corridor carries both its demand sources, so the pair
+/// is the deterministic first adjacent pair the run places inside the windows.
+fn adjacent_pair_on(
+    sim: &mut Simulation,
+    path: usize,
+    lead_window: std::ops::RangeInclusive<f64>,
+    gap_window: std::ops::RangeInclusive<f64>,
+) -> (BodyPlacement, BodyPlacement) {
+    for _ in 0..8000 {
+        sim.step();
+        let bodies = live_bodies(sim, path);
+        for pair in bodies.windows(2) {
+            let (occupancy, lead) = (pair[0], pair[1]);
+            let gap_m = bumper_gap_m(lead, occupancy);
+            if lead_window.contains(&lead.s_m) && gap_window.contains(&gap_m) {
+                return (lead, occupancy);
+            }
+        }
+    }
+    panic!(
+        "the fixture places an adjacent pair on path {path} with the leader in \
+         {lead_window:?} and a bumper gap in {gap_window:?}"
+    );
+}
+
+/// The fixture's occupied corridor driven through one entry: the pair the
+/// leading rider turned into, the run's records, and the least values the
+/// ordinary machinery bounded the encounter by.
+struct OccupiedCorridorRun {
+    run: WrongWayRun,
+    subject: AgentId,
+    occupancy: AgentId,
+    boundaries: Vec<WrongWayBoundary>,
+    /// Least bumper-to-bumper gap between the subject and the body it turned
+    /// into, in metres, over the driven steps.
+    min_gap_m: f64,
+    /// Least clearance the ordinary collision scan reported for the pair, in
+    /// metres.
+    min_clearance_m: f64,
+    /// Contacting collisions the scan recorded for the pair.
+    contacts: u64,
+    /// Entering near misses the scan recorded for the pair.
+    near_misses: u64,
+    /// Whether the subject ever left its corridor or ran a lateral maneuver,
+    /// which is what a bypass of the occupied corridor would be.
+    bypassed: bool,
+}
+
+/// Drive the fixture's occupied corridor: find an adjacent pair whose leading
+/// body turns into its follower inside the fixture's stopping distance, record
+/// the entry, and run long enough for the encounter and for the interval the
+/// encounter leaves open at the run end.
+fn drive_occupied_corridor() -> OccupiedCorridorRun {
+    let scenario = wrong_way_fixture();
+    let corridor = guide_path(&scenario, "guide_d");
+    let mut sim = Simulation::new(scenario, RunConfig::new(0)).expect("the fixture builds");
+    let (subject, occupancy) = adjacent_pair_on(&mut sim, corridor, 25.0..=48.0, 8.0..=18.0);
+    assert!(
+        sim.request_wrong_way_entry(subject.id),
+        "the occupied corridor's leading rider can request the entry"
+    );
+
+    let mut min_gap_m = f64::INFINITY;
+    let mut bypassed = false;
+    let run = drive_wrong_way_run(sim, 300, |sim, _| {
+        let snapshot = sim.snapshot(SnapshotDetail::Full);
+        let placed = |agent: AgentId| {
+            snapshot
+                .agents()
+                .iter()
+                .find(|sample| sample.id == agent)
+                .and_then(|sample| sample.motion.as_ref())
+        };
+        let (Some(subject_now), Some(occupancy_now)) = (placed(subject.id), placed(occupancy.id))
+        else {
+            return Drive::Continue;
+        };
+        min_gap_m = min_gap_m.min(bumper_gap_m(
+            BodyPlacement {
+                id: subject.id,
+                s_m: subject_now.path_distance_m,
+                body_length_m: subject_now.body_length_m,
+            },
+            BodyPlacement {
+                id: occupancy.id,
+                s_m: occupancy_now.path_distance_m,
+                body_length_m: occupancy_now.body_length_m,
+            },
+        ));
+        bypassed |= subject_now.path.index() != corridor
+            || subject_now.route_state.map(|state| state.maneuver_state)
+                != Some(ManeuverState::Following);
+        Drive::Continue
+    });
+
+    let mut contacts = 0;
+    let mut near_misses = 0;
+    let mut min_clearance_m = f64::INFINITY;
+    for events in &run.steps {
+        for event in events {
+            let clearance_m = match event {
+                Event::Collision {
+                    agent,
+                    other,
+                    contacting: true,
+                    clearance_m,
+                } if contacts_pair(*agent, *other, subject.id, occupancy.id) => {
+                    contacts += 1;
+                    *clearance_m
+                }
+                Event::NearMiss {
+                    agent,
+                    other,
+                    entering: true,
+                    clearance_m,
+                } if contacts_pair(*agent, *other, subject.id, occupancy.id) => {
+                    near_misses += 1;
+                    *clearance_m
+                }
+                _ => continue,
+            };
+            min_clearance_m = min_clearance_m.min(clearance_m);
+        }
+    }
+
+    let boundaries = subject_records(&run, subject.id).boundaries;
+    OccupiedCorridorRun {
+        run,
+        subject: subject.id,
+        occupancy: occupancy.id,
+        boundaries,
+        min_gap_m,
+        min_clearance_m,
+        contacts,
+        near_misses,
+        bypassed,
+    }
+}
+
+/// Whether an event's agent pair is the subject and the body it turned into.
+fn contacts_pair(first: AgentId, second: AgentId, subject: AgentId, occupancy: AgentId) -> bool {
+    (first == subject && second == occupancy) || (first == occupancy && second == subject)
+}
+
+/// The fixture's permitted corridor: the decision's opposing option is the
+/// authored `permit` statement, so the interval is recorded under its rule and
+/// never as a violation, its boundaries are the entry and the object boundary,
+/// and the turned rider completes its route onto the connected continuance.
+#[test]
+fn the_checked_in_fixture_records_its_permitted_opposing_choice() {
+    let scenario = wrong_way_fixture();
+    let corridor = guide_path(&scenario, "guide_a");
+    let facility = fixture_facility(&scenario, "a");
+    let continuance_facility = fixture_facility(&scenario, "a_left");
+    let movement = fixture_movement(&scenario, "through_a");
+
+    let mut subject: Option<AgentId> = None;
+    let run = drive_wrong_way_run(
+        Simulation::new(scenario, RunConfig::new(0)).expect("the fixture builds"),
+        6000,
+        |sim, _| {
+            if subject.is_none() {
+                if let [body] = live_bodies(sim, corridor)[..]
+                    && (5.0..=20.0).contains(&body.s_m)
+                {
+                    assert!(
+                        sim.request_wrong_way_entry(body.id),
+                        "the permitted corridor's rider can request the entry"
+                    );
+                    subject = Some(body.id);
+                }
+                return Drive::Continue;
+            }
+            match subject.is_some_and(|subject| !live(sim, subject)) {
+                true => Drive::Stop,
+                false => Drive::Continue,
+            }
+        },
+    );
+    let subject = subject.expect("the permitted corridor admits a lone rider");
+    let records = subject_records(&run, subject);
+
+    // Two intervals, each with an open and a close boundary: one per object the
+    // turned rider traverses against its rule direction.
+    assert_eq!(
+        records.boundaries.len(),
+        4,
+        "the turned rider opens and closes one interval per object: {:?}",
+        records.boundaries
+    );
+    let open = &records.boundaries[0];
+    let close = &records.boundaries[1];
+    let reopened = &records.boundaries[2];
+    let closed_at_exit = &records.boundaries[3];
+    let (despawned, despawn_reason) = records
+        .despawned
+        .expect("the turned rider completes its route and despawns");
+
+    // The interval opens on the corridor's own reference, closes on the handoff
+    // onto the continuance, and closes once more at the route exit.
+    assert!(open.entering && !close.entering && reopened.entering && !closed_at_exit.entering);
+    assert_eq!(open.facility, facility);
+    assert_eq!(close.facility, facility, "the same object it opened on");
+    assert_eq!(
+        close.tick, records.handoffs[0],
+        "the connector handoff is the close boundary"
+    );
+    assert_eq!(
+        reopened.facility, continuance_facility,
+        "the destination object opens its own interval"
+    );
+    assert_eq!(reopened.tick, close.tick, "the handoff is both boundaries");
+    assert_eq!(closed_at_exit.facility, continuance_facility);
+    assert_eq!(
+        closed_at_exit.tick, despawned,
+        "the route exit is the final close boundary"
+    );
+    assert_eq!(despawn_reason, DespawnReason::ExitedPath);
+    assert!(open.tick < close.tick, "the interval spans whole steps");
+
+    // The decision's own facts: the perceived rule, the reason code, the
+    // affected movement, and the traversal's legality.
+    assert_eq!(open.perceived_rule, Some(PermissionEffect::Permit));
+    assert_eq!(open.reason, WrongWayReason::LegalPermission);
+    assert!(
+        !open.violating,
+        "a permitted opposing traversal is never a violation"
+    );
+    assert_eq!(open.direction, MovementDirection::Reverse);
+    assert_eq!(open.nominal_direction, NominalDirection::Forward);
+    assert_eq!(
+        open.movement,
+        Some(movement.index()),
+        "the affected movement is the one the rider entered on"
+    );
+    assert_eq!(
+        close.reason, open.reason,
+        "the record is the one it latched"
+    );
+    assert_eq!(close.violating, open.violating);
+
+    // The tracker's intervals are the boundaries' own endpoints, which is where
+    // the step-to-tick mapping is checked rather than assumed.
+    assert_eq!(
+        interval_ticks(&run, subject),
+        vec![
+            (facility, open.tick, close.tick),
+            (continuance_facility, reopened.tick, closed_at_exit.tick),
+        ]
+    );
+
+    // The six wrong-way families, each with its explicit status: two countable
+    // intervals, a reported distance and duration, and the no-observation status
+    // of a run whose subject met no one.
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, 2);
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.status,
+        MetricStatus::Reported
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.value,
+        Some(interval_duration(&run))
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_distance_m.status,
+        MetricStatus::Reported
+    );
+    let distance_m = wrong_way
+        .run
+        .wrong_way_distance_m
+        .value
+        .expect("the recorded intervals carry a distance");
+    assert!(
+        distance_m > 0.0,
+        "the turned rider travels its opposing traversals: {distance_m} m"
+    );
+    assert!(
+        distance_m <= 6.0 * interval_duration(&run),
+        "no whole step exceeds the fixture's 6 m/s: {distance_m} m"
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_exposure_agent_s.status,
+        MetricStatus::NotObserved
+    );
+    assert_eq!(wrong_way.run.wrong_way_exposure_agent_s.value, None);
+    assert_count(&wrong_way.run.wrong_way_encounters, 0);
+    assert_count(&wrong_way.run.wrong_way_conflicts, 0);
+
+    // The rule, facility, participant-pair, and mode-pair buckets name the same
+    // two intervals, and the countable families of the inert buckets stay zero.
+    // The decision's `permit` binds the corridor it was decided on; the
+    // continuance carries no statement, so its own interval is bucketed under
+    // `none` exactly as the compiled policy leaves it.
+    assert_bucket_counts(
+        &wrong_way.by_rule,
+        &BTreeMap::from([("permit".to_owned(), 1), ("none".to_owned(), 1)]),
+    );
+    assert_bucket_counts(
+        &wrong_way.by_facility,
+        &BTreeMap::from([
+            ("facility:a".to_owned(), 1),
+            ("facility:a_left".to_owned(), 1),
+        ]),
+    );
+    assert_bucket_counts(
+        &wrong_way.by_pair,
+        &BTreeMap::from([(format!("agent:{}", subject.get()), 2)]),
+    );
+    assert_count(
+        &wrong_way.by_mode_pair["vehicle_vehicle"].wrong_way_intervals,
+        2,
+    );
+    assert_eq!(
+        wrong_way.by_facility["facility:b"]
+            .wrong_way_intervals
+            .status,
+        MetricStatus::Reported
+    );
+    assert_count(&wrong_way.by_facility["facility:b"].wrong_way_intervals, 0);
+    assert!(bucket_intervals(&wrong_way.by_movement) <= 2);
+
+    // The version decision of this slice: the fixture's families land under the
+    // existing metric definition v3, so the definition declares no new revision.
+    assert_eq!(METRIC_DEFINITION_VERSION, 3);
+}
+
+/// The fixture's second corridor authors the same connected topology with no
+/// statement binding its modes, so the opposing option is the default
+/// prohibition: the decision records `noncompliant_choice`, the interval is a
+/// violation, and it is bucketed under `none` rather than under a rule.
+#[test]
+fn the_checked_in_fixture_records_its_prohibited_but_connected_choice() {
+    let scenario = wrong_way_fixture();
+    let corridor = guide_path(&scenario, "guide_b");
+    let facility = fixture_facility(&scenario, "b");
+    let continuance_facility = fixture_facility(&scenario, "b_left");
+    let movement = fixture_movement(&scenario, "through_b");
+
+    let mut subject: Option<AgentId> = None;
+    let run = drive_wrong_way_run(
+        Simulation::new(scenario, RunConfig::new(0)).expect("the fixture builds"),
+        6000,
+        |sim, _| {
+            if subject.is_none() {
+                if let [body] = live_bodies(sim, corridor)[..]
+                    && (5.0..=20.0).contains(&body.s_m)
+                {
+                    assert!(
+                        sim.request_wrong_way_entry(body.id),
+                        "the disconnected corridor is the only one that refuses the entry"
+                    );
+                    subject = Some(body.id);
+                }
+                return Drive::Continue;
+            }
+            match subject.is_some_and(|subject| !live(sim, subject)) {
+                true => Drive::Stop,
+                false => Drive::Continue,
+            }
+        },
+    );
+    let subject = subject.expect("the prohibited corridor admits a lone rider");
+    let records = subject_records(&run, subject);
+
+    assert_eq!(
+        records.boundaries.len(),
+        4,
+        "the connected corridor records one interval per object: {:?}",
+        records.boundaries
+    );
+    let open = &records.boundaries[0];
+    let close = &records.boundaries[1];
+    assert!(open.entering);
+    assert_eq!(open.facility, facility);
+    assert_eq!(records.boundaries[2].facility, continuance_facility);
+    assert_eq!(
+        close.tick, records.handoffs[0],
+        "the handoff onto the continuance closes the interval"
+    );
+    let (despawned, despawn_reason) = records
+        .despawned
+        .expect("the turned rider completes its route and despawns");
+    assert_eq!(
+        records.boundaries[3].tick, despawned,
+        "the route exit is the final close boundary"
+    );
+    assert_eq!(despawn_reason, DespawnReason::ExitedPath);
+    assert_eq!(
+        interval_ticks(&run, subject),
+        vec![
+            (facility, open.tick, close.tick),
+            (
+                continuance_facility,
+                records.boundaries[2].tick,
+                records.boundaries[3].tick
+            ),
+        ]
+    );
+
+    // The decision reaches the draw because the traversal is physically
+    // possible, and legality alone rejects it: no statement binds the pair, so
+    // the reason is the noncompliant choice and the traversal is a violation.
+    assert_eq!(
+        open.perceived_rule, None,
+        "no statement binds the prohibited corridor's pair"
+    );
+    assert_eq!(open.reason, WrongWayReason::NoncompliantChoice);
+    assert!(open.violating);
+    assert_eq!(open.direction, MovementDirection::Reverse);
+    assert_eq!(open.nominal_direction, NominalDirection::Forward);
+    assert_eq!(open.movement, Some(movement.index()));
+
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, 2);
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.status,
+        MetricStatus::Reported
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.value,
+        Some(interval_duration(&run))
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_distance_m.status,
+        MetricStatus::Reported
+    );
+    assert!(
+        wrong_way
+            .run
+            .wrong_way_distance_m
+            .value
+            .expect("the recorded intervals carry a distance")
+            > 0.0
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_exposure_agent_s.status,
+        MetricStatus::NotObserved
+    );
+    assert_count(&wrong_way.run.wrong_way_encounters, 0);
+    assert_count(&wrong_way.run.wrong_way_conflicts, 0);
+    assert_bucket_counts(
+        &wrong_way.by_rule,
+        &BTreeMap::from([("none".to_owned(), 2)]),
+    );
+    assert_bucket_counts(
+        &wrong_way.by_facility,
+        &BTreeMap::from([
+            ("facility:b".to_owned(), 1),
+            ("facility:b_left".to_owned(), 1),
+        ]),
+    );
+    assert_bucket_counts(
+        &wrong_way.by_pair,
+        &BTreeMap::from([(format!("agent:{}", subject.get()), 2)]),
+    );
+}
+
+/// The fixture's third corridor authors no connector along its reverse
+/// direction, so the opposing traversal is physically impossible: the entry is
+/// refused before any draw, the rider emits no boundary and no metric
+/// contribution, and it completes its nominal route.
+#[test]
+fn the_checked_in_fixture_refuses_its_disconnected_entry() {
+    let scenario = wrong_way_fixture();
+    let corridor = guide_path(&scenario, "guide_c");
+    let facility = fixture_facility(&scenario, "c");
+
+    let mut subject: Option<AgentId> = None;
+    let run = drive_wrong_way_run(
+        Simulation::new(scenario, RunConfig::new(0)).expect("the fixture builds"),
+        6000,
+        |sim, _| {
+            if subject.is_none() {
+                if let [body] = live_bodies(sim, corridor)[..]
+                    && (5.0..=20.0).contains(&body.s_m)
+                {
+                    assert!(
+                        !sim.request_wrong_way_entry(body.id),
+                        "a corridor with no connected opposing traversal records no request"
+                    );
+                    subject = Some(body.id);
+                }
+                return Drive::Continue;
+            }
+            match subject.is_some_and(|subject| !live(sim, subject)) {
+                true => Drive::Stop,
+                false => Drive::Continue,
+            }
+        },
+    );
+    let subject = subject.expect("the disconnected corridor admits a lone rider");
+    let records = subject_records(&run, subject);
+
+    // The refusal is total: no boundary, no handoff onto a continuance, and the
+    // ordinary spawn-to-despawn lifecycle of a rider that never turned.
+    assert!(
+        records.boundaries.is_empty(),
+        "a refused entry emits no boundary: {:?}",
+        records.boundaries
+    );
+    assert!(
+        records.handoffs.is_empty(),
+        "the refused rider never enters the opposing traversal that continues onto a connector"
+    );
+    let (_, despawn_reason) = records
+        .despawned
+        .expect("the refused rider completes its nominal route and despawns");
+    assert_eq!(despawn_reason, DespawnReason::ExitedPath);
+
+    // Every family is explicit: the countable families are observed zeros and
+    // the value families report the run's no-observation status, because this
+    // fixture declares the policy and the capability that could host a
+    // traversal in the twin corridors.
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, 0);
+    for value in [
+        &wrong_way.run.wrong_way_distance_m,
+        &wrong_way.run.wrong_way_duration_s,
+        &wrong_way.run.wrong_way_exposure_agent_s,
+    ] {
+        assert_eq!(value.status, MetricStatus::NotObserved);
+        assert_eq!(value.value, None);
+    }
+    assert_count(&wrong_way.run.wrong_way_encounters, 0);
+    assert_count(&wrong_way.run.wrong_way_conflicts, 0);
+
+    // The disconnected corridor is a bucket that could host an opposing
+    // traversal and recorded none, and the refused rider names no rule and no
+    // participant pair.
+    let disconnected = format!("facility:{}", scenario_facility_name(&run, facility));
+    assert_eq!(
+        wrong_way.by_facility[&disconnected]
+            .wrong_way_distance_m
+            .status,
+        MetricStatus::NotObserved
+    );
+    assert_count(&wrong_way.by_facility[&disconnected].wrong_way_intervals, 0);
+    assert!(
+        wrong_way.by_facility.keys().len() >= 7,
+        "every compiled facility is a bucket: {:?}",
+        wrong_way.by_facility.keys().collect::<Vec<_>>()
+    );
+    assert!(wrong_way.by_rule.is_empty(), "no interval names a rule");
+    assert!(
+        wrong_way.by_pair.is_empty(),
+        "no interval names a participant pair"
+    );
+    assert!(
+        wrong_way.by_movement.is_empty(),
+        "no interval names a movement"
+    );
+}
+
+/// The facility key one compiled facility is bucketed under, read through the
+/// scenario the run ended with.
+fn scenario_facility_name(run: &WrongWayRun, facility: usize) -> String {
+    run.sim
+        .scenario()
+        .facility(FacilityId::from_index(facility))
+        .expect("the facility is compiled")
+        .name()
+        .to_owned()
+}
+
+/// The fixture's fourth corridor is occupied: a leading rider turns into a body
+/// travelling the rule direction, and the ordinary leader constraint, collision
+/// scan, and anti-overlap cap bound the encounter with no bypass and no overlap.
+/// The encounter is the run's conflict and its encounter, and the interval it
+/// leaves open closes at the run end.
+///
+/// At the pinned seed the sources place the pair at step 119 with the leading
+/// rider at 25.2 m and a 9.8 m bumper gap behind it, which is inside the 18 m
+/// two 6 m/s bodies need to stop under the authored 2 m/s² braking, so the
+/// head-on meeting is unavoidable. The scan reports one entering near miss and
+/// one contact, the least bumper gap between the pair stays at zero within
+/// floating-point noise, and the turned rider never leaves its corridor or runs
+/// a lateral maneuver.
+#[test]
+fn the_checked_in_fixture_bounds_its_occupied_opposing_corridor() {
+    let occupied = drive_occupied_corridor();
+    let run = &occupied.run;
+    let subject = occupied.subject;
+    let occupancy = occupied.occupancy;
+    let facility = fixture_facility(run.sim.scenario(), "d");
+    let movement = fixture_movement(run.sim.scenario(), "through_d");
+
+    // One boundary: the entry opens an interval that the run end closes, because
+    // the blocked pair never leaves the corridor inside the driven horizon.
+    assert_eq!(
+        occupied.boundaries.len(),
+        1,
+        "the turned rider's interval is still open at the run end: {:?}",
+        occupied.boundaries
+    );
+    let open = &occupied.boundaries[0];
+    assert!(open.entering);
+    assert_eq!(open.facility, facility);
+    assert_eq!(open.perceived_rule, Some(PermissionEffect::Permit));
+    assert_eq!(open.reason, WrongWayReason::LegalPermission);
+    assert!(!open.violating);
+    assert_eq!(open.direction, MovementDirection::Reverse);
+    assert_eq!(open.nominal_direction, NominalDirection::Forward);
+    assert_eq!(open.movement, Some(movement.index()));
+
+    let intervals = run.sim.opposing_traversal_tracker().intervals();
+    assert_eq!(intervals.len(), 1, "one interval, the subject's own");
+    let interval = &intervals[0];
+    assert_eq!(interval.agent, subject);
+    assert_eq!(interval.facility.index(), facility);
+    assert_eq!(
+        interval.start_tick, open.tick,
+        "the interval opens on the boundary's own tick"
+    );
+    assert_eq!(
+        interval.end_tick, run.final_tick,
+        "the run-end closure's close time is the run's final simulation time"
+    );
+    assert!(interval.duration_s() > 0.0);
+    assert!(
+        !interval_ticks(run, subject).is_empty(),
+        "the tracker holds the subject's closed interval"
+    );
+
+    // The encounter's ordinary visibility: the collision scan reports the pair
+    // in its near-miss band and then in its contact band, and holds them apart
+    // rather than overlapping them. T-H1's minimum separation is the scan's own
+    // signed clearance, which never falls below -1e-9 m.
+    assert!(
+        occupied.near_misses >= 1,
+        "the collision scan reports the pair inside its near-miss band"
+    );
+    assert!(
+        occupied.contacts >= 1,
+        "the collision scan reports the pair inside its contact band"
+    );
+    assert!(
+        occupied.min_clearance_m >= -1e-9,
+        "T-H1: the pair's least reported clearance is {} m",
+        occupied.min_clearance_m
+    );
+    assert!(
+        occupied.min_gap_m >= -1e-9,
+        "T-H2: the anti-overlap cap holds the bodies apart, least gap {} m",
+        occupied.min_gap_m
+    );
+    // T-H2's bypass count is zero in the only way the fixture could produce one:
+    // the turned rider never leaves its corridor and never runs a lateral
+    // maneuver around the occupied corridor.
+    assert!(
+        !occupied.bypassed,
+        "the turned rider never bypasses the occupied corridor"
+    );
+
+    // The six wrong-way families with their explicit statuses: one interval, a
+    // reported distance and duration, and the reported exposure, encounter, and
+    // conflict the head-on meeting produces.
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, 1);
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.status,
+        MetricStatus::Reported
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.value,
+        Some(interval.duration_s())
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_distance_m.status,
+        MetricStatus::Reported
+    );
+    assert!(
+        wrong_way
+            .run
+            .wrong_way_distance_m
+            .value
+            .expect("the recorded interval carries a distance")
+            > 0.0
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_exposure_agent_s.status,
+        MetricStatus::Reported
+    );
+    assert!(
+        wrong_way
+            .run
+            .wrong_way_exposure_agent_s
+            .value
+            .expect("the co-present pair carries exposure")
+            > 0.0
+    );
+    assert!(wrong_way.run.wrong_way_encounters.value.expect("a count") >= 1.0);
+    assert!(
+        wrong_way.run.wrong_way_conflicts.value.expect("a count")
+            == occupied.contacts as f64 + occupied.near_misses as f64
+    );
+
+    // The meeting is bucketed under the participant pair, the corridor, and the
+    // permit statement the subject acted under.
+    let pair_key = format!(
+        "agent:{}|agent:{}",
+        subject.get().min(occupancy.get()),
+        subject.get().max(occupancy.get())
+    );
+    assert!(
+        wrong_way.by_pair.contains_key(&pair_key),
+        "the encounter is keyed by the participant pair: {:?}",
+        wrong_way.by_pair.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        wrong_way.by_pair[&pair_key]
+            .wrong_way_conflicts
+            .value
+            .expect("a count")
+            >= 1.0
+    );
+    assert_count(&wrong_way.by_rule["permit"].wrong_way_intervals, 1);
+    assert_count(&wrong_way.by_facility["facility:d"].wrong_way_intervals, 1);
+    assert_count(
+        &wrong_way.by_mode_pair["vehicle_vehicle"].wrong_way_intervals,
+        1,
+    );
+}
+
+/// The occupied corridor's encounter is a pure function of the fixture and the
+/// seed: an identical run turns the same pair at the same step, bounds it the
+/// same way, and closes the same interval at the run end.
+#[test]
+fn the_checked_in_fixture_replays_its_occupied_corridor_identically() {
+    let first = drive_occupied_corridor();
+    let second = drive_occupied_corridor();
+
+    assert_eq!(first.subject, second.subject);
+    assert_eq!(first.occupancy, second.occupancy);
+    assert_eq!(first.boundaries, second.boundaries);
+    assert_eq!(
+        interval_ticks(&first.run, first.subject),
+        interval_ticks(&second.run, second.subject)
+    );
+    assert_eq!(first.min_gap_m, second.min_gap_m);
+    assert_eq!(first.min_clearance_m, second.min_clearance_m);
+    assert_eq!(first.contacts, second.contacts);
+    assert_eq!(first.near_misses, second.near_misses);
+}
+
+/// The checked-in fixture reports its wrong-way block through the real CLI run
+/// directory, with the explicit statuses its declarations imply: the fixture
+/// authors the policy and the capability, so a run that requests no entry
+/// reports no observation rather than an inapplicable status, and every compiled
+/// facility is a bucket.
+#[test]
+fn the_checked_in_fixture_reports_its_wrong_way_block_through_the_cli() {
+    let scratch = Scratch::new("wrong-way-fixture");
+    let output = Command::new(CLI)
+        .arg("run")
+        .arg(repo_path(WRONG_WAY_FIXTURE))
+        .args(["--seed", "0"])
+        .args(["--run-dir", "run"])
+        .current_dir(&scratch.dir)
+        .output()
+        .expect("hekate-cli runs");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifact = read_artifact(&scratch.path("run"));
+
+    assert_count(&artifact.wrong_way.run.wrong_way_intervals, 0);
+    assert_eq!(
+        artifact.wrong_way.run.wrong_way_distance_m.status,
+        MetricStatus::NotObserved
+    );
+    assert_eq!(
+        artifact.wrong_way.run.wrong_way_duration_s.status,
+        MetricStatus::NotObserved
+    );
+    assert_eq!(
+        artifact.wrong_way.run.wrong_way_exposure_agent_s.status,
+        MetricStatus::NotObserved
+    );
+    assert_count(&artifact.wrong_way.run.wrong_way_encounters, 0);
+    assert_count(&artifact.wrong_way.run.wrong_way_conflicts, 0);
+
+    let facilities: Vec<&str> = artifact
+        .wrong_way
+        .by_facility
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        facilities,
+        vec![
+            "facility:a",
+            "facility:a_left",
+            "facility:b",
+            "facility:b_left",
+            "facility:c",
+            "facility:d",
+            "facility:d_left",
+        ],
+        "every compiled facility is a bucket in the artifact"
+    );
+    assert!(artifact.wrong_way.by_rule.is_empty());
+    assert!(artifact.wrong_way.by_pair.is_empty());
+    assert_eq!(
+        artifact.metric_definition_version,
+        METRIC_DEFINITION_VERSION
+    );
 }
