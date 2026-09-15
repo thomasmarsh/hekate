@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P3
-updated: 2026-09-15T14:54:32Z
+updated: 2026-09-15T15:53:57Z
 summary: Cut the Rust dev-loop and workspace test wall time
-next: "[[tas-10p2xa87xh5vfetphxmcgp67y7-prune-non-load-bearing-workspace-test-work]]"
+next: "[[tas-0wfqm53dckb26t1exycssqa2s2-prune-the-25-gb-target-directory-and-document-a]]"
 ---
 
 Area [[IDX-001-hekate]].
