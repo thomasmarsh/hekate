@@ -1,9 +1,8 @@
 ---
 context_rev: 1
-status: active
-updated: 2026-09-15T14:00:22Z
+status: resolved
+updated: 2026-09-15T14:07:54Z
 summary: Stop the Kitty TUI periodic full-image delete from blanking the scene between frames
-next: Run the five-gate validation and resolve.
 ---
 
 Area [[IDX-001-hekate]].
@@ -59,3 +58,49 @@ Closure edit: `apps/hekate-tui/src/lib.rs` drops the `MAX_RAW_BYTES` re-export
 Left out: `apps/hekate-tui/src/main.rs`'s redundant `Clear(ClearType::All)` on
 Resize is untouched in this slice because it cannot be proven not to affect the
 cell backend here.
+
+## Gate validation (HEAD bd5a906, 2026-09-15T14:07:54Z)
+
+TOON, from the repository root:
+
+```
+gates[5]{gate,exit,wall_s,result}:
+  "cargo fmt --all --check",0,2,passed
+  "cargo clippy --workspace --all-targets --all-features -- -D warnings",0,5,passed
+  "cargo test --workspace --all-features",0,354,passed
+  "./scripts/check-dependency-direction.sh",0,0,passed
+  "tangle check",0,1,passed
+```
+
+Full suite: 97 result lines, 1056 passed, 0 failed, 3 ignored (no `FAILED`,
+no `error[`). Focused: `kitty::tests` 16 passed, 0 failed.
+
+## Clause disposition
+
+- **Two ids per present** — met. `IMAGE_IDS = [1, 2]`; `next_image_id` returns
+the id that is not live, and `present` appends `push_delete(previous_id)` after
+the transmit/place sequences in the same `out` buffer, before the single
+`write_all`/`flush`. Ids alternate `1, 2, 1, …`.
+- **No quota-driven periodic delete** — met. `MAX_RAW_BYTES`, the budget block
+in `present`, and the `lib.rs` re-export are gone; the only remaining
+references are this node's own prose. `raw_bytes_sent` is accounting only.
+- **Teardown deletes every id that could still be live** — met. The in-frame
+delete keeps at most one id live, so `resize_terminal` and `shutdown` delete
+that one id via `delete_live_image`; `resize_deletes_the_old_placement` and
+`shutdown_deletes_the_live_image` pass. The TUI calls `shutdown` on exit
+(`apps/hekate-tui/src/main.rs`).
+- **Byte-order tests** — met.
+`a_present_places_the_new_id_before_deleting_the_previous_one` and
+`no_present_deletes_a_live_id_without_first_placing_its_replacement` assert the
+placement index precedes the previous id's delete index, and that the first
+frame deletes nothing; both pass in the workspace run.
+- **Focused fmt/clippy/test/dependency-direction** — met, and strengthened to
+workspace scope in the table above.
+- **Kitty golden unchanged** — met. `git diff a7c31c3 bd5a906 -- tests/golden`
+is empty and `tests/golden/renderer/kitty_present.bin` still holds (the golden
+is a single first-frame present, which still uses id 1).
+
+Residual risk: the ordering guarantee is proven by byte-stream assertions only;
+no live Kitty terminal was exercised, so terminal-side coalescing is inferred
+from the protocol. `main.rs`'s redundant `Clear(ClearType::All)` on Resize
+remains out of scope.
