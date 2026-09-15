@@ -1,0 +1,91 @@
+// TAS-080: the checked-in narrow longitudinal fixture.
+//
+// One narrow mode (`bicycle`) rides a compiled facility (`bikeway`) whose
+// reference path is the same guide path the demand's movement follows, so the
+// route a narrow agent selects is the compiled facility route. The movement
+// carries an authored stop line and is governed by a fixed-time signal, so a
+// narrow agent accelerates in free flow, follows the narrow leader ahead in a
+// queue, holds the stop line, yields to the red head, and completes the
+// facility route once the head turns green.
+//
+// The narrow template uses constant (min == max) ranges so the sampled body and
+// limits are fixed, which lets the test assert exact command envelopes and body
+// bounds without depending on the seed. This fixture authors one narrow mode,
+// its facility, and its demand; it is not the `narrow_mode_templates_v2` guard
+// fixture (`crates/hekate-model/tests/fixtures/`) and shares nothing with it.
+{
+  schema_version: 2,
+  id: 'narrow_longitudinal_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'guide', points: [ { x: -40.0, y: 0.0 }, { x: 40.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -50.0, y: -10.0 }, { x: 50.0, y: -10.0 },
+      { x: 50.0, y: 10.0 }, { x: -50.0, y: 10.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'bikeway_band', points: [
+      { x: -40.0, y: -1.5 }, { x: 40.0, y: -1.5 },
+      { x: 40.0, y: 1.5 }, { x: -40.0, y: 1.5 },
+    ] },
+  ],
+  facilities: [
+    { id: 'bikeway', region: 'bikeway_band', reference_path: 'guide',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'bicycle' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+      stop_line_m: 34.0, direction: 'forward' },
+  ],
+  rules: [
+    { id: 'r_through', movement: 'through', kind: 'signal', signal: 'main' },
+  ],
+  signals: [
+    { id: 'main',
+      heads: [ { id: 'head', movement: 'through' } ],
+      phases: [
+        { duration_s: 12.0, states: [ { head: 'head', color: 'red' } ] },
+        { duration_s: 120.0, states: [ { head: 'head', color: 'green' } ] },
+      ] },
+  ],
+  mode_templates: [
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 6.0, max: 6.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [],
+  demand: [
+    { id: 'bicycle_inflow', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'entry',
+        rate_per_hour: 1800.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+  ],
+}

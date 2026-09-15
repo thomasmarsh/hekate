@@ -1,13 +1,12 @@
-# Tangle
+# Hekate
 
 > [!NOTE]
 > This project is one that I've had in mind for decades. Little did I
 > know that there is a project called SUMO which already does what I want.
 > Nonetheless, I think it's worthwhile to explore this project for my own
 > edification. I am implementing this with autonomous agents and as a test
-> bed for [Braintree](https://github.com/thomasmarsh/braintree) to manage
-> the work. (Note to self: "tangle" is probably a better name for
-> braintree. Oh well.)
+> bed for [Tangle](https://github.com/thomasmarsh/tangle), the work-ledger
+> tool that manages the project graph.
 > 
 > See Sumo at [https://eclipse.dev/sumo/](https://eclipse.dev/sumo/)
 

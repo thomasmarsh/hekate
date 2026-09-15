@@ -1,13 +1,13 @@
-# Tangle: Vision for an Intersection Simulation Laboratory
+# Hekate: Vision for an Intersection Simulation Laboratory
 
 **Status:** Working vision, version 0.1  
 **Date:** September 11, 2026
 
 ## Purpose
 
-Tangle will be a high-fidelity, microscopic simulator for studying how people and vehicles move through intersections. It will represent individual road users—including drivers, pedestrians, cyclists, scooter riders, buses, and trucks—as physical, perceiving, decision-making agents. It will support ordinary behavior, mistakes, and deliberate rule violations without assuming that every participant behaves identically or perfectly.
+Hekate will be a high-fidelity, microscopic simulator for studying how people and vehicles move through intersections. It will represent individual road users—including drivers, pedestrians, cyclists, scooter riders, buses, and trucks—as physical, perceiving, decision-making agents. It will support ordinary behavior, mistakes, and deliberate rule violations without assuming that every participant behaves identically or perfectly.
 
-The long-term purpose is not merely to animate traffic. Tangle should become an experimental laboratory in which we can:
+The long-term purpose is not merely to animate traffic. Hekate should become an experimental laboratory in which we can:
 
 - reproduce the operating and safety characteristics of a real intersection;
 - construct intersection geometries and control schemes that do not fit a fixed catalog;
@@ -19,19 +19,19 @@ The near-term purpose is smaller: establish a trustworthy simulation kernel and 
 
 ## Product thesis
 
-An intersection is not a label such as “four-way stop,” “signalized junction,” or “roundabout.” It is a set of traversable spaces, legal and possible movements, control devices, visibility conditions, and interactions among agents. Tangle will model those elements directly. Familiar intersection types should emerge as configurations of general primitives, and unfamiliar intersection types should be equally representable.
+An intersection is not a label such as “four-way stop,” “signalized junction,” or “roundabout.” It is a set of traversable spaces, legal and possible movements, control devices, visibility conditions, and interactions among agents. Hekate will model those elements directly. Familiar intersection types should emerge as configurations of general primitives, and unfamiliar intersection types should be equally representable.
 
 Likewise, safety should not be a scripted property of a design. It should emerge from geometry, controls, demand, physical dynamics, perception, and a calibrated population of heterogeneous road users. A red-light runner, a pedestrian crossing against a signal, or a scooter rider salmoning should use the same world and interaction rules as everyone else; these should be behaviors an agent can choose, not special animation cases.
 
 ## What success looks like
 
-Tangle succeeds when a user can describe an intersection and a population, run many reproducible trials, and make statements such as:
+Hekate succeeds when a user can describe an intersection and a population, run many reproducible trials, and make statements such as:
 
 > Under this demand distribution, design B reduces severe crossing conflicts for pedestrians without moving unacceptable delay onto buses.
 
 That statement is more important than photorealistic rendering. Visualization matters for debugging, explanation, and discovery, but the core product is a credible experiment with inspectable assumptions and statistically meaningful outputs.
 
-Longer term, a calibrated Tangle model of a real intersection should reproduce multiple classes of observation within explicit uncertainty bounds:
+Longer term, a calibrated Hekate model of a real intersection should reproduce multiple classes of observation within explicit uncertainty bounds:
 
 - traffic counts, turning movements, speeds, travel times, queue lengths, and throughput;
 - yielding, gap acceptance, signal compliance, route choice, and other observable behaviors;
@@ -48,13 +48,13 @@ The scenario format will describe geometry, connectivity, permissions, prioritie
 
 ### 2. Continuous truth, configurable computational fidelity
 
-Tangle should store geometry, position, orientation, velocity, and physical envelopes in continuous world coordinates using SI units. A grid may accelerate neighborhood queries and broad-phase collision detection, but it should not normally force agents to occupy discrete cells or snap their paths to a lattice.
+Hekate should store geometry, position, orientation, velocity, and physical envelopes in continuous world coordinates using SI units. A grid may accelerate neighborhood queries and broad-phase collision detection, but it should not normally force agents to occupy discrete cells or snap their paths to a lattice.
 
 This preserves a path to fine lateral behavior, irregular geometry, close passing, articulated vehicles, and mixed traffic. It also avoids making a convenient early grid into the ontology of the world.
 
 ### 3. Fidelity is a set of explicit budgets
 
-A single “quantization level” would hide several different sources of error. Tangle should expose named fidelity presets, but each preset should resolve to independent controls:
+A single “quantization level” would hide several different sources of error. Hekate should expose named fidelity presets, but each preset should resolve to independent controls:
 
 - **physics step:** how often motion is integrated;
 - **decision cadence:** how often an agent perceives and revises its action;
@@ -103,7 +103,7 @@ Randomness should use separate named streams for demand, profile sampling, perce
 
 ### 7. Evidence is layered and uncertainty is visible
 
-Tangle will not infer a universal crash rate from a national average and declare itself realistic. Observed crash data are sparse, location-dependent, and affected by reporting and exposure. National sources such as NHTSA’s CRSS and FARS are useful for population-level crash types and outcomes, while local trajectories, traffic counts, signal timing, and crash records are needed to reproduce a particular site.[^crss][^fars]
+Hekate will not infer a universal crash rate from a national average and declare itself realistic. Observed crash data are sparse, location-dependent, and affected by reporting and exposure. National sources such as NHTSA’s CRSS and FARS are useful for population-level crash types and outcomes, while local trajectories, traffic counts, signal timing, and crash records are needed to reproduce a particular site.[^crss][^fars]
 
 The calibration hierarchy will be:
 
@@ -154,15 +154,15 @@ Vehicle-following can begin with a documented microscopic model such as IDM, whi
 
 Modes share capabilities without sharing every behavior. A bus is a large road vehicle with passenger-stop behavior; a bicycle is a narrow vehicle that may use a lane, bike facility, or shared space; a person may walk, wait, ride, transfer, and walk again. The design should favor composable capabilities—body, dynamics, perception, controller, occupancy, passenger carrier, route follower—over a rigid class tree.
 
-This also gives Tangle a path to model a trip as one traveler occupying different vehicles or modes without pretending that a bus and its passengers are one behavioral entity.
+This also gives Hekate a path to model a trip as one traveler occupying different vehicles or modes without pretending that a bus and its passengers are one behavioral entity.
 
 ## Safety model and outputs
 
 ### Collisions are necessary but insufficient
 
-At fine fidelity, Tangle will detect contact between oriented physical envelopes and record the involved agents, contact geometry, relative velocity, and estimated change in velocity. The first implementation need not be a crash reconstruction or injury biomechanics model. It must be honest about that limitation.
+At fine fidelity, Hekate will detect contact between oriented physical envelopes and record the involved agents, contact geometry, relative velocity, and estimated change in velocity. The first implementation need not be a crash reconstruction or injury biomechanics model. It must be honest about that limitation.
 
-Because serious crashes are rare, ordinary Monte Carlo runs may contain too few collisions to compare designs reliably. Tangle will also compute surrogate safety measures from trajectories, including:
+Because serious crashes are rare, ordinary Monte Carlo runs may contain too few collisions to compare designs reliably. Hekate will also compute surrogate safety measures from trajectories, including:
 
 - time to collision (TTC);
 - post-encroachment time (PET);
@@ -170,7 +170,7 @@ Because serious crashes are rare, ordinary Monte Carlo runs may contain too few 
 - conflict angle and interaction type; and
 - relative speed and estimated delta-v when contact occurs.
 
-FHWA’s Surrogate Safety Assessment Model uses trajectory-derived conflict counts and indicators including TTC, PET, and delta-v, while emphasizing comparative analysis across alternatives.[^ssam] Tangle should initially make the same restrained claim: surrogate measures can rank and diagnose scenarios, but do not automatically equal predicted crash counts.
+FHWA’s Surrogate Safety Assessment Model uses trajectory-derived conflict counts and indicators including TTC, PET, and delta-v, while emphasizing comparative analysis across alternatives.[^ssam] Hekate should initially make the same restrained claim: surrogate measures can rank and diagnose scenarios, but do not automatically equal predicted crash counts.
 
 ### From conflicts to expected crashes
 
@@ -181,7 +181,7 @@ Absolute safety prediction is a later, separately validated capability. It may c
 - Safety Performance Functions and Crash Modification Factors; and
 - empirical-Bayes estimates using site history where available.
 
-The Highway Safety Manual framework relates traffic volume and roadway characteristics to expected crash frequency and supports explicit comparison of design alternatives.[^hsm] Tangle should interoperate with that statistical layer rather than claiming that agent simulation alone solves rare-event crash prediction.
+The Highway Safety Manual framework relates traffic volume and roadway characteristics to expected crash frequency and supports explicit comparison of design alternatives.[^hsm] Hekate should interoperate with that statistical layer rather than claiming that agent simulation alone solves rare-event crash prediction.
 
 Rare-event acceleration or importance sampling may later make dangerous interactions computationally observable. Such runs must retain likelihood weights and must never be mixed with ordinary Monte Carlo results as raw counts.
 
@@ -203,7 +203,7 @@ Metrics should remain disaggregated by mode and movement so that an apparently e
 
 ## Scenario and experiment model
 
-A Tangle study will distinguish four artifacts:
+A Hekate study will distinguish four artifacts:
 
 1. **Scenario:** geometry, navigation, controls, rules, demand distributions, environment, and population distributions.
 2. **Run manifest:** exact scenario version, model versions, fidelity settings, seed, duration, and warm-up.
@@ -216,7 +216,7 @@ Experiments should support factorial sweeps over geometry, controls, demand, beh
 
 ## Scope boundaries
 
-Tangle is initially:
+Hekate is initially:
 
 - microscopic and agent-based;
 - centered on one intersection and its approaches;
@@ -224,7 +224,7 @@ Tangle is initially:
 - designed for repeated batch experiments; and
 - intended for research and comparative decision support.
 
-Tangle is not initially:
+Hekate is not initially:
 
 - a citywide route-assignment platform;
 - a photorealistic driving game;
@@ -238,7 +238,7 @@ The architecture should allow multiple blocks and richer streetscape behavior la
 
 ## First useful release
 
-The first release should answer one question well: **Can Tangle compare two small, freely described intersection configurations using reproducible microscopic motion and interpretable operational and conflict metrics?**
+The first release should answer one question well: **Can Hekate compare two small, freely described intersection configurations using reproducible microscopic motion and interpretable operational and conflict metrics?**
 
 ### Included
 
@@ -331,7 +331,7 @@ Different combinations of reaction time, desired gap, perception error, and risk
 
 ### Fidelity and performance
 
-Fine steps and complex envelopes can consume most computation without improving the decision being made. Tangle needs benchmarked fidelity presets and convergence evidence. The user should be able to spend precision specifically on lateral interaction or collision detection rather than globally increasing all work.
+Fine steps and complex envelopes can consume most computation without improving the decision being made. Hekate needs benchmarked fidelity presets and convergence evidence. The user should be able to spend precision specifically on lateral interaction or collision detection rather than globally increasing all work.
 
 ### General geometry versus usable authoring
 
@@ -360,11 +360,11 @@ This vision uses existing methods as starting points, not as unquestioned truth.
 - trajectory-based surrogate safety analysis for frequent, comparable signals; and
 - HSM-style statistical methods and observed crash datasets for cautious absolute safety claims.
 
-As Tangle grows, every behavioral model and default parameter distribution should have a short model card: intended population and context, data source, calibration procedure, validation evidence, uncertainty, known failure modes, and incompatible fidelity settings.
+As Hekate grows, every behavioral model and default parameter distribution should have a short model card: intended population and context, data source, calibration procedure, validation evidence, uncertainty, known failure modes, and incompatible fidelity settings.
 
 ## Enduring vision
 
-Tangle should let us pull apart the knot of geometry, control, demand, human variation, and chance that makes an intersection safe or dangerous. Its value will come from combining freedom of design with discipline of evidence: any layout can be represented, any assumption can be inspected, and no result is more certain than its calibration allows.
+Hekate should let us pull apart the knot of geometry, control, demand, human variation, and chance that makes an intersection safe or dangerous. Its value will come from combining freedom of design with discipline of evidence: any layout can be represented, any assumption can be inspected, and no result is more certain than its calibration allows.
 
 If that foundation is sound, richer modes, streetscapes, networks, and automated design search become extensions of the same system rather than rewrites of it.
 

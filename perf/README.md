@@ -13,7 +13,7 @@ nothing in this directory replaces or regenerates it.
 
 ## Files
 
-- `release-bench.json` — `apps/tangle-cli/tests/release_benchmark.rs` over six
+- `release-bench.json` — `apps/hekate-cli/tests/release_benchmark.rs` over six
   scenarios, one simulated hour each: simulated seconds per wall second, agent
   steps per second, canonical trace bytes per simulated hour, and immutable
   run-directory bytes per simulated hour, with every timed pass, the machine,
@@ -99,9 +99,9 @@ scripts/measure-tick-phases.sh
 The pass has no switch: `InteractionMetrics::begin_tick` and `observe` are
 crate-private and `Simulation::advance_one_tick` always calls them, so the split
 is an A/B ablation. The script unpacks `git archive HEAD` into a temporary
-directory, writes a throwaway `crates/tangle-sim/examples/tick_phase_bench.rs`
+directory, writes a throwaway `crates/hekate-sim/examples/tick_phase_bench.rs`
 driver there, builds the kernel there, then removes the two `self.metrics.*`
-calls from **that copy's** `crates/tangle-sim/src/sim.rs` and rebuilds. It times
+calls from **that copy's** `crates/hekate-sim/src/sim.rs` and rebuilds. It times
 the identical bare step loop in both builds, five passes per window, and reports
 the minimum and the median. **No file of this repository is modified**: the
 script fails if the repository's `crates/` is dirty before or after, and the two
@@ -135,7 +135,7 @@ pass; the artifact also records the ones derived from the minimum):
   live-agent count barely moves (8.05 in the short window, 9.65 in the long one).
   `AgentStore::len` is the length of its alive-flag vector and a slot is never
   reclaimed — a spawn takes `AgentId::from_index(self.alive.len())`
-  (`crates/tangle-sim/src/agent.rs:130`) — so the per-tick loops over
+  (`crates/hekate-sim/src/agent.rs:130`) — so the per-tick loops over
   `0..agents.len()` cost more as a run accumulates agents: the kernel's agent
   loop in `sim.rs`, and the `begin_tick`/`index_bodies` loops in `metrics.rs`,
   `safety.rs`, and `index.rs`. `mixed_interaction_v1` admits 938 agents over its
@@ -161,13 +161,13 @@ Of 5 741 tick samples in that capture:
 
 | frame (subtree) | samples | share of tick |
 |---|---|---|
-| `tangle_sim::metrics::InteractionMetrics::observe` | 2 786 | 48.5 % |
-| `tangle_sim::safety::SafetyMonitor::observe` | 849 | 14.8 % |
+| `hekate_sim::metrics::InteractionMetrics::observe` | 2 786 | 48.5 % |
+| `hekate_sim::safety::SafetyMonitor::observe` | 849 | 14.8 % |
 | `Simulation::step` self (inlined and non-frame work) | 1 199 | 20.9 % |
 | `Simulation::step_vehicle` | 293 | 5.1 % |
 | `SafetyMonitor::begin_tick` | 171 | 3.0 % |
 | `InteractionMetrics::begin_tick` | 158 | 2.8 % |
-| **interaction-metrics pass (`tangle_sim::metrics::*`)** | **2 944** | **51.3 %** |
+| **interaction-metrics pass (`hekate_sim::metrics::*`)** | **2 944** | **51.3 %** |
 | rest of the tick | 2 797 | 48.7 % |
 
 The profile's 51.3 % pass share and the ablation's 53.8 % at the same 300 000-tick
@@ -177,7 +177,7 @@ attributes inlined callee time to the enclosing frame, so the 20.9 % against
 `Simulation::step` self includes work belonging to the loops it inlines.
 
 The largest single leaf frame is the broad-phase candidate query,
-`tangle_sim::index::BroadPhase::candidates_in_aabb`, at 33 % of the tick
+`hekate_sim::index::BroadPhase::candidates_in_aabb`, at 33 % of the tick
 (1 913 samples) — and inside the metrics pass the candidate query
 (`SweptBroadPhase::candidate_pairs`) is 1 898 of the pass's 2 944 samples (64 %)
 against 458 (16 %) for the TTC bisection (`time_to_collision`). Both within-pass
@@ -194,12 +194,12 @@ both the metrics pass and the safety monitor run every tick.
 
 The swept cast is on the tick path exactly once, as the safety monitor's per-tick
 contact confirmation in `safety::scan_pair`
-(`crates/tangle-sim/src/safety.rs:281`, reached every tick from
+(`crates/hekate-sim/src/safety.rs:281`, reached every tick from
 `SafetyMonitor::observe`), gated behind the near-miss Lipschitz certificate at
 `safety.rs:273`. No behavioral consumer — control, admission, signalling,
 yielding — depends on a swept cast, so no tick dynamics depend on a sweep, and
 `time_of_impact` is otherwise called only from fixtures and tests
-(`crates/tangle-sim/tests/swept_queries.rs`, `tests/safety_events.rs`). The
+(`crates/hekate-sim/tests/swept_queries.rs`, `tests/safety_events.rs`). The
 metrics pass uses its own TTC bisection over the same convex-clearance helpers
 (`clearance_rate`, `first_fraction`); it does not call `time_of_impact`. This
 slice wires nothing further in.

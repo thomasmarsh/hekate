@@ -22,9 +22,9 @@ target.
   The simulator still runs the Phase 1 modes; version 2 does not change
   compiled behavior in this increment.
 - Existing seams this contract pins:
-  `crates/tangle-model/src/source.rs:17` (`SUPPORTED_SCHEMA_VERSION`),
-  `crates/tangle-model/src/validate.rs:367` (`check_schema_version`, the version
-  check that emits `E_SCHEMA_VERSION`), `crates/tangle-model/src/compiled.rs:2440`
+  `crates/hekate-model/src/source.rs:17` (`SUPPORTED_SCHEMA_VERSION`),
+  `crates/hekate-model/src/validate.rs:367` (`check_schema_version`, the version
+  check that emits `E_SCHEMA_VERSION`), `crates/hekate-model/src/compiled.rs:2440`
   (compiled `schema_version`), and `schemas/scenario-source.schema.json`.
 
 ## Version negotiation
@@ -36,7 +36,7 @@ target.
   reaches validation or compilation; it is never compiled by the version-2
   reader directly.
 - Any version other than `1` or `2` is rejected with the stable diagnostic
-  `E_SCHEMA_VERSION` (`crates/tangle-model/src/validate.rs:205`). The reader
+  `E_SCHEMA_VERSION` (`crates/hekate-model/src/validate.rs:205`). The reader
   never guesses a version.
 - A missing version-2 field is never silently defaulted. Every version-2 field
   is either required or explicitly optional in the schema; an absent required
@@ -241,7 +241,7 @@ these bytes, and the normalized hash below is the SHA-256 of exactly these bytes
 ## Migration version
 
 The version-1 → version-2 transform is migration version `1`, exposed as
-`MIGRATION_VERSION` in `tangle-model`. A source that is already version 2 is
+`MIGRATION_VERSION` in `hekate-model`. A source that is already version 2 is
 recorded as migration version `0` (no migration applied). Every transform that
 changes the mapping increments the number, so a run can be attributed to the
 exact transform that produced it.
@@ -249,9 +249,9 @@ exact transform that produced it.
 ## Provenance
 
 Four fields identify the inputs of a run. They live on the shared
-`ScenarioProvenance` struct (`apps/tangle-cli/src/baseline.rs:88`), which is
+`ScenarioProvenance` struct (`apps/hekate-cli/src/baseline.rs:88`), which is
 embedded as `scenario` in both the run manifest
-(`RunManifest` at `apps/tangle-cli/src/run_dir.rs:301`) and the checked-in
+(`RunManifest` at `apps/hekate-cli/src/run_dir.rs:301`) and the checked-in
 baseline manifest (`baselines/phase1/baseline.json`).
 
 | Field | Meaning |
@@ -338,13 +338,13 @@ string for diagnostics.
   `narrow_isolated_curve_v2`; tolerances `T-RT`, `T-DIM`, `T-ENV`, `T-SPD`), and
   each narrow mode carries a model card per `docs/model-card-template.md`.
 - Existing seams this section pins:
-  `crates/tangle-model/src/source.rs:613` (`ModeBodySource`), `:663`
+  `crates/hekate-model/src/source.rs:613` (`ModeBodySource`), `:663`
   (`FacilityKind`), `:788` (`AccessSource`), `:919` (`ModeTemplateSource`),
-  `:1019` (`ScenarioSourceV2`); `crates/tangle-model/src/components.rs:285`
+  `:1019` (`ScenarioSourceV2`); `crates/hekate-model/src/components.rs:285`
   (`NominalDirection`), `:299` (`SpeedPolicy`), `:325` (`AgentAccess`), `:93`
   (`AgentBody::Capsule`), `:163` (`AgentFamily::WheeledCapsule`), `:618`
-  (`AgentBehaviorProfile`); `crates/tangle-model/src/validate.rs:1604`
-  (`required_profile_params`); and `crates/tangle-model/src/mode_template.rs:297`
+  (`AgentBehaviorProfile`); `crates/hekate-model/src/validate.rs:1604`
+  (`required_profile_params`); and `crates/hekate-model/src/mode_template.rs:297`
   (`compiled_access`).
 
 ### Increment 1 source shapes
@@ -537,13 +537,13 @@ facility that has a reference path. A compiled facility carries its dense
 `FacilityId` and its authored id string, the compiled region polygon, and:
 
 - `length` — the reference arc length in metres
-  (`CompiledPath::length`, `crates/tangle-model/src/compiled.rs:565`).
+  (`CompiledPath::length`, `crates/hekate-model/src/compiled.rs:565`).
 - `position_at(s)` — the world point at arc length `s`, clamped to
   `[0, length]` (`CompiledPath::position_at`,
-  `crates/tangle-model/src/compiled.rs:570`).
+  `crates/hekate-model/src/compiled.rs:570`).
 - `heading_at(s)` — the tangent heading `theta(s)` in radians,
   counter-clockwise from the world x axis (`CompiledPath::heading_at`,
-  `crates/tangle-model/src/compiled.rs:585`).
+  `crates/hekate-model/src/compiled.rs:585`).
 - `tangent_at(s)` — the unit tangent `(cos theta(s), sin theta(s))`.
 - `normal_at(s)` — the unit left normal: the tangent rotated `+90` degrees,
   `(-sin theta(s), cos theta(s))`.
@@ -695,39 +695,39 @@ deferred with their later incumbents named.
   Increment 2 edits these files: `TacticKind`, `PermissionKind`,
   `PermissionEffect`, `PermissionSource`, `FacilitySource`, `LateralUse`,
   `FacilityDirection`, `AccessSource`, and `ScenarioSourceV2` in
-  `crates/tangle-model/src/source.rs`; `TacticalCapability`,
+  `crates/hekate-model/src/source.rs`; `TacticalCapability`,
   `TacticalCapabilities`, `AgentAccess`, `NominalDirection`, and
-  `AgentBehaviorProfile` in `crates/tangle-model/src/components.rs`;
+  `AgentBehaviorProfile` in `crates/hekate-model/src/components.rs`;
   `CompiledFacility`, `CompiledFacilityConnector`, `FacilityTraversal`,
   `UsableLateralInterval`, and `CompiledReferencePath` in
-  `crates/tangle-model/src/compiled.rs`; `required_profile_params`,
+  `crates/hekate-model/src/compiled.rs`; `required_profile_params`,
   `mode_turning_limit_curvature`, `validate_permissions`, and
-  `CONNECTOR_CONTINUITY_TOLERANCE_M` in `crates/tangle-model/src/validate.rs`;
+  `CONNECTOR_CONTINUITY_TOLERANCE_M` in `crates/hekate-model/src/validate.rs`;
   `compiled_tactic` and `compiled_profile` in
-  `crates/tangle-model/src/mode_template.rs`; the version-1 → version-2
-  transform in `crates/tangle-model/src/migrate.rs`; `Commitment`, `Tactic`,
+  `crates/hekate-model/src/mode_template.rs`; the version-1 → version-2
+  transform in `crates/hekate-model/src/migrate.rs`; `Commitment`, `Tactic`,
   `TacticReason`, `TacticTarget`, `AbortCondition`, and `MotionCommand` in
-  `crates/tangle-sim/src/stage.rs`; `Simulation`, `Simulation::step`,
+  `crates/hekate-sim/src/stage.rs`; `Simulation`, `Simulation::step`,
   `StepOutput::events`, and `Simulation::snapshot` in
-  `crates/tangle-sim/src/sim.rs`; `ControllerModels` and `VehicleController` in
-  `crates/tangle-sim/src/controller.rs`; `IdmController` and `Constraint` in
-  `crates/tangle-sim/src/control.rs`; `AgentId` and `AgentStore` in
-  `crates/tangle-sim/src/agent.rs`; `VehicleProfile` in
-  `crates/tangle-sim/src/profile.rs` and `NarrowProfile` in
-  `crates/tangle-sim/src/narrow.rs`; `EVENT_VERSION`, `Event`, `EventKind`,
-  `ViolationKind`, and `Event::order_key` in `crates/tangle-sim/src/event.rs`;
+  `crates/hekate-sim/src/sim.rs`; `ControllerModels` and `VehicleController` in
+  `crates/hekate-sim/src/controller.rs`; `IdmController` and `Constraint` in
+  `crates/hekate-sim/src/control.rs`; `AgentId` and `AgentStore` in
+  `crates/hekate-sim/src/agent.rs`; `VehicleProfile` in
+  `crates/hekate-sim/src/profile.rs` and `NarrowProfile` in
+  `crates/hekate-sim/src/narrow.rs`; `EVENT_VERSION`, `Event`, `EventKind`,
+  `ViolationKind`, and `Event::order_key` in `crates/hekate-sim/src/event.rs`;
   `InteractionMetrics` and `tick_minimum_clearance_m` in
-  `crates/tangle-sim/src/metrics.rs`; `body_clearance_m` and `CONTACT_EPSILON_M`
-  in `crates/tangle-sim/src/query.rs`; `time_of_impact` and `band_entry` in
-  `crates/tangle-sim/src/swept.rs`; the named streams and `uniform01` in
-  `crates/tangle-sim/src/rng.rs`; `RunConfig` and `DEFAULT_STEP` in
-  `crates/tangle-sim/src/config.rs`; `SCENE_FORMAT_VERSION` in
-  `crates/tangle-present/src/scene.rs`; `METRIC_DEFINITION_VERSION` and
-  `EVENT_FAMILY_LABELS` in `apps/tangle-cli/src/run_metrics.rs`;
-  `TRAJECTORY_FORMAT_VERSION` in `apps/tangle-cli/src/trajectories.rs`;
+  `crates/hekate-sim/src/metrics.rs`; `body_clearance_m` and `CONTACT_EPSILON_M`
+  in `crates/hekate-sim/src/query.rs`; `time_of_impact` and `band_entry` in
+  `crates/hekate-sim/src/swept.rs`; the named streams and `uniform01` in
+  `crates/hekate-sim/src/rng.rs`; `RunConfig` and `DEFAULT_STEP` in
+  `crates/hekate-sim/src/config.rs`; `SCENE_FORMAT_VERSION` in
+  `crates/hekate-present/src/scene.rs`; `METRIC_DEFINITION_VERSION` and
+  `EVENT_FAMILY_LABELS` in `apps/hekate-cli/src/run_metrics.rs`;
+  `TRAJECTORY_FORMAT_VERSION` in `apps/hekate-cli/src/trajectories.rs`;
   `RUN_MANIFEST_VERSION`, `RunManifest`, and `fidelity` in
-  `apps/tangle-cli/src/run_dir.rs`; the trace header in
-  `apps/tangle-cli/src/trace.rs`; and replay in `apps/tangle-cli/src/replay.rs`.
+  `apps/hekate-cli/src/run_dir.rs`; the trace header in
+  `apps/hekate-cli/src/trace.rs`; and replay in `apps/hekate-cli/src/replay.rs`.
 - Deliberately out of scope here, as `PHASE_2_PLAN.md` requires: a navigation
   mesh, a detailed visibility-error model, sidewalk-specific behaviour, a
   balance/lean/fall model, a mode-specific crate, and any new schema version or
@@ -1260,7 +1260,7 @@ The plan's state machine is fixed here as five states, one active maneuver per
 agent, and an edge-triggered record for every transition. Increment 1's
 `Commitment` record carries `preparing` and `committed`; Increment 2 adds the
 other three states to the same tactical record in
-`crates/tangle-sim/src/stage.rs`, and no state is spelled differently anywhere
+`crates/hekate-sim/src/stage.rs`, and no state is spelled differently anywhere
 else.
 
 | state | meaning |
@@ -1506,11 +1506,11 @@ records the new value together with the versioned rationale.
 
 | surface | constant and location | bump rule | implemented by | consumers that must observe it |
 | --- | --- | --- | --- | --- |
-| event union | `EVENT_VERSION`, `crates/tangle-sim/src/event.rs` | one bump for the four new variants; no existing variant's fields or meaning change | [[TAS-100-version-the-maneuver-event-and-trace-surface]] | run manifest, canonical trace header, JSONL replay, summaries, inspectors, and the affected Phase 1 goldens, which change only with the versioned rationale |
-| trajectory and snapshot columns | `TRAJECTORY_FORMAT_VERSION`, `apps/tangle-cli/src/trajectories.rs` | one bump for the whole additive column union, landed by the first leaf that changes the artifact's columns; the later leaf adds its columns under that same version | [[TAS-088-add-route-relative-lateral-agent-state]] lands it; [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]] adds rule-state columns under it | trajectory artifact, replay, aggregate, compare, and convergence readers |
-| scene format | `SCENE_FORMAT_VERSION`, `crates/tangle-present/src/scene.rs` | one bump for the additive overlay primitives and inspector text | [[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]] | Bevy and terminal backends, shared-scene tests, and the affected scene goldens |
-| metric definition | `METRIC_DEFINITION_VERSION`, `apps/tangle-cli/src/run_metrics.rs` | one bump for the additive metric union (the families above and their dimensions) | [[TAS-101-measure-close-passes-with-exact-clearance-evidence]] lands it; [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]] adds its families under it | run summary, metrics artifact, aggregation, comparison, convergence, and experiment reports; `DEF-004` v1 and `DEF-005` v2 stay authoritative for the artifacts already labelled with them |
-| run manifest shape | `RUN_MANIFEST_VERSION`, `apps/tangle-cli/src/run_dir.rs` | the provenance block is unchanged and no new definition version is introduced; the manifest records the resolved lateral-decision cadence and prediction horizon beside the step and fidelity label, and its own shape version is bumped once for that addition by the first leaf that lands the recorded values | [[TAS-088-add-route-relative-lateral-agent-state]] in the planned order | manifest readers and run-directory goldens |
+| event union | `EVENT_VERSION`, `crates/hekate-sim/src/event.rs` | one bump for the four new variants; no existing variant's fields or meaning change | [[TAS-100-version-the-maneuver-event-and-trace-surface]] | run manifest, canonical trace header, JSONL replay, summaries, inspectors, and the affected Phase 1 goldens, which change only with the versioned rationale |
+| trajectory and snapshot columns | `TRAJECTORY_FORMAT_VERSION`, `apps/hekate-cli/src/trajectories.rs` | one bump for the whole additive column union, landed by the first leaf that changes the artifact's columns; the later leaf adds its columns under that same version | [[TAS-088-add-route-relative-lateral-agent-state]] lands it; [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]] adds rule-state columns under it | trajectory artifact, replay, aggregate, compare, and convergence readers |
+| scene format | `SCENE_FORMAT_VERSION`, `crates/hekate-present/src/scene.rs` | one bump for the additive overlay primitives and inspector text | [[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]] | Bevy and terminal backends, shared-scene tests, and the affected scene goldens |
+| metric definition | `METRIC_DEFINITION_VERSION`, `apps/hekate-cli/src/run_metrics.rs` | one bump for the additive metric union (the families above and their dimensions) | [[TAS-101-measure-close-passes-with-exact-clearance-evidence]] lands it; [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]] adds its families under it | run summary, metrics artifact, aggregation, comparison, convergence, and experiment reports; `DEF-004` v1 and `DEF-005` v2 stay authoritative for the artifacts already labelled with them |
+| run manifest shape | `RUN_MANIFEST_VERSION`, `apps/hekate-cli/src/run_dir.rs` | the provenance block is unchanged and no new definition version is introduced; the manifest records the resolved lateral-decision cadence and prediction horizon beside the step and fidelity label, and its own shape version is bumped once for that addition by the first leaf that lands the recorded values | [[TAS-088-add-route-relative-lateral-agent-state]] in the planned order | manifest readers and run-directory goldens |
 | scenario schema | no constant | Increment 2 is schema version `2` in place: no new `schema_version` and no provenance field | — | the reader, migration, and compiler are unchanged in their version negotiation |
 
 No Phase 1 baseline value, tolerance, interaction disposition, or golden trace

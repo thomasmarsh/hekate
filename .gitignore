@@ -1,5 +1,9 @@
 .lavish/
 /target/
 
+# Tangle regenerates these derived Markdown views from canonical nodes; they are
+# disposable and never authoritative.
+.tangle/views/
+
 # Each spike is a detached throwaway crate with its own lockfile and target.
 spikes/*/target/

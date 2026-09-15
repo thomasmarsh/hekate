@@ -16,7 +16,7 @@ statement is a checked-in artifact or a named source location.
   reproduces its recorded `events.jsonl.gz` and trace hash from its own
   `manifest.json` in the supported determinism environment: `replay --verify`
   passes on the manifests behind the checked-in golden traces
-  (`apps/tangle-cli/tests/increment6_trace.rs`) and on every run directory the
+  (`apps/hekate-cli/tests/increment6_trace.rs`) and on every run directory the
   reproduction command writes.
 - **Reproducibility of the comparison.** One command regenerates
   `comparison_report.json` and `convergence_evidence.json` byte for byte from

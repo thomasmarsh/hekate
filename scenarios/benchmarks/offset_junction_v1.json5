@@ -11,7 +11,7 @@
 // four, two staggered conflict regions instead of one shared crossing, wider
 // east-west road, and no pedestrian infrastructure or control signal -- yet it
 // is expressed entirely from the same version 1 primitives, so adding it
-// required no change to `tangle-model` or `tangle-sim`.
+// required no change to `hekate-model` or `hekate-sim`.
 {
   schema_version: 1,
   id: 'offset_junction_v1',

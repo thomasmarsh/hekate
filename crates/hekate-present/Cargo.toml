@@ -1,0 +1,17 @@
+[package]
+name = "hekate-present"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Bevy-free, terminal-free presentation layer shared by every Hekate renderer."
+
+[dependencies]
+hekate-model.workspace = true
+hekate-sim.workspace = true
+glam.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

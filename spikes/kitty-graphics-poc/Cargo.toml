@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-# Detached from the Tangle workspace on purpose. This is a disposable spike:
+# Detached from the Hekate workspace on purpose. This is a disposable spike:
 # it must not join the pinned workspace, the CI gates, or the dependency
 # direction check, and it is deliberately independent of the shared
 # presentation layer so it can fail cheaply. See node TAS-010.

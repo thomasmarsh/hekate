@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 #
-# Enforce Tangle's one-way dependency direction.
+# Enforce Hekate's one-way dependency direction.
 #
-# `tangle-model` and `tangle-sim` are the reusable kernel crates. They must not
+# `hekate-model` and `hekate-sim` are the reusable kernel crates. They must not
 # depend on Bevy, on an application crate, or on the presentation layer, even
 # transitively, so the simulator stays headless and portable.
 #
-# `tangle-present` is the shared presentation layer. It may depend on the kernel
+# `hekate-present` is the shared presentation layer. It may depend on the kernel
 # but must not depend on Bevy, a terminal library, or an application crate, so
 # every backend (including terminal ones) can consume the same contract.
 #
 # Application crates may depend on the kernel, the presentation layer, and Bevy;
-# `tangle-viewer` is the only place Bevy belongs.
+# `hekate-viewer` is the only place Bevy belongs.
 #
 # Run from the workspace root. Requires the pinned toolchain.
 
 set -euo pipefail
 
 # Never allowed in any reusable substrate.
-common_forbidden=(bevy tangle-cli tangle-viewer)
+common_forbidden=(bevy hekate-cli hekate-viewer)
 # Terminal libraries are allowed only in terminal backends, never in the shared
 # presentation layer or the kernel.
 terminal_forbidden=(crossterm ratatui termion termwiz console)
@@ -42,11 +42,11 @@ check_forbidden() {
     done
 }
 
-for kernel in tangle-model tangle-sim; do
-    check_forbidden "${kernel}" "${common_forbidden[@]}" tangle-present
+for kernel in hekate-model hekate-sim; do
+    check_forbidden "${kernel}" "${common_forbidden[@]}" hekate-present
 done
 
-check_forbidden tangle-present "${common_forbidden[@]}" "${terminal_forbidden[@]}"
+check_forbidden hekate-present "${common_forbidden[@]}" "${terminal_forbidden[@]}"
 
 if [[ "${failed}" -ne 0 ]]; then
     echo "dependency direction check failed" >&2

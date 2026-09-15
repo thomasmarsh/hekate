@@ -40,10 +40,10 @@ run_log="${out_dir}/${stem}-release.run.txt"
 
 mkdir -p "${out_dir}"
 cd "${repo_root}"
-cargo build --release -p tangle-cli
+cargo build --release -p hekate-cli
 
 echo "profiling ${ticks} ticks of ${scenario} for ${seconds} s" >&2
-./target/release/tangle-cli run "${scenario}" --ticks "${ticks}" --output /dev/null \
+./target/release/hekate-cli run "${scenario}" --ticks "${ticks}" --output /dev/null \
     2> "${run_log}" &
 pid=$!
 # If sampling fails the run is killed rather than left spinning.

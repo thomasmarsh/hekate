@@ -1,0 +1,18 @@
+[package]
+name = "hekate-viewer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Bevy top-down viewer for Hekate."
+
+[dependencies]
+hekate-model.workspace = true
+hekate-sim.workspace = true
+hekate-present.workspace = true
+bevy.workspace = true
+glam.workspace = true
+
+[lints]
+workspace = true

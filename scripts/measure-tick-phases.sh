@@ -16,7 +16,7 @@
 # file of this repository: it unpacks `git archive HEAD` into a temporary
 # directory, writes a throwaway example driver there, builds the kernel twice —
 # as committed, and with the two `self.metrics.*` calls removed from its copy of
-# `crates/tangle-sim/src/sim.rs` — and times the identical loop in each build.
+# `crates/hekate-sim/src/sim.rs` — and times the identical loop in each build.
 # The repository's own `crates/` must be clean before and after, and the two
 # builds must report the same event-stream hash and event count, so the ablation
 # is shown to change no behavior that a run can observe.
@@ -57,7 +57,7 @@ if [[ -n "$(git -C "${repo_root}" status --porcelain -- crates)" ]]; then
 fi
 base_commit=$(git -C "${repo_root}" rev-parse HEAD)
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/tangle-tick-phases.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/hekate-tick-phases.XXXXXX")
 cleanup() { rm -rf "${work}"; }
 trap cleanup EXIT
 
@@ -67,8 +67,8 @@ git -C "${repo_root}" archive --format=tar HEAD | tar -x -C "${work}"
 # The throwaway driver is written into the temporary copy only. It times the
 # bare fixed-step loop, and it hashes the events of one untimed pass so the
 # ablation can be checked against the committed kernel.
-mkdir -p "${work}/crates/tangle-sim/examples"
-cat > "${work}/crates/tangle-sim/examples/tick_phase_bench.rs" <<'RUST'
+mkdir -p "${work}/crates/hekate-sim/examples"
+cat > "${work}/crates/hekate-sim/examples/tick_phase_bench.rs" <<'RUST'
 //! Throwaway ablation driver, written by scripts/measure-tick-phases.sh.
 //!
 //! Times `Simulation::step` for one scenario and prints key=value lines. The
@@ -78,8 +78,8 @@ cat > "${work}/crates/tangle-sim/examples/tick_phase_bench.rs" <<'RUST'
 
 use std::time::Instant;
 
-use tangle_model::{CompiledScenario, parse_scenario_source};
-use tangle_sim::{RunConfig, Simulation};
+use hekate_model::{CompiledScenario, parse_scenario_source};
+use hekate_sim::{RunConfig, Simulation};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -142,7 +142,7 @@ build() {
     (
         cd "${work}"
         CARGO_TARGET_DIR="${work}/target" cargo build --release --offline \
-            -p tangle-sim --example tick_phase_bench >/dev/null
+            -p hekate-sim --example tick_phase_bench >/dev/null
     )
 }
 
@@ -154,7 +154,7 @@ cp "${work}/target/release/examples/tick_phase_bench" "${work}/tick_phase_bench_
 # Ablate the pass in the temporary copy only. Each snippet must appear exactly
 # once, so a kernel edit that moves or renames the calls fails loudly here
 # instead of silently measuring nothing.
-python3 - "${work}/crates/tangle-sim/src/sim.rs" <<'PY'
+python3 - "${work}/crates/hekate-sim/src/sim.rs" <<'PY'
 import pathlib
 import sys
 
@@ -297,9 +297,9 @@ cat > "${output}" <<JSON
     "base_commit": "${base_commit}",
     "procedure": [
       "git archive HEAD into a temporary directory",
-      "write a throwaway crates/tangle-sim/examples/tick_phase_bench.rs driver into that copy",
-      "cargo build --release --offline -p tangle-sim --example tick_phase_bench",
-      "remove the two self.metrics.* calls from the copy's crates/tangle-sim/src/sim.rs and rebuild",
+      "write a throwaway crates/hekate-sim/examples/tick_phase_bench.rs driver into that copy",
+      "cargo build --release --offline -p hekate-sim --example tick_phase_bench",
+      "remove the two self.metrics.* calls from the copy's crates/hekate-sim/src/sim.rs and rebuild",
       "time the identical bare step loop in both builds over ${repeats} passes per window and report the minimum and the median"
     ],
     "limitation": "removing the calls lets the compiler re-codegen the rest of the loop, so rest is the rest of the tick as compiled without the pass, not as compiled with it",
@@ -318,7 +318,7 @@ $(cat "${windows_json}")
   "tas_030_reference": {
     "pass_us_per_tick": 22.0,
     "rest_us_per_tick": 7.0,
-    "source": ".braintree/resolved/TAS-030-phase-1-increment-4-geometry-queries-safety-events.md, Measured cost",
+    "source": ".tangle/resolved/TAS-030-phase-1-increment-4-geometry-queries-safety-events.md, Measured cost",
     "note": "Increment 4's figure, re-measured here independently; this artifact is the Increment 5 baseline"
   }
 }

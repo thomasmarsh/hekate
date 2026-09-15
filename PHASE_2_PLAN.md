@@ -1,4 +1,4 @@
-# Tangle Phase 2 Implementation Plan
+# Hekate Phase 2 Implementation Plan
 
 **Status:** Proposed  
 **Date:** September 12, 2026  
@@ -7,13 +7,13 @@
 
 ## Outcome
 
-Phase 2 will turn Tangle's car-and-pedestrian intersection model into a mixed-traffic laboratory. A scenario author will be able to combine passenger cars, pedestrians, bicycles, scooters, buses, rigid trucks, and articulated trucks in the same continuous world; assign each mode to ordinary, shared, or prohibited facilities; and observe overtaking, close passing, wrong-way travel, transit dwell, articulated off-tracking, and pedestrian group behavior.
+Phase 2 will turn Hekate's car-and-pedestrian intersection model into a mixed-traffic laboratory. A scenario author will be able to combine passenger cars, pedestrians, bicycles, scooters, buses, rigid trucks, and articulated trucks in the same continuous world; assign each mode to ordinary, shared, or prohibited facilities; and observe overtaking, close passing, wrong-way travel, transit dwell, articulated off-tracking, and pedestrian group behavior.
 
 The release will support comparative claims about how a design distributes delay, throughput, exposure, and conflicts across modes. Each new mode will have independent physical and operational validation evidence before it is admitted to the final mixed-mode comparison. Phase 2 will not claim field calibration or absolute crash prediction.
 
 ## Recommendation
 
-Extend the existing `tangle-model`, `tangle-sim`, and `tangle-present` boundaries rather than introducing a crate or class hierarchy per mode. Compile authored mode templates into composable agent data: body geometry, kinematic limits, facility permissions, route-following behavior, tactical maneuver capabilities, occupancy, and optional transit or articulation state. A named mode remains useful for authoring, reporting, and selecting a controller family, but shared kernel behavior should operate on capabilities and physical state.
+Extend the existing `hekate-model`, `hekate-sim`, and `hekate-present` boundaries rather than introducing a crate or class hierarchy per mode. Compile authored mode templates into composable agent data: body geometry, kinematic limits, facility permissions, route-following behavior, tactical maneuver capabilities, occupancy, and optional transit or articulation state. A named mode remains useful for authoring, reporting, and selecting a controller family, but shared kernel behavior should operate on capabilities and physical state.
 
 Use continuous path-relative coordinates for tactical road motion while keeping continuous world coordinates authoritative. A wheeled agent may track longitudinal progress and lateral offset from a reference path, but its pose and physical envelope are computed in world space on every physics step. This provides a tractable implementation of lane positioning, overtaking, and close passing without turning paths into discrete cells or making every road user follow a fixed centerline.
 
@@ -81,7 +81,7 @@ scenario v1/v2
                   safety/events          snapshots/replay     metrics/batch
 ```
 
-`tangle-model` owns source versions, validation, stable authored IDs, and compilation of templates into immutable data. `tangle-sim` owns agent composition, tactical state, controllers, motion, collision queries, events, and online metrics. `tangle-present` projects all modes, body segments, maneuvers, facilities, and events into backend-independent scene data. The CLI, Bevy viewer, and terminal viewer consume those existing boundaries.
+`hekate-model` owns source versions, validation, stable authored IDs, and compilation of templates into immutable data. `hekate-sim` owns agent composition, tactical state, controllers, motion, collision queries, events, and online metrics. `hekate-present` projects all modes, body segments, maneuvers, facilities, and events into backend-independent scene data. The CLI, Bevy viewer, and terminal viewer consume those existing boundaries.
 
 Do not create separate crates for bicycles, scooters, transit, or trucks during Phase 2. New controller or geometry modules may become crates later only after an independent consumer or a measured compile-time boundary appears.
 

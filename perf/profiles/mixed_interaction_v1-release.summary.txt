@@ -1,6 +1,6 @@
 # release-mode sampled profile phase table
-capture: /Users/thomasmarsh/git/tangle/perf/profiles/mixed_interaction_v1-release.sample.txt
-process: tangle-cli [44621]
+capture: /Users/thomasmarsh/git/hekate/perf/profiles/mixed_interaction_v1-release.sample.txt
+process: hekate-cli [44621]
 date: 2026-09-12 22:42:55.062 -0400
 os: macOS 13.7.8 (22H730)
 tool: /usr/bin/sample (default 1 ms sampling interval)
@@ -9,30 +9,30 @@ thread_samples: 5778
 ## tick phases: every direct child of Simulation::step
 tick_samples: 5741
 frame                                                                     samples   share
-tangle_sim::metrics::InteractionMetrics::observe                             2786   48.5%
-tangle_sim::safety::SafetyMonitor::observe                                    849   14.8%
-tangle_sim::sim::Simulation::step_vehicle                                     293    5.1%
-tangle_sim::safety::SafetyMonitor::begin_tick                                 171    3.0%
-tangle_sim::metrics::InteractionMetrics::begin_tick                           158    2.8%
-tangle_sim::index::BroadPhase::rebuild                                         93    1.6%
-tangle_sim::pedestrian::steer                                                  81    1.4%
-tangle_sim::index::SpatialIndex::rebuild                                       63    1.1%
-tangle_sim::query::agent_body                                                  18    0.3%
-tangle_model::compiled::CompiledPedestrianSignal::walk_at                       6    0.1%
-tangle_sim::controller::WaypointController::PedestrianController::adva          6    0.1%
+hekate_sim::metrics::InteractionMetrics::observe                             2786   48.5%
+hekate_sim::safety::SafetyMonitor::observe                                    849   14.8%
+hekate_sim::sim::Simulation::step_vehicle                                     293    5.1%
+hekate_sim::safety::SafetyMonitor::begin_tick                                 171    3.0%
+hekate_sim::metrics::InteractionMetrics::begin_tick                           158    2.8%
+hekate_sim::index::BroadPhase::rebuild                                         93    1.6%
+hekate_sim::pedestrian::steer                                                  81    1.4%
+hekate_sim::index::SpatialIndex::rebuild                                       63    1.1%
+hekate_sim::query::agent_body                                                  18    0.3%
+hekate_model::compiled::CompiledPedestrianSignal::walk_at                       6    0.1%
+hekate_sim::controller::WaypointController::PedestrianController::adva          6    0.1%
 rand_chacha::guts::refill_wide::impl_avx2                                       5    0.1%
-tangle_sim::profile::sample_profile                                             3    0.1%
+hekate_sim::profile::sample_profile                                             3    0.1%
 alloc::collections::btree::remove::node::Handle::NodeRef::marker::Mut           2    0.0%
-tangle_sim::controller::WaypointController::PedestrianController::stee          2    0.0%
+hekate_sim::controller::WaypointController::PedestrianController::stee          2    0.0%
 alloc::collections::btree::map::BTreeMap                                        1    0.0%
-tangle_sim::query::body_clearance_m                                             1    0.0%
+hekate_sim::query::body_clearance_m                                             1    0.0%
 atan2                                                                           1    0.0%
 core::slice::sort::shared::smallsort::insertion_sort_shift_left                 1    0.0%
 fmod                                                                            1    0.0%
 sincos_stret                                                                    1    0.0%
 Simulation::step (self: inlined and non-frame work)                          1199   20.9%
 
-interaction-metrics pass (tangle_sim::metrics::*)                            2944   51.3%
+interaction-metrics pass (hekate_sim::metrics::*)                            2944   51.3%
 rest of the tick                                                             2797   48.7%
 
 ## within-pass frames: what the interaction-metrics pass calls
@@ -53,15 +53,15 @@ box_box_least_overlap_axis                                                     4
 
 ## top self-time frames (top of stack)
 frame                                                                     samples
-tangle_sim::index::BroadPhase::candidates_in_aabb                            1913
-tangle_sim::sim::Simulation::step                                            1223
-tangle_sim::safety::SafetyMonitor::observe                                    300
-tangle_sim::metrics::InteractionMetrics::observe                              236
-tangle_sim::sim::Simulation::step_vehicle                                     231
-tangle_sim::safety::SafetyMonitor::begin_tick                                 162
-tangle_sim::safety::SafetyMonitor::scan_region                                157
-tangle_sim::metrics::InteractionMetrics::begin_tick                           149
-tangle_sim::query::body_clearance_m                                           134
+hekate_sim::index::BroadPhase::candidates_in_aabb                            1913
+hekate_sim::sim::Simulation::step                                            1223
+hekate_sim::safety::SafetyMonitor::observe                                    300
+hekate_sim::metrics::InteractionMetrics::observe                              236
+hekate_sim::sim::Simulation::step_vehicle                                     231
+hekate_sim::safety::SafetyMonitor::begin_tick                                 162
+hekate_sim::safety::SafetyMonitor::scan_region                                157
+hekate_sim::metrics::InteractionMetrics::begin_tick                           149
+hekate_sim::query::body_clearance_m                                           134
 nanov2_free                                                                    99
 alloc::vec::Vec                                                                97
 nanov2_malloc                                                                  69

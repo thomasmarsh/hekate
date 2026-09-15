@@ -1,11 +1,11 @@
-//! Kitty graphics go/no-go spike (Braintree node TAS-010).
+//! Kitty graphics go/no-go spike (Tangle node TAS-010).
 //!
 //! Commands:
 //!   probe   report whether the current terminal answers the protocol probe
 //!   run     transmit, place, animate, and delete synthetic frames; measure cost
 //!   info    print terminal size and capability hints
 //!
-//! The spike is disposable and detached from the Tangle workspace.
+//! The spike is disposable and detached from the Hekate workspace.
 
 mod kitty;
 mod scene;
@@ -530,7 +530,7 @@ fn command_run(options: &Options) -> i32 {
         let _ = std::fs::remove_file(path);
     }
     for name in &medium_paths {
-        if name.starts_with("/tangle-kitty-poc") {
+        if name.starts_with("/hekate-kitty-poc") {
             unlink_shm(name);
         }
     }
@@ -691,7 +691,7 @@ fn encode_transport(
         }
         "file" => {
             let path = std::env::temp_dir().join(format!(
-                "tangle-kitty-poc-{}-{}.rgba",
+                "hekate-kitty-poc-{}-{}.rgba",
                 std::process::id(),
                 media.len()
             ));
@@ -708,7 +708,7 @@ fn encode_transport(
             base64_bytes = 0;
         }
         "shm" => {
-            let name = format!("/tangle-kitty-poc-{}-{}", std::process::id(), media.len());
+            let name = format!("/hekate-kitty-poc-{}-{}", std::process::id(), media.len());
             let start = Instant::now();
             write_shm(&name, rgba)?;
             file_write_ms = ms(start.elapsed());

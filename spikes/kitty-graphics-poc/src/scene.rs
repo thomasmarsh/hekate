@@ -4,7 +4,7 @@
 //! (a straight guide with six constant-speed cars) so the measured cost is
 //! representative of the Increment 0 walking skeleton. The dense scene adds
 //! many small moving bodies and per-frame color noise so compression has a
-//! realistic, hard case. Neither scene touches `tangle-sim`: the spike is
+//! realistic, hard case. Neither scene touches `hekate-sim`: the spike is
 //! deliberately independent so it can fail cheaply.
 
 /// Deterministic scene definition.

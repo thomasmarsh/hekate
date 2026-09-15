@@ -3241,6 +3241,80 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hekate-cli"
+version = "0.0.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "clap",
+ "flate2",
+ "glam 0.33.7",
+ "hekate-model",
+ "hekate-sim",
+ "parquet",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "hekate-model"
+version = "0.0.0"
+dependencies = [
+ "glam 0.33.7",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_json5",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "hekate-present"
+version = "0.0.0"
+dependencies = [
+ "glam 0.33.7",
+ "hekate-model",
+ "hekate-sim",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "hekate-sim"
+version = "0.0.0"
+dependencies = [
+ "glam 0.33.7",
+ "hekate-model",
+ "rand_chacha",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "hekate-tui"
+version = "0.0.0"
+dependencies = [
+ "crossterm",
+ "glam 0.33.7",
+ "hekate-cli",
+ "hekate-model",
+ "hekate-present",
+ "hekate-sim",
+ "mio",
+]
+
+[[package]]
+name = "hekate-viewer"
+version = "0.0.0"
+dependencies = [
+ "bevy",
+ "glam 0.33.7",
+ "hekate-model",
+ "hekate-present",
+ "hekate-sim",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5466,80 +5540,6 @@ dependencies = [
  "grid",
  "serde",
  "slotmap",
-]
-
-[[package]]
-name = "tangle-cli"
-version = "0.0.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "clap",
- "flate2",
- "glam 0.33.7",
- "parquet",
- "serde",
- "serde_json",
- "sha2",
- "tangle-model",
- "tangle-sim",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "tangle-model"
-version = "0.0.0"
-dependencies = [
- "glam 0.33.7",
- "schemars",
- "serde",
- "serde_json",
- "serde_json5",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "tangle-present"
-version = "0.0.0"
-dependencies = [
- "glam 0.33.7",
- "tangle-model",
- "tangle-sim",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "tangle-sim"
-version = "0.0.0"
-dependencies = [
- "glam 0.33.7",
- "rand_chacha",
- "tangle-model",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "tangle-tui"
-version = "0.0.0"
-dependencies = [
- "crossterm",
- "glam 0.33.7",
- "mio",
- "tangle-cli",
- "tangle-model",
- "tangle-present",
- "tangle-sim",
-]
-
-[[package]]
-name = "tangle-viewer"
-version = "0.0.0"
-dependencies = [
- "bevy",
- "glam 0.33.7",
- "tangle-model",
- "tangle-present",
- "tangle-sim",
 ]
 
 [[package]]

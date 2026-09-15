@@ -1,8 +1,8 @@
 # Kitty graphics go/no-go spike (TAS-010)
 
 A disposable, dependency-light Rust program that proves or disproves the Kitty
-graphics protocol as a Tangle terminal backend. It is **detached from the
-Tangle workspace** (`[workspace]` in `Cargo.toml`) on purpose: it must not join
+graphics protocol as a Hekate terminal backend. It is **detached from the
+Hekate workspace** (`[workspace]` in `Cargo.toml`) on purpose: it must not join
 the pinned workspace, the CI gates, or the dependency-direction check, and it is
 independent of the shared presentation layer so it can fail cheaply.
 

@@ -19,9 +19,9 @@
     "base_commit": "b79d0585bc9db4c9d55bb580da61c09a103bd211",
     "procedure": [
       "git archive HEAD into a temporary directory",
-      "write a throwaway crates/tangle-sim/examples/tick_phase_bench.rs driver into that copy",
-      "cargo build --release --offline -p tangle-sim --example tick_phase_bench",
-      "remove the two self.metrics.* calls from the copy's crates/tangle-sim/src/sim.rs and rebuild",
+      "write a throwaway crates/hekate-sim/examples/tick_phase_bench.rs driver into that copy",
+      "cargo build --release --offline -p hekate-sim --example tick_phase_bench",
+      "remove the two self.metrics.* calls from the copy's crates/hekate-sim/src/sim.rs and rebuild",
       "time the identical bare step loop in both builds over 5 passes per window and report the minimum and the median"
     ],
     "limitation": "removing the calls lets the compiler re-codegen the rest of the loop, so rest is the rest of the tick as compiled without the pass, not as compiled with it",
@@ -120,7 +120,7 @@
   "tas_030_reference": {
     "pass_us_per_tick": 22.0,
     "rest_us_per_tick": 7.0,
-    "source": ".braintree/resolved/TAS-030-phase-1-increment-4-geometry-queries-safety-events.md, Measured cost",
+    "source": ".tangle/resolved/TAS-030-phase-1-increment-4-geometry-queries-safety-events.md, Measured cost",
     "note": "Increment 4's figure, re-measured here independently; this artifact is the Increment 5 baseline"
   }
 }

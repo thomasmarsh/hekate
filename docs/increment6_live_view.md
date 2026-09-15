@@ -33,7 +33,7 @@ holding `manifest.json`, `summary.json`, `metrics.json`, `events.jsonl.gz`, and
 `trajectories.parquet`. From the repository root:
 
 ```sh
-cargo run -p tangle-cli -- replay \
+cargo run -p hekate-cli -- replay \
   experiments/increment6_signal_timing_v1/replay/ew_priority_seed-1_1200ticks --verify
 ```
 
@@ -61,7 +61,7 @@ stream hash must equal
 `a9666e0a5bfca56df071954b07a7e6fdd64d9009c27f6dd41d47c887b78f6def`:
 
 ```sh
-cargo run -p tangle-cli -- run \
+cargo run -p hekate-cli -- run \
   scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5 \
   --seed 1 --ticks 1200 \
   --run-dir /tmp/increment6_ew_priority_seed-1_1200ticks \
@@ -77,7 +77,7 @@ rewritten, so regenerate into a new or emptied path.
 The Bevy desktop viewer:
 
 ```sh
-cargo run -p tangle-viewer -- \
+cargo run -p hekate-viewer -- \
   scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5 1
 ```
 
@@ -85,7 +85,7 @@ The character-cell terminal viewer (Kitty graphics when the terminal supports it
 and `auto` probes true):
 
 ```sh
-cargo run -p tangle-tui -- --backend ascii \
+cargo run -p hekate-tui -- --backend ascii \
   scenarios/experiments/four_leg_pedestrian_ew_priority_v1.json5 1
 ```
 

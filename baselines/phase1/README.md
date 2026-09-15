@@ -52,13 +52,13 @@ host OS, and CPU architecture live only in `performance.json`.
 From the repository root:
 
 ```sh
-cargo run -p tangle-cli -- baseline scenarios/walking/walking_guide_v1.json5 \
+cargo run -p hekate-cli -- baseline scenarios/walking/walking_guide_v1.json5 \
   --seed 0 --duration-s 12.5 \
   --output baselines/phase1/baseline.json \
   --performance baselines/phase1/performance.json
 ```
 
-Then run `cargo test -p tangle-cli` to confirm the checked-in manifest matches.
+Then run `cargo test -p hekate-cli` to confirm the checked-in manifest matches.
 
 ## Convergence
 

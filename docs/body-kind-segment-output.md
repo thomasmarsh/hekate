@@ -14,16 +14,16 @@ modes add no mode-specific presenter branch.
 
 ## What changed
 
-- **Snapshot.** `tangle-sim`'s `MotionSample` now carries `body_kind`
-  (`tangle_model::BodyKind`) and `segments` (`Vec<BodySegmentSample>`). A
+- **Snapshot.** `hekate-sim`'s `MotionSample` now carries `body_kind`
+  (`hekate_model::BodyKind`) and `segments` (`Vec<BodySegmentSample>`). A
   `BodySegmentSample` is one segment's world position and heading, ordered front
   to back within its body. `AgentSample` and `MotionSample` are no longer `Copy`,
   because a segment list is not.
-- **Scene.** `tangle-present`'s `SceneBody` carries the same `body_kind` and
+- **Scene.** `hekate-present`'s `SceneBody` carries the same `body_kind` and
   `segments`. Segment poses are interpolated from the previous frame by their
   position in the ordered chain; a body without motion detail reads as the
   vehicle box, matching its mode and dimensions fallback.
-- **Trajectory artifact.** `tangle-cli`'s `TrajectorySample` carries `body_kind`
+- **Trajectory artifact.** `hekate-cli`'s `TrajectorySample` carries `body_kind`
   and `segments`. `trajectories.parquet` gains a `body_kind` UTF-8 column after
   `mode` and a `segments` list column of `{x_m, y_m, heading_rad}` structs after
   `speed_mps`. The `TrajectoryArtifact` descriptor gains `format_version`.
@@ -34,10 +34,10 @@ modes add no mode-specific presenter branch.
 
 ## Versioned bump
 
-- `RUN_MANIFEST_VERSION` 2 → 3 (`apps/tangle-cli/src/run_dir.rs`). The run
+- `RUN_MANIFEST_VERSION` 2 → 3 (`apps/hekate-cli/src/run_dir.rs`). The run
   manifest nests the trajectory descriptor, and that descriptor gained
   `format_version`, so the manifest's serialized shape changed.
-- `TRAJECTORY_FORMAT_VERSION` 1 → 2 (`apps/tangle-cli/src/trajectories.rs`, new
+- `TRAJECTORY_FORMAT_VERSION` 1 → 2 (`apps/hekate-cli/src/trajectories.rs`, new
   declared constant recorded in the artifact descriptor). Version 1 was the
   seven columns `tick`, `agent`, `mode`, `x_m`, `y_m`, `heading_rad`, and
   `speed_mps`; version 2 adds `body_kind` and the ordered `segments` list.
@@ -57,9 +57,9 @@ modes add no mode-specific presenter branch.
   renderer and scene goldens with `scripts/regen-goldens.sh` and inspect the diff
   before committing it.
 - Tests that pin the new output:
-  `tangle-sim`'s `a_full_snapshot_reports_each_phase1_body_kind_with_no_segments`,
-  `tangle-present`'s `a_body_projects_the_body_kind_and_no_phase1_segments` and
-  `segment_poses_interpolate_from_the_previous_frame`, and `tangle-cli`'s
+  `hekate-sim`'s `a_full_snapshot_reports_each_phase1_body_kind_with_no_segments`,
+  `hekate-present`'s `a_body_projects_the_body_kind_and_no_phase1_segments` and
+  `segment_poses_interpolate_from_the_previous_frame`, and `hekate-cli`'s
   `the_artifact_reports_each_phase1_body_kind_with_no_segments` and
   `the_artifact_round_trips_body_kind_and_segments`.
 
@@ -67,19 +67,19 @@ modes add no mode-specific presenter branch.
 
 This section is the versioned explanation for the second scene-shape change:
 `[[TAS-081-presenter-parity-v2-facilities-and-narrow-modes]]` adds the compiled
-facility list and the capsule body shape to the shared `tangle-present` scene
+facility list and the capsule body shape to the shared `hekate-present` scene
 projection, so both presenters draw the Phase 2 Increment 1 features from scene
 data. It supersedes nothing above; the Increment 0 change stands as recorded.
 
 ## What changed
 
-- **Load path.** `tangle_present::load_scenario` now negotiates the schema
-  version through `tangle_model::parse_scenario_document`: a version-1 document
+- **Load path.** `hekate_present::load_scenario` now negotiates the schema
+  version through `hekate_model::parse_scenario_document`: a version-1 document
   keeps the migration path through `CompiledScenario::compile`, and a
   version-2 document compiles through `CompiledScenario::compile_v2`. A
   document declaring a version this build cannot read is reported as
   `LoadError::UnsupportedSchemaVersion`. The load path mirrors
-  `tangle-cli`'s; the scene projection itself is unchanged by it.
+  `hekate-cli`'s; the scene projection itself is unchanged by it.
 - **Scene.** `SceneGeometry` carries `facilities`, one `SceneFacility` per
   compiled facility: its `FacilityId`, the traversable `RegionId` it occupies,
   the region's ring, and, when the facility declares one, a
@@ -98,7 +98,7 @@ data. It supersedes nothing above; the Increment 0 change stands as recorded.
 
 ## Versioned bump
 
-- `SCENE_FORMAT_VERSION` 1 → 2 (`crates/tangle-present/src/scene.rs`, new
+- `SCENE_FORMAT_VERSION` 1 → 2 (`crates/hekate-present/src/scene.rs`, new
   declared constant). Version 1 was the Phase 1 projection with the Increment 0
   body kinds and ordered segments; version 2 adds `SceneGeometry::facilities`
   and `BodyShape::Capsule`. Nothing serializes a scene, so no artifact records
@@ -119,16 +119,16 @@ data. It supersedes nothing above; the Increment 0 change stands as recorded.
   Kitty goldens (`tests/golden/renderer/**`), the canonical trace goldens, and
   `baselines/phase1/**`. Regenerate the scene and renderer goldens with
   `scripts/regen-goldens.sh` and inspect the diff before committing it.
-- Tests that pin the new output: `tangle-present`'s
+- Tests that pin the new output: `hekate-present`'s
   `a_facility_projects_its_region_and_reference_path`,
   `a_capsule_body_draws_its_capsule`,
   `the_declared_scene_format_version_is_the_facility_extension`,
   `a_phase_1_scenario_projects_no_facilities`, and the fixture-load test
   `every_increment_1_fixture_loads_with_its_facilities_and_narrow_bodies`;
-  `tangle-tui`'s
+  `hekate-tui`'s
   `a_facility_band_and_reference_path_are_rasterized_from_scene_data`,
   `a_facility_band_and_reference_path_are_drawn_from_scene_data`,
   `a_capsule_body_is_rasterized_as_a_capsule`, and
-  `a_capsule_body_is_drawn_as_a_capsule`; and `tangle-viewer`'s
+  `a_capsule_body_is_drawn_as_a_capsule`; and `hekate-viewer`'s
   `a_capsule_body_draws_its_straight_part_and_both_caps` and
   `a_version_2_frame_carries_each_facility_band_and_reference_path`.

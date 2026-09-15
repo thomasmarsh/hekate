@@ -4,7 +4,7 @@
   "generated_unix_s": 1789267370,
   "build_profile": "release",
   "method": {
-    "harness": "apps/tangle-cli/tests/release_benchmark.rs",
+    "harness": "apps/hekate-cli/tests/release_benchmark.rs",
     "command": "scripts/bench-release.sh",
     "profile": "release (no LTO, debug = false), the pinned toolchain in rust-toolchain.toml",
     "clock": "std::time::Instant around the fixed-step loop only: scenario load, warm-up, artifact writing, and process start-up are outside the measured interval",

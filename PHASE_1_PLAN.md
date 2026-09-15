@@ -1,4 +1,4 @@
-# Tangle Phase 1 Implementation Plan
+# Hekate Phase 1 Implementation Plan
 
 **Status:** Proposed  
 **Date:** September 11, 2026  
@@ -22,7 +22,7 @@ This split fits the goals better than making the simulator a Bevy application:
 - CPU simulation is substantially easier to replay, inspect, test, and validate. Phase 1 scaling should come from cache-conscious state and parallel independent replications, not GPU compute.
 - The boundary leaves room for later GPU accelerators. Any accelerator can implement the same operation as a reference CPU path and be checked with differential tests before its results are trusted.
 
-As of this plan, pin Rust 1.98.1 and Bevy 0.19.1 for the initial workspace rather than following floating versions. Review upgrades deliberately at milestone boundaries. Bevy supports fixed schedules and headless applications, but Tangle's authoritative clock should still belong to the kernel rather than Bevy's wall-clock-driven schedule.[^bevy-fixed][^bevy-headless]
+As of this plan, pin Rust 1.98.1 and Bevy 0.19.1 for the initial workspace rather than following floating versions. Review upgrades deliberately at milestone boundaries. Bevy supports fixed schedules and headless applications, but Hekate's authoritative clock should still belong to the kernel rather than Bevy's wall-clock-driven schedule.[^bevy-fixed][^bevy-headless]
 
 ## Phase 1 product slice
 
@@ -56,7 +56,7 @@ scenario.json5
       |
       v
 +----------------+      +----------------+      +------------------+
-| tangle-model   |----->| tangle-sim     |----->| snapshots/events |
+| hekate-model   |----->| hekate-sim     |----->| snapshots/events |
 | parse/validate |      | step(dt)       |      | metrics          |
 +----------------+      +----------------+      +------------------+
                               |                         |
@@ -64,12 +64,12 @@ scenario.json5
                     |                   |               |
                     v                   v               v
               +------------+     +---------------+  analysis tools
-              | tangle-cli |     | tangle-viewer |
+              | hekate-cli |     | hekate-viewer |
               | headless   |     | Bevy + wgpu   |
               +------------+     +---------------+
 ```
 
-`tangle-sim` must not depend on Bevy, a window, wall-clock time, or the filesystem. The viewer may depend on every lower layer. This one-way dependency is enforced in the workspace layout and CI.
+`hekate-sim` must not depend on Bevy, a window, wall-clock time, or the filesystem. The viewer may depend on every lower layer. This one-way dependency is enforced in the workspace layout and CI.
 
 ### Proposed workspace
 
@@ -77,11 +77,11 @@ scenario.json5
 Cargo.toml
 rust-toolchain.toml
 apps/
-  tangle-cli/       # validate, run, batch, inspect manifests
-  tangle-viewer/    # live view and replay using Bevy
+  hekate-cli/       # validate, run, batch, inspect manifests
+  hekate-viewer/    # live view and replay using Bevy
 crates/
-  tangle-model/     # source schema, validation, stable IDs, compiled scenario
-  tangle-sim/       # state, clocks, controllers, interactions, events, metrics
+  hekate-model/     # source schema, validation, stable IDs, compiled scenario
+  hekate-sim/       # state, clocks, controllers, interactions, events, metrics
 scenarios/
   walking/          # tiny development scenarios
   benchmarks/       # versioned correctness and performance scenarios
@@ -90,7 +90,7 @@ tests/
   golden/           # canonical traces and expected summaries
 ```
 
-Do not split controllers, geometry, metrics, or I/O into more crates during Phase 1. Keep module seams inside `tangle-sim` until independent compilation or reuse is demonstrated.
+Do not split controllers, geometry, metrics, or I/O into more crates during Phase 1. Keep module seams inside `hekate-sim` until independent compilation or reuse is demonstrated.
 
 ### Kernel API
 
@@ -162,7 +162,7 @@ Scenario parsing produces a `ScenarioSource`; validation and compilation produce
 A run manifest records:
 
 - scenario content hash and schema version;
-- Tangle source revision and model version;
+- Hekate source revision and model version;
 - dependency lockfile hash and build profile;
 - target triple and determinism tier;
 - fidelity settings, warm-up, duration, and termination condition;
@@ -221,7 +221,7 @@ The estimates below are sequencing guidance for one experienced developer, not c
 Deliver:
 
 - Rust workspace, pinned toolchain/dependencies, formatting, linting, unit-test, and release-build CI.
-- Initial `tangle-model`, `tangle-sim`, CLI, and Bevy viewer crates.
+- Initial `hekate-model`, `hekate-sim`, CLI, and Bevy viewer crates.
 - One parsed JSON5 scenario with a path and portals.
 - Authoritative fixed-step clock, deterministic constant-speed agents, snapshots, and typed spawn/despawn events.
 - The viewer content and controls needed to watch, pause, single-step, restart, and inspect the simple run.
@@ -231,7 +231,7 @@ Gate:
 
 - Running the same seed twice produces the same trace hash.
 - Rendering at different frame rates or using pause/speed controls does not change that hash.
-- No Bevy type appears in the public API or dependency tree of `tangle-model` or `tangle-sim`.
+- No Bevy type appears in the public API or dependency tree of `hekate-model` or `hekate-sim`.
 
 ### Increment 1 — General scenario foundation (about 1–2 weeks)
 

@@ -33,10 +33,10 @@ DIGITS = re.compile(r"(\d+)")
 # Rust legacy mangling is length-prefixed, but the hash segments before the
 # crate path also contain digits. Decoding starts at a known crate root so the
 # hash cannot be mistaken for identifiers.
-ROOT = re.compile(r"(?:^|_)(3std|5alloc|4core|6object|11rand_chacha|10tangle_sim|10tangle_cli|12tangle_model)")
-STEP = re.compile(r"_10tangle_sim3simNtB5_10Simulation4step$")
+ROOT = re.compile(r"(?:^|_)(3std|5alloc|4core|6object|11rand_chacha|10hekate_sim|10hekate_cli|12hekate_model)")
+STEP = re.compile(r"_10hekate_sim3simNtB5_10Simulation4step$")
 # The always-on per-tick interaction-metrics pass, as its frame paths start.
-PASS = "tangle_sim::metrics::"
+PASS = "hekate_sim::metrics::"
 
 
 def pretty(symbol: str) -> str:
@@ -203,7 +203,7 @@ def main() -> None:
         print(f"{name[:70]:<72}{samples:>9}{share(samples):>8}")
     print(f"{'Simulation::step (self: inlined and non-frame work)':<72}{tick_self:>9}{share(tick_self):>8}")
     print()
-    print(f"{'interaction-metrics pass (tangle_sim::metrics::*)':<72}{pass_samples:>9}{share(pass_samples):>8}")
+    print(f"{'interaction-metrics pass (hekate_sim::metrics::*)':<72}{pass_samples:>9}{share(pass_samples):>8}")
     print(f"{'rest of the tick':<72}{rest_samples:>9}{share(rest_samples):>8}")
     print()
     print("## within-pass frames: what the interaction-metrics pass calls")

@@ -2,11 +2,11 @@
 
 A model card documents one replaceable behavioral model: what it reads and
 writes, what it assumes, what has evidence, and where it stops being valid.
-Every model shipped in Tangle carries a card in the module that implements it,
+Every model shipped in Hekate carries a card in the module that implements it,
 written as the module documentation so the card travels with the code.
 
 This file is the inventory of record. The drift test in
-`crates/tangle-sim/tests/model_cards.rs` reads the `##` headings below and
+`crates/hekate-sim/tests/model_cards.rs` reads the `##` headings below and
 requires every card to state those sections in this order; a new required
 section is an edit here first. Each heading names one section and the sentence
 under it states what that section must contain. A card may add model-specific

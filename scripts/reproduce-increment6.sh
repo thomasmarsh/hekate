@@ -13,7 +13,7 @@
 # shows whether the checked-in evidence is the evidence this tree produces.
 #
 #   scripts/reproduce-increment6.sh
-#   TANGLE_CLI=target/release/tangle-cli scripts/reproduce-increment6.sh
+#   HEKATE_CLI=target/release/hekate-cli scripts/reproduce-increment6.sh
 #
 # JOBS sets the whole-run concurrency (default 8); every run stays
 # single-threaded, and a parallel batch produces the same per-run trace hashes
@@ -32,11 +32,11 @@ JOBS="${JOBS:-8}"
 GOLDEN_SEED=1
 GOLDEN_TICKS=1200
 
-CLI="${TANGLE_CLI:-}"
+CLI="${HEKATE_CLI:-}"
 if [ -z "$CLI" ]; then
   echo "== building the release CLI"
-  cargo build --release -p tangle-cli
-  CLI=target/release/tangle-cli
+  cargo build --release -p hekate-cli
+  CLI=target/release/hekate-cli
 fi
 
 echo "== comparison report, convergence evidence, and convergence summary"

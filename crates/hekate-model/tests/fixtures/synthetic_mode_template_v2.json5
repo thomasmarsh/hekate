@@ -1,0 +1,61 @@
+// The Increment 0 extension-gate fixture (TAS-070): a synthetic version-2 mode
+// template inside a minimal, valid version-2 scenario.
+//
+// The template alters body dimensions, kinematic limits, and facility access
+// from both Increment 0 templates (`docs/schema-v2-contract.md`): its box is a
+// constant 6.4 m x 2.4 m (the passenger car is 4.0-5.2 m x 1.7-2.0 m), it
+// desires 3.4 m/s (below the car's 9-15 m/s and above the pedestrian's 1.0-1.6
+// m/s), accelerates at 0.9 m/s^2 and brakes at 1.6 m/s^2 (both below the car's
+// 1.2-2.5 and 2.0-3.5), follows at a 2.8 s time gap (above the car's 1.0-2.0
+// s), and is permitted on paths and crossings (the car is path-only and the
+// pedestrian is also permitted in waiting areas).
+//
+// The template's id must not appear in any shared interaction, event, metric,
+// stage, or controller module: the components are meant to carry the
+// differences as data, so a branch on this id would mean mode-specific
+// dispatch. `crates/hekate-sim/tests/synthetic_template_no_branch.rs` is the
+// guard, and `crates/hekate-sim/src/sim.rs` drives the compiled components
+// through the shared stages.
+{
+  schema_version: 2,
+  id: 'synthetic_template_gate_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  movements: [
+    { id: 'through', from: 'entry', to: 'exit', path: 'guide', priority: 0,
+      direction: 'forward' },
+  ],
+  mode_templates: [
+    {
+      id: 'synthetic_hauler',
+      body: { kind: 'box', length_m: { min: 6.4, max: 6.4 },
+        width_m: { min: 2.4, max: 2.4 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'path', 'crossing' ] },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 3.4, max: 3.4 },
+        max_accel_mps2: { min: 0.9, max: 0.9 },
+        comfortable_brake_mps2: { min: 1.6, max: 1.6 },
+        time_gap_s: { min: 2.8, max: 2.8 },
+        compliance: { min: 0.4, max: 0.4 },
+      },
+    },
+  ],
+  demand: [
+    { id: 'hauler_inflow', mode: 'synthetic_hauler',
+      spawn: { rate: {
+        portal: 'entry',
+        rate_per_hour: 300.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+  ],
+}

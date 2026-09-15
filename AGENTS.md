@@ -1,29 +1,29 @@
 # AGENTS.md
 
-## Braintree is the work ledger (mandatory)
+## Tangle is the work ledger (mandatory)
 
-Non-trivial engineering work in this repo is tracked as Braintree nodes under
-`.braintree/`. Before planning or changing tracked work you MUST load the full
-Braintree skill (`SKILL.md`; `/skill:braintree` in pi) and follow it; its
+Non-trivial engineering work in this repo is tracked as Tangle nodes under
+`.tangle/`. Before planning or changing tracked work you MUST load the full
+Tangle skill (`SKILL.md`; `/skill:tangle` in pi) and follow it; its
 summary alone is not sufficient. Do not plan or track multi-step work from chat
 memory, and do not add ad-hoc TODO lists or plan documents.
 
-The vault root is the repository root. The installed `braintree` command fronts
+The vault root is the repository root. The installed `tangle` command fronts
 the skill, so run tooling from the repository root.
 
 Repo-specific conventions layered on the skill:
 
-- Run tooling as `braintree …`, for example `braintree check` to validate
-  the graph and `braintree index` to rebuild the optional sidecar index.
+- Run tooling as `tangle …`, for example `tangle check` to validate
+  the graph and `tangle index` to rebuild the optional sidecar index.
 - Every commit that implements tracked work references its node in the body:
   `Refs TAS-XXX` while the work continues, `Closes TAS-XXX` once the node's
   outcome is complete. Untracked commits are rejected in review.
-- Run `braintree check` before every handoff and before committing graph
+- Run `tangle check` before every handoff and before committing graph
   changes; a failing check blocks the commit. Fix the graph, not the checker.
 
 ## One session, one coherent slice (mandatory)
 
-A Braintree node is a durable outcome, not a session: one node may span many
+A Tangle node is a durable outcome, not a session: one node may span many
 sessions and one session may advance several frontier nodes. Size the work to the
 session, not the session to the node.
 
@@ -59,7 +59,7 @@ when a pointer requires it.
   `Depends on` pin, which stays reserved for context-bearing dependencies. A
   node that needs the context loads the linked node on demand; it does not
   restate it.
-- **Decompose freely, to any depth.** Braintree is a graph: a child, its child,
+- **Decompose freely, to any depth.** Tangle is a graph: a child, its child,
   and its child are all ordinary nodes. There is no mandated taxonomy depth and
   no required two-level shape. Break a problem into as many nodes as it has
   independently resumable outcomes, and chase the `next` route down the tree
@@ -76,37 +76,37 @@ when a pointer requires it.
   the slice to meet the node. Growing a slice to finish a node is the failure
   this section exists to prevent.
 
-## Record Braintree friction (mandatory)
+## Record Tangle friction (mandatory)
 
-Whenever planning, implementation, or analysis work that uses the Braintree
+Whenever planning, implementation, or analysis work that uses the Tangle
 skill struggles, capture the friction before handoff so it accumulates into
 later meta-analysis:
 
-- Record one `FBK` feedback node per session with `braintree feedback record`,
-  routed under `IDX-002-braintree-feedback`:
+- Record one `FBK` feedback node per session with `tangle feedback record`,
+  routed under `IDX-002-tangle-feedback`:
 
   ```sh
-  braintree feedback record \
-    --route 'Area [[IDX-002-braintree-feedback]]' \
+  tangle feedback record \
+    --route 'Area [[IDX-002-tangle-feedback]]' \
     --attempted '…' --friction '…' --improvement '…'
   ```
 
-  The command allocates the next `FBK` id, stamps `braintree_revision` from the
-  installed record, and writes `.braintree/proposed/FBK-<n>-<slug>.md`. Pass
+  The command allocates the next `FBK` id, stamps `tangle_revision` from the
+  installed record, and writes `.tangle/proposed/FBK-<n>-<slug>.md`. Pass
   `--route` explicitly: without it the command routes to the vault's root hub,
   not the feedback hub. Record findings; do not edit the installed skill or the
   sidecar in the same session.
-- Treat as friction: a rule the skill leaves unclear, a `braintree` result that
+- Treat as friction: a rule the skill leaves unclear, a `tangle` result that
   surprises you, a check that fails for a reason the skill does not explain, and
-  a judgment call that exposes a gap. A fresh-sidecar `braintree allocate`
-  returning an ID that already exists in `.braintree/` is a concrete example.
+  a judgment call that exposes a gap. A fresh-sidecar `tangle allocate`
+  returning an ID that already exists in `.tangle/` is a concrete example.
 - Put what happened, the exact command and observed output, the expected
   behavior, and a proposed change to `SKILL.md` or the tooling into the node's
   `--friction` and `--improvement` text. Extend the generated node by hand when
   one session has several findings.
-- Aggregate the notes into concrete Braintree improvements in a separate task
+- Aggregate the notes into concrete Tangle improvements in a separate task
   under the same hub; the notes are evidence, not the fix. Collect friction
-  already recorded in other vaults with `braintree feedback scan <vault>`.
+  already recorded in other vaults with `tangle feedback scan <vault>`.
 
 ## Commits
 
@@ -118,11 +118,11 @@ Always use [Conventional Commits](https://www.conventionalcommits.org/):
 
 - **Types**: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`,
   `revert`, `style`, `test`.
-- **Scope** is the affected subsystem or package, e.g. `tangle-sim`,
-  `tangle-model`, `cli`, `viewer`.
+- **Scope** is the affected subsystem or package, e.g. `hekate-sim`,
+  `hekate-model`, `cli`, `viewer`.
 - Keep the subject imperative, lowercase after the colon, and without a
   trailing period.
-- Add a body for non-trivial changes; reference the Braintree node as described
+- Add a body for non-trivial changes; reference the Tangle node as described
   in the work-ledger section above.
 - Mark breaking changes with `!` before the colon and a `BREAKING CHANGE:`
   footer.
