@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T11:05:12Z
+updated: 2026-09-15T11:13:30Z
 summary: Map Increment 2 state into presenter overlays with backend parity.
-next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]].
@@ -88,3 +87,50 @@ Validation: `cargo fmt --all`; `cargo test -p hekate-viewer` 9 pass; `cargo test
 hekate-viewer -p hekate-tui --all-targets` clean; `scripts/check-dependency-direction.sh` OK.
 No golden changed: the cell golden is a Phase 1 run with no tactical data, and the kitty golden
 truncates the footer row to its 8-column test width, so the new legend keys never reach it.
+
+## Five-gate validation (HEAD `94a19d9`)
+
+| # | Gate | Exit | Wall | Result |
+|---|------|------|------|--------|
+| 1 | `cargo fmt --all --check` | 0 | 1s | green |
+| 2 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 13s | green |
+| 3 | `cargo test --workspace --all-features` | 0 | 320s | green: 93 binaries, 1037 passed, 0 failed, 3 ignored |
+| 4 | `./scripts/check-dependency-direction.sh` | 0 | 1s | green: `dependency direction OK` |
+| 5 | `tangle check` | 0 | 0s | green: `graph check: passed (195 nodes)` |
+
+Done-when disposition (verified against the code, not the handoffs):
+
+- Presenter mapping with agent, partner, facility/movement, clearance, state, and
+  reason identifiers — met: `crates/hekate-present/src/tactical.rs` defines the
+  five `get`-identified overlay primitives and the `*_summary` inspector
+  functions; `SCENE_FORMAT_VERSION == 3`.
+- Both backends expose all five with deterministic declaration order — met:
+  viewer `draw_tactical_overlays` chains `corridor_shapes`→`target_offset_shapes`
+  →`predicted_gap_shapes`→`maneuver_shapes`→`wrong_way_shapes`; terminal
+  `Rasterizer::rasterize` calls `draw_corridors`→`draw_target_offsets`
+  →`draw_predicted_gaps`→`draw_maneuvers`→`draw_wrong_way` after `draw_safety`,
+  both matching `Overlay` declaration order.
+- Graceful absence for Phase 1/Increment 1 — met: every primitive is `Option`
+  gated and each fold is empty without its records (Phase 1 presenter golden has
+  `route_state: None` and an empty `tactical` fold); guarded by
+  `every_route_relative_overlay_is_flag_gated_and_absent_for_phase_1` and
+  `no_tactical_overlay_draws_without_route_state_or_an_open_interval`.
+- Version bump with rationale and regenerated goldens — met:
+  `SCENE_FORMAT_VERSION` 2 → 3 with the rationale in
+  `docs/body-kind-segment-output.md`; `tests/golden/present/
+  walking_guide_v1.seed0.tick20.scene.txt` regenerated with only the declared
+  additive diff.
+- No sim/scenario branch in shared modules — met:
+  `apps/hekate-tui/tests/presenter_no_special_case.rs`
+  (`no_shape_module_names_a_scenario_or_mode`) passes; `crates/hekate-present`
+  production code has no scenario/mode branch.
+
+Deferred (recorded, not blocking):
+
+- Kitty pixel renderer `apps/hekate-tui/src/pixel.rs` draws the safety overlay but
+  not the tactical ones; the default character-cell `Rasterizer` is the terminal
+  backend in scope. Parent pre-adjudicated this as a deferred follow-up.
+- One-line `CorridorOverlay` doc-comment inconsistency in
+  `crates/hekate-present/src/tactical.rs` (doc says `anchor + left*d`; committed
+  derivation and both backends use `anchor + left*(d - offset_m)`). Parent
+  pre-adjudicated this as a deferred doc nit.

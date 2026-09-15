@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T11:13:30Z
 summary: Present usable corridor, target offset, predicted gap, maneuver, and wrong-way overlays.
-next: [[TAS-135-map-increment-2-state-into-presenter-overlays-wi]]
+next: [[TAS-136-check-in-presenter-fixtures-and-the-negative-sou]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
