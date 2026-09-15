@@ -15,16 +15,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# nextest passes the ambient environment through to every test process, so this
+# export reaches the golden suites below without a cargo `--` passthrough.
 export UPDATE_GOLDENS=1
 
-cargo test -p hekate-present --test scene_golden
-cargo test -p hekate-tui --test golden_cells --test golden_kitty
+cargo nextest run -p hekate-present --test scene_golden
+cargo nextest run -p hekate-tui --test golden_cells --test golden_kitty
 
 # The Increment 2 trace goldens are recorded by their own suite, from the
 # in-process driver that supplies each fixture's maneuver request and from the
 # `run` command for the three fixtures the CLI can record. The three Standard
 # goldens of the CLI-recordable fixtures are also written byte for byte by the
 # explicit `hekate-cli run` lines in that suite's module docs.
-cargo test -p hekate-cli --test inc2_trace
+cargo nextest run -p hekate-cli --test inc2_trace
 
 echo "goldens regenerated"

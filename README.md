@@ -24,3 +24,8 @@ In the best case, it would be nice to find something which has some level
 of fidelity with real life intersections and their dangers. It would be even
 better if we could use such a system and simulation to identify common sense
 improvements.
+
+## Development
+
+The Rust dev loop — the touched-crate test run, the workspace gate, the doctest
+path, and the ignored harnesses — is in [`docs/dev-loop.md`](docs/dev-loop.md).

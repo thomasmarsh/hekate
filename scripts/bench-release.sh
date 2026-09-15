@@ -19,6 +19,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "${repo_root}"
 
 echo "release benchmark: building the release profile and running the ignored harness" >&2
-cargo test --release -p hekate-cli --test release_benchmark -- --ignored --nocapture
+cargo nextest run --release -p hekate-cli --test release_benchmark \
+  --run-ignored ignored-only --no-capture
 
 echo "release benchmark artifact: ${repo_root}/perf/release-bench.json" >&2

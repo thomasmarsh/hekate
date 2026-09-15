@@ -1,0 +1,21 @@
+# cargo-nextest configuration for the Hekate workspace.
+#
+# `cargo nextest` is the worker-loop and workspace test runner; `docs/dev-loop.md`
+# records the exact commands. nextest runs one process per test, so it never
+# needs `--test-threads` and must not be given a filter that drops tests.
+
+# Worker-loop profile, used by every `cargo nextest run` that does not name a
+# profile. It selects whatever cargo selects (`-p`, `--workspace`, `--test`,
+# `-E`) with no `default-filter`, so every non-ignored test runs; ignored release
+# harnesses stay out of the normal run and are reached with
+# `--run-ignored ignored-only`. No serial test group is defined: the only shared
+# on-disk write is the golden fixtures, and `scripts/regen-goldens.sh` writes
+# distinct files from one suite at a time under `UPDATE_GOLDENS=1`. Test scratch
+# space is per-process `std::env::temp_dir()` directories keyed by process id.
+[profile.default]
+
+# CI profile, selected with `--profile ci` or `NEXTEST_PROFILE=ci`. This is
+# nextest's documented CI profile: run all tests regardless of failures instead
+# of stopping at the first one. Nothing here changes which tests run.
+[profile.ci]
+fail-fast = false
