@@ -19,7 +19,9 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "${repo_root}"
 
 echo "release benchmark: building the release profile and running the ignored harness" >&2
-cargo nextest run --release -p hekate-cli --test release_benchmark \
+# --profile harness keeps the default profile's 20 s slow-timeout budget from
+# killing a run whose wall-clock measurement is deliberately in the minutes.
+cargo nextest run --profile harness --release -p hekate-cli --test release_benchmark \
   --run-ignored ignored-only --no-capture
 
 echo "release benchmark artifact: ${repo_root}/perf/release-bench.json" >&2

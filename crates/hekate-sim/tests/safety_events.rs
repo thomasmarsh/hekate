@@ -284,6 +284,7 @@ fn the_documented_tie_breakers_order_equal_tick_records() {
 }
 
 #[test]
+#[ignore = "slow: whole mixed-benchmark safety stream; run scripts/run-test-harness.sh"]
 fn the_mixed_benchmark_stream_is_ordered_deterministic_and_both_modes() {
     let first = collect(MIXED, 0, 4000);
     let again = collect(MIXED, 0, 4000);

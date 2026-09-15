@@ -128,6 +128,7 @@ fn trace_hash(path: &str, seed: u64, step_s: f64) -> String {
 /// Every checked-in narrow fixture runs twice at one fixed seed and produces one
 /// stable trace hash per preset.
 #[test]
+#[ignore = "slow: every narrow fixture at every preset; run scripts/run-test-harness.sh"]
 fn each_narrow_fixture_reproduces_its_trace_hash_at_every_preset() {
     for (id, path) in FIXTURES {
         for (preset, step_s) in PRESETS {
@@ -212,6 +213,7 @@ fn read_run_manifest(directory: &Path) -> RunManifest {
 /// each run manifest's stream hash to that hash, and cross-checks each against
 /// the canonical trace hash of the same run.
 #[test]
+#[ignore = "slow: seed-bank batch over every narrow fixture; run scripts/run-test-harness.sh"]
 fn the_narrow_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
     let scratch = Scratch::new("seed-bank-batch");
     let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");

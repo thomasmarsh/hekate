@@ -134,6 +134,7 @@ fn golden_run(scratch: &Scratch, index: usize) -> PathBuf {
 /// The golden is therefore the canonical stream of a run the determinism
 /// contract still reproduces, and each variant's CLI run happens once.
 #[test]
+#[ignore = "slow: whole-trace increment-6 golden and replay; run scripts/run-test-harness.sh"]
 fn the_increment6_variant_goldens_match_and_replay_verifies_them() {
     for (index, id) in IDS.iter().enumerate() {
         let scratch = Scratch::new(id);

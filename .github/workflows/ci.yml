@@ -69,6 +69,50 @@ jobs:
           ./scripts/check-no-legacy-tangle.sh
           ./scripts/check-no-legacy-tangle.sh --self-test
 
+  harness:
+    name: slow harness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies for Bevy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev \
+            libudev-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.144
+
+      - name: Check the ignored-test inventory
+        run: ./scripts/check-harness-inventory.sh
+
+      # The debug slow tests only: the release-mode wall-clock benchmarks run
+      # `--release` and rewrite `perf/release-bench.json`, which no pull request
+      # should touch. `scripts/run-test-harness.sh --release-benchmarks` adds
+      # them locally.
+      - name: Run the slow harness
+        run: ./scripts/run-test-harness.sh
+
   commits:
     name: conventional commit messages
     runs-on: ubuntu-latest

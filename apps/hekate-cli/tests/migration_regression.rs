@@ -279,6 +279,7 @@ fn every_checked_in_scenario_is_enumerated() {
 /// the gate as a checked-in, loadable, runnable scenario rather than an escape
 /// hatch.
 #[test]
+#[ignore = "slow: every checked-in scenario migrated and run; run scripts/run-test-harness.sh"]
 fn every_scenario_migrates_or_is_a_valid_version_2_document() {
     for path in checked_in_scenarios() {
         let text = read(&path);
@@ -339,6 +340,7 @@ fn every_scenario_migrates_or_is_a_valid_version_2_document() {
 /// is byte-identical, the header differs only in `schema_version`, and the
 /// migrated full-trace hash matches its pinned fixture.
 #[test]
+#[ignore = "slow: frozen-golden migration reproduction; run scripts/run-test-harness.sh"]
 fn migrated_frozen_runs_reproduce_their_golden_bodies_and_pinned_hashes() {
     for frozen in &FROZEN {
         let path = repo_path(frozen.scenario);

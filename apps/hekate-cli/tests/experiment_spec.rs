@@ -352,6 +352,7 @@ fn the_experiment_spec_and_bank_name_the_checked_in_inputs() {
 /// through the CLI, and `compare` pairs them, so the whole Increment 5 chain
 /// consumes these inputs without any source change.
 #[test]
+#[ignore = "slow: paired experiment over the seed bank; run scripts/run-test-harness.sh"]
 fn the_checked_in_experiment_runs_paired_from_the_seed_bank() {
     let spec = experiment();
     let scratch = Scratch::new("paired");

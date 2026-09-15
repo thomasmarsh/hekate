@@ -5,9 +5,12 @@ nextest runs one process per test, so it parallelizes without cargo's
 shared-process `--test-threads` and no test can leak state into another. The
 configuration is `.config/nextest.toml`.
 
-Install it once with `cargo install cargo-nextest --locked` (CI does the same
-with `taiki-e/install-action`); without it every command below fails with
-`error: no such command: nextest`.
+Install it once with `cargo install cargo-nextest --version 0.9.144 --locked` (CI
+installs the same version with `taiki-e/install-action`); without it every
+command below fails with `error: no such command: nextest`. The version is
+pinned because the default suite's cost budget is a nextest `slow-timeout`, and
+`docs/test-policy.md` records that budget, the default-versus-harness split, and
+the harness command.
 
 nextest does not run doctests, so they keep the `cargo test --doc` path below.
 
@@ -37,9 +40,11 @@ running anything.
 cargo nextest run --workspace --all-features
 ```
 
-That is the full gate: 1118 non-ignored tests across the workspace's test
+That is the full gate: every non-ignored test across the workspace's test
 binaries, the same selection `cargo test --workspace --all-features` makes over
-test binaries.
+test binaries. It is meant to be quick, so each test carries a 20 s SLOW budget
+and a 60 s hard fail (`.config/nextest.toml`); `docs/test-policy.md` defines what
+belongs in it and where the rest goes.
 
 ## Doctests
 
@@ -52,8 +57,24 @@ run this after the workspace gate. CI runs it as its own step.
 
 ## Ignored harnesses
 
-The workspace keeps three `#[ignore]`d harnesses out of the normal run. All three
-are release-mode wall-clock harnesses, and each test function's name differs from
+The workspace keeps its expensive cases out of the normal run: every benchmark,
+measurement, and long-horizon gate carries `#[ignore = "slow: ..."]`, and the
+three release-mode wall-clock harnesses carry their own
+`#[ignore = "release-mode wall-clock ..."]`. They are selected only by
+`scripts/run-test-harness.sh`, which runs them under the budget-free `harness`
+profile:
+
+```sh
+scripts/run-test-harness.sh                      # debug slow behavior and gate tests
+scripts/run-test-harness.sh --release-benchmarks # also the release-mode wall-clock tests
+```
+
+`scripts/check-harness-inventory.sh` fails when an `#[ignore]` test is not a
+declared harness target, so nothing can be ignored and never run;
+`docs/test-policy.md` records how to add a case. `scripts/bench-release.sh`
+wraps the release-mode end-to-end benchmark on its own.
+
+The three release-mode harnesses each have a test-function name that differs from
 the name of the test binary that contains it:
 `release_benchmark_writes_the_checked_in_artifact` in `hekate-cli`'s
 `release_benchmark`, `increment_2_profile_frame_time` in `hekate-present`'s
@@ -61,13 +82,13 @@ the name of the test binary that contains it:
 `performance_counters`. Run one explicitly with nextest's ignored-only switch:
 
 ```sh
-cargo nextest run --release --run-ignored ignored-only -p hekate-present --test presenter_frame_time --no-capture
-cargo nextest run --release --run-ignored ignored-only -p hekate-sim --test performance_counters --no-capture
-cargo nextest run --release --run-ignored ignored-only -p hekate-cli --test release_benchmark --no-capture
+cargo nextest run --profile harness --release --run-ignored ignored-only -p hekate-present --test presenter_frame_time --no-capture
+cargo nextest run --profile harness --release --run-ignored ignored-only -p hekate-sim --test performance_counters --no-capture
+cargo nextest run --profile harness --release --run-ignored ignored-only -p hekate-cli --test release_benchmark --no-capture
 ```
 
-`--no-capture` passes the harness's output through, and nextest runs that one
-test serially. `scripts/bench-release.sh` wraps the release-mode benchmark.
+`--no-capture` passes a wall-clock harness's output through, and nextest runs
+that one test serially.
 
 ## CI profile
 

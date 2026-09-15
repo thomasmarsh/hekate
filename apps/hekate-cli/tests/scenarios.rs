@@ -219,6 +219,7 @@ fn benchmark_demand_generates_routed_vehicles() {
 /// inside the sampled profile bounds, and no two bodies on the corridor
 /// overlap while faster followers catch slower leaders.
 #[test]
+#[ignore = "slow: car-following benchmark sweep; run scripts/run-test-harness.sh"]
 fn car_following_benchmark_obeys_controller_bounds_without_overlap() {
     let path = repo_path("scenarios/benchmarks/car_following_v1.json5");
     let step = 0.05;

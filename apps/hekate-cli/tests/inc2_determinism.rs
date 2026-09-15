@@ -252,6 +252,7 @@ fn assert_batch_hash_is_canonical(manifest: &BatchManifest, fixture: &Fixture) {
 /// batch's trace hash, and every recorded hash is the canonical trace hash of
 /// the same run.
 #[test]
+#[ignore = "slow: seed-bank batch over every fixture; run scripts/run-test-harness.sh"]
 fn the_inc2_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
     let scratch = Scratch::new("seed-bank-batch");
     let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");
@@ -337,6 +338,7 @@ fn the_inc2_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
 /// batch over the bank's seeds records the same hash the batch-over-bank path
 /// records, so the bank adds pairing without changing the runs.
 #[test]
+#[ignore = "slow: seed-bank batch over the declared seeds; run scripts/run-test-harness.sh"]
 fn the_declared_seed_bank_runs_the_same_traces_as_an_explicit_seed_list() {
     let scratch = Scratch::new("bank-vs-explicit");
     let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");

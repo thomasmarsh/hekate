@@ -284,6 +284,7 @@ fn run_report(text: &str, seed: u64, ticks: u64) -> RunReport {
 }
 
 #[test]
+#[ignore = "slow: 4000-tick pedestrian-crossing yield sweep; run scripts/run-test-harness.sh"]
 fn a_vehicle_holds_before_an_occupied_crossing_and_resumes() {
     let report = run_report(BENCHMARK, 0, 4000);
     assert!(
@@ -313,6 +314,7 @@ fn a_vehicle_holds_before_an_occupied_crossing_and_resumes() {
 }
 
 #[test]
+#[ignore = "slow: 4000-tick pedestrian-crossing yield sweep; run scripts/run-test-harness.sh"]
 fn yielding_emits_a_begin_and_an_end_transition_per_agent() {
     let report = run_report(BENCHMARK, 1, 4000);
     let mut yielding: BTreeMap<u32, bool> = BTreeMap::new();
@@ -341,6 +343,7 @@ fn yielding_emits_a_begin_and_an_end_transition_per_agent() {
 }
 
 #[test]
+#[ignore = "slow: 4000-tick pedestrian-crossing yield sweep; run scripts/run-test-harness.sh"]
 fn yielding_stays_within_the_comfort_bound_except_a_counted_cap_step() {
     // `run_report` asserts, per step, that any deceleration beyond a vehicle's
     // comfortable braking is a counted emergency-cap step. The comfortable
@@ -355,6 +358,7 @@ fn yielding_stays_within_the_comfort_bound_except_a_counted_cap_step() {
 }
 
 #[test]
+#[ignore = "slow: six-seed x 4000-tick pedestrian-crossing sweep; run scripts/run-test-harness.sh"]
 fn the_mixed_benchmark_has_no_vehicle_pedestrian_overlap_or_deadlock() {
     for seed in 0..6u64 {
         let report = run_report(BENCHMARK, seed, 4000);
@@ -385,6 +389,7 @@ fn the_mixed_benchmark_has_no_vehicle_pedestrian_overlap_or_deadlock() {
 }
 
 #[test]
+#[ignore = "slow: six-seed x 2000-tick pedestrian-crossing sweep; run scripts/run-test-harness.sh"]
 fn the_yield_rule_removes_the_slice_b_vehicle_overlap_residual() {
     let without = without_yield_rule();
     // Without the rule the benchmark still shows vehicle-initiated overlaps;
@@ -440,6 +445,7 @@ fn the_mixed_yielding_run_reproduces_for_the_same_seed() {
 }
 
 #[test]
+#[ignore = "slow: six-seed x 4000-tick pedestrian-crossing sweep; run scripts/run-test-harness.sh"]
 fn a_backward_vehicle_brakes_before_an_occupied_crossing() {
     // A movement that enters at the path end travels backward. The yield path
     // must use one progress convention: when the entry was measured as travel

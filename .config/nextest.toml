@@ -1,23 +1,41 @@
 # cargo-nextest configuration for the Hekate workspace.
 #
 # `cargo nextest` is the worker-loop and workspace test runner; `docs/dev-loop.md`
-# records the exact commands. nextest runs one process per test, so it never
-# needs `--test-threads` and must not be given a filter that drops tests.
+# records the exact commands and `docs/test-policy.md` records the cost budget
+# that keeps the default suite quick. nextest runs one process per test, so it
+# never needs `--test-threads` and must not be given a filter that drops tests.
 
 # Worker-loop profile, used by every `cargo nextest run` that does not name a
 # profile. It selects whatever cargo selects (`-p`, `--workspace`, `--test`,
-# `-E`) with no `default-filter`, so every non-ignored test runs; ignored release
-# harnesses stay out of the normal run and are reached with
-# `--run-ignored ignored-only`. No serial test group is defined: the only shared
-# on-disk write is the golden fixtures, and `scripts/regen-goldens.sh` rewrites
-# them under `UPDATE_GOLDENS=1`. One invocation runs the `golden_cells` and
-# `golden_kitty` suites together, but their fixture files are disjoint, so no two
-# test processes write the same file. Test scratch
-# space is per-process `std::env::temp_dir()` directories keyed by process id.
+# `-E`) with no `default-filter`, so every non-ignored test runs. The budget is
+# `slow-timeout`: a test that runs past 20 s is reported SLOW so the default
+# suite cannot drift back to expensive, and one past three periods (60 s) is
+# terminated and fails. Tests that belong in the slow harness are
+# `#[ignore = "slow: ..."]` and never run here; see `docs/test-policy.md`.
+# No serial test group is defined: the only shared on-disk write is the golden
+# fixtures, and `scripts/regen-goldens.sh` rewrites them under `UPDATE_GOLDENS=1`.
+# One invocation runs the `golden_cells` and `golden_kitty` suites together, but
+# their fixture files are disjoint, so no two test processes write the same file.
+# Test scratch space is per-process `std::env::temp_dir()` directories keyed by
+# process id.
 [profile.default]
+slow-timeout = { period = "20s", terminate-after = 3 }
 
 # CI profile, selected with `--profile ci` or `NEXTEST_PROFILE=ci`. This is
 # nextest's documented CI profile: run all tests regardless of failures instead
-# of stopping at the first one. Nothing here changes which tests run.
+# of stopping at the first one. Nothing here changes which tests run; the same
+# budget as the worker loop applies, because a CI run that stops at the first
+# failure must not hang on an unbounded test either.
 [profile.ci]
 fail-fast = false
+slow-timeout = { period = "20s", terminate-after = 3 }
+
+# Slow-harness profile, selected by `scripts/run-test-harness.sh`. It runs the
+# `#[ignore = "slow: ..."]` tests, which are the benchmarks, measurements, and
+# long-horizon gates the default suite excludes, so it carries no cost budget: a
+# 30-year period is nextest's documented "infinite" sentinel (the same value
+# `bench.slow-timeout` defaults to) and keeps the default profile's 20 s budget
+# from terminating a legitimate harness run. The profile still runs every test
+# the filterset selects; it defines no `default-filter`.
+[profile.harness]
+slow-timeout = { period = "30y" }

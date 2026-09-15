@@ -27,6 +27,11 @@ cargo nextest run -p hekate-tui --test golden_cells --test golden_kitty
 # `run` command for the three fixtures the CLI can record. The three Standard
 # goldens of the CLI-recordable fixtures are also written byte for byte by the
 # explicit `hekate-cli run` lines in that suite's module docs.
-cargo nextest run -p hekate-cli --test inc2_trace
+#
+# The golden-run cases are `#[ignore = "slow: ..."]` (docs/test-policy.md), so
+# regeneration selects them with `--run-ignored ignored-only` under the
+# budget-free `harness` profile; a plain run writes nothing.
+cargo nextest run --profile harness -p hekate-cli --test inc2_trace \
+  --run-ignored ignored-only
 
 echo "goldens regenerated"

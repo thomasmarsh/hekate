@@ -523,6 +523,7 @@ fn recorded_separation_matches_the_all_pairs_reference() {
 }
 
 #[test]
+#[ignore = "slow: PET convergence measurement over a full reference sweep; run scripts/run-test-harness.sh"]
 fn post_encroachment_time_matches_the_frame_reference_and_converges() {
     // The perpendicular-conflict benchmark carries unsynchronized demand across
     // one authored conflict region, so successive occupancies of that region by

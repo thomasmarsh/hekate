@@ -200,6 +200,7 @@ macro_rules! golden_run_cases {
     ($(($name:ident, $fixture_index:literal, $preset_index:literal)),+ $(,)?) => {
         $(
             #[test]
+            #[ignore = "slow: whole-trace inc2 golden run; run scripts/run-test-harness.sh"]
             fn $name() {
                 let (preset, step_s) = PRESETS[$preset_index];
                 assert_matches_golden(&FIXTURES[$fixture_index], preset, step_s);
@@ -538,6 +539,7 @@ impl Drop for Scratch {
 /// The scenario is passed absolute so the manifest records an absolute source
 /// path that `replay` resolves wherever the command runs.
 #[test]
+#[ignore = "slow: whole-trace inc2 golden run through the CLI; run scripts/run-test-harness.sh"]
 fn the_cli_run_and_replay_reproduce_the_standard_goldens_of_the_autonomous_fixtures() {
     for fixture in FIXTURES
         .iter()

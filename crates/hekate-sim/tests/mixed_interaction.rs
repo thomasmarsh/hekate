@@ -972,6 +972,7 @@ fn assert_one_ordered_safety_stream_for_both_modes(reports: &[RunReport]) {
 /// The sweep is the expensive part of this gate, so the three assertion
 /// families above read one sweep rather than each running its own.
 #[test]
+#[ignore = "slow: 24-seed x 4000-tick mixed-interaction safety sweep; run scripts/run-test-harness.sh"]
 fn the_mixed_benchmark_gate_holds_over_every_declared_seed() {
     let reports = sweep_reports();
     assert_completion_without_nan_overlap_or_deadlock(&reports);
