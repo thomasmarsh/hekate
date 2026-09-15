@@ -20,10 +20,11 @@ use tangle_cli::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_FILE,
     MANIFEST_FILE, METRICS_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest, RunMetrics,
     SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, TRAJECTORY_FILE, TRAJECTORY_FORMAT,
-    TrajectoryRetention, TrajectorySample, TrajectorySampling, canonical_run_captured,
-    load_scenario_provenance, read_trajectories, write_run_directory, write_trajectories,
+    TRAJECTORY_FORMAT_VERSION, TrajectoryRetention, TrajectorySample, TrajectorySampling,
+    canonical_run_captured, load_scenario_provenance, read_trajectories, write_run_directory,
+    write_trajectories,
 };
-use tangle_model::{BodyKind, CompiledScenario};
+use tangle_model::{BodyKind, CompiledScenario, MovementDirection, PermissionEffect};
 use tangle_sim::{RunConfig, Simulation, SnapshotDetail};
 
 /// The binary under test, built by Cargo for this integration test.
@@ -34,6 +35,75 @@ const WALKING: &str = "scenarios/walking/walking_guide_v1.json5";
 const MIXED: &str = "scenarios/benchmarks/mixed_interaction_v1.json5";
 const GOLDEN_SEED: u64 = 0;
 const GOLDEN_TICKS: u64 = 250;
+
+/// A version-2 fixture whose rider enters at the reference end and travels the
+/// facility's reverse traversal, against its authored forward nominal direction.
+/// A `nominal_direction` `permit` statement binds the pair, so every row the
+/// rider contributes carries the wrong-way rule state.
+const OPPOSING_V2: &str = r#"
+{
+  schema_version: 2,
+  id: 'opposing_state_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [ { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] } ],
+  portals: [
+    { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  boundaries: [ { id: 'world', points: [
+    { x: -10.0, y: -10.0 }, { x: 210.0, y: -10.0 },
+    { x: 210.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+  ] } ],
+  regions: [ { id: 'band', points: [
+    { x: 0.0, y: -1.5 }, { x: 200.0, y: -1.5 },
+    { x: 200.0, y: 1.5 }, { x: 0.0, y: 1.5 },
+  ] } ],
+  facilities: [
+    { id: 'bikeway', region: 'band', reference_path: 'guide',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'rider' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'against', from: 'exit', to: 'entry', path: 'guide', priority: 0,
+      direction: 'reverse' },
+  ],
+  mode_templates: [
+    {
+      id: 'rider',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 6.0, max: 6.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [
+    { id: 'contraflow_bikeway', kind: 'nominal_direction', holder: 'rider',
+      target: 'bikeway', effect: 'permit' },
+  ],
+  demand: [
+    { id: 'rider_inflow', mode: 'rider',
+      spawn: { rate: {
+        portal: 'exit',
+        rate_per_hour: 900.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'against', weight: 1.0 } ] },
+      } } },
+  ],
+}
+"#;
 
 /// A scratch working directory that is removed when the test ends.
 struct Scratch {
@@ -463,6 +533,131 @@ fn a_completed_run_with_trajectories_is_never_rewritten() {
             .len(),
         rows_before,
         "the rejected rerun replaced the sampled artifact"
+    );
+}
+
+/// The ordinary single-envelope rows the walking run's artifact holds: they
+/// carry no route state at all, so the rule-state columns stay null rather than
+/// defaulting to a direction or a rule.
+#[test]
+fn a_phase1_run_carries_no_rule_state_in_any_row() {
+    let scratch = Scratch::new("no-rule-state");
+    let run_dir = scratch.path("run");
+
+    write_golden_run(&run_dir, SamplingPolicy::default());
+    let samples = read_trajectories(&run_dir).expect("trajectories read back");
+
+    assert!(!samples.is_empty());
+    for sample in &samples {
+        assert_eq!(sample.route_s_m, None, "{sample:?}");
+        assert_eq!(sample.perceived_rule, None, "{sample:?}");
+        assert_eq!(sample.opposing_direction, None, "{sample:?}");
+    }
+}
+
+/// The artifact carries a real run's wrong-way rule state and a completed run
+/// directory that holds it is immutable: the rule-state rows round-trip through
+/// Parquet with the direction the body travels and the rule it perceived, the
+/// manifest names the file's exact bytes under the unchanged artifact version,
+/// and a rerun under another policy is refused with every byte untouched.
+#[test]
+fn the_artifact_records_rule_state_and_a_completed_run_stays_immutable() {
+    let scratch = Scratch::new("rule-state");
+    let scenario_path = scratch.path("opposing.json5");
+    std::fs::write(&scenario_path, OPPOSING_V2).expect("the fixture is written");
+    let (scenario, provenance) =
+        load_scenario_provenance(&scenario_path).expect("the fixture loads");
+    let policy = SamplingPolicy::full_trajectories();
+    let (trace, summary, trajectories, metrics) = canonical_run_captured(
+        scenario,
+        RunConfig::new(GOLDEN_SEED),
+        400,
+        &policy.trajectories,
+    )
+    .expect("the run completes");
+    let run_dir = scratch.path("run");
+    write_run_directory(
+        &run_dir,
+        RunDirectoryRequest {
+            scenario: &provenance,
+            seed: GOLDEN_SEED,
+            step_s: RunConfig::new(GOLDEN_SEED).step().as_secs(),
+            sampling: policy,
+            trace: &trace,
+            trajectories: &trajectories,
+            summary: &summary,
+            metrics: &metrics,
+        },
+    )
+    .expect("run directory is written");
+
+    let samples = read_trajectories(&run_dir).expect("trajectories read back");
+    let opposing: Vec<&TrajectorySample> = samples
+        .iter()
+        .filter(|sample| sample.opposing_direction.is_some())
+        .collect();
+    assert!(
+        !opposing.is_empty(),
+        "an opposing traversal must write the rule state"
+    );
+    for sample in &opposing {
+        assert_eq!(sample.opposing_direction, Some(MovementDirection::Reverse));
+        assert_eq!(sample.perceived_rule, Some(PermissionEffect::Permit));
+        assert!(sample.route_s_m.is_some(), "the state rides route state");
+    }
+
+    // The artifact is still version 3 and the descriptor names its exact bytes.
+    let manifest = read_manifest(&run_dir);
+    let artifact = manifest.trajectories.expect("the artifact descriptor");
+    assert_eq!(TRAJECTORY_FORMAT_VERSION, 3);
+    assert_eq!(artifact.format_version, TRAJECTORY_FORMAT_VERSION);
+    assert_eq!(
+        artifact.sha256,
+        file_sha256(&run_dir.join(TRAJECTORY_FILE)),
+        "the descriptor must name the file's exact bytes"
+    );
+    assert_eq!(artifact.rows, samples.len() as u64);
+
+    // A completed run directory is immutable, rule-state rows included.
+    let before = content_hashes(&run_dir);
+    let error = {
+        let (scenario, _) =
+            load_scenario_provenance(&scenario_path).expect("the fixture loads again");
+        let (trace, summary, trajectories, metrics) = canonical_run_captured(
+            scenario,
+            RunConfig::new(GOLDEN_SEED),
+            400,
+            &SamplingPolicy::default().trajectories,
+        )
+        .expect("the shorter-policy run completes");
+        write_run_directory(
+            &run_dir,
+            RunDirectoryRequest {
+                scenario: &provenance,
+                seed: GOLDEN_SEED,
+                step_s: RunConfig::new(GOLDEN_SEED).step().as_secs(),
+                sampling: SamplingPolicy::default(),
+                trace: &trace,
+                trajectories: &trajectories,
+                summary: &summary,
+                metrics: &metrics,
+            },
+        )
+        .expect_err("a completed run directory rejects a rerun")
+    };
+    assert!(
+        matches!(&error, RunDirectoryError::Completed { path } if path == &run_dir),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        content_hashes(&run_dir),
+        before,
+        "the rejected rerun mutated a completed artifact"
+    );
+    assert_eq!(
+        read_trajectories(&run_dir).expect("trajectories read back"),
+        samples,
+        "the rejected rerun replaced the rule-state rows"
     );
 }
 

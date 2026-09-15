@@ -5,7 +5,10 @@
 //! kernel.
 
 use glam::DVec2;
-use tangle_model::{BodyKind, CrossingId, FacilityId, MovementId, PathId, PedestrianRouteId};
+use tangle_model::{
+    BodyKind, CrossingId, FacilityId, MovementDirection, MovementId, PathId, PedestrianRouteId,
+    PermissionEffect,
+};
 
 use crate::agent::{AgentId, AgentMode};
 use crate::compliance::ComplianceDecision;
@@ -98,6 +101,13 @@ pub struct MotionSample {
 /// pose projected onto the compiled facility reference. A sample is present
 /// only for an agent that carries route state, so a consumer distinguishes
 /// "no route state" (`None`) from a coordinate of zero.
+///
+/// The wrong-way rule state ([`Self::perceived_rule`] and
+/// [`Self::opposing_direction`]) is the sparse part of the same sample: it is
+/// present only while the agent is actually on an opposing traversal, which is
+/// the state a rule-state transition record (an `OpposingTraversal` boundary)
+/// marks. Every other row carries it absent, and no row is added, removed, or
+/// repeated for a transition.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RouteStateSample {
     /// Arc length along the compiled facility reference in metres.
@@ -118,6 +128,18 @@ pub struct RouteStateSample {
     /// The mode's resolved feasible horizon in seconds, when its policy
     /// declares one.
     pub horizon_s: Option<f64>,
+    /// The wrong-way rule state the agent perceived on its object, present
+    /// exactly with [`Self::opposing_direction`]. It is the applicable
+    /// `nominal_direction` permission statement, absent when none binds the
+    /// pair, so a consumer reads why a body is on an opposing traversal
+    /// without a second lookup.
+    pub perceived_rule: Option<PermissionEffect>,
+    /// The direction the agent travels on an opposing traversal of its object,
+    /// the direction that opposes the object's rule direction. Present only
+    /// while the agent's traversal is against that rule direction, so a
+    /// nominal traversal, an `either` object with no rule direction, and an
+    /// agent without route state all leave it absent rather than defaulted.
+    pub opposing_direction: Option<MovementDirection>,
 }
 
 /// One agent as observed at a single instant.

@@ -1,9 +1,8 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-15T00:14:35Z
+updated: 2026-09-15T00:57:38Z
 summary: Record the wrong-way interval and rule-state trajectory.
-next: [[TAS-144-add-the-wrong-way-rule-state-to-trajectories-and]]
 ---
 
 Parent [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]].
@@ -33,9 +32,9 @@ and trajectory rule state; do not add the aggregate metrics.
 
 # Result
 
-Landed the interval half. The trajectory and snapshot rule-state columns are the
-remaining scope, split to
-[[TAS-144-add-the-wrong-way-rule-state-to-trajectories-and]].
+Both halves landed; the trajectory and snapshot rule-state columns were split to
+[[TAS-144-add-the-wrong-way-rule-state-to-trajectories-and]] and
+are reported in its `# Result`.
 
 - `crates/tangle-sim/src/wrong_way.rs` (`OpposingTraversalTracker`,
   `OpposingTraversalObservation`, `traversal_record`, `opposing_reason`): the

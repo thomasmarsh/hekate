@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 priority: P1
-updated: 2026-09-14T13:26:12Z
+updated: 2026-09-15T00:57:38Z
 summary: Record wrong-way rule intervals, state, exposure, encounters, and conflicts.
-next: [[TAS-123-record-the-wrong-way-interval-and-rule-state-tra]]
+next: [[TAS-124-add-disaggregated-wrong-way-metrics-and-version]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].

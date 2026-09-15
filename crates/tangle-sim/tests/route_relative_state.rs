@@ -13,10 +13,11 @@
 //! because the route frame is crate-internal.
 
 use tangle_model::{
-    AgentFamily, CompiledScenario, DemandId, MovementId, parse_scenario_source,
-    parse_scenario_source_v2,
+    AgentFamily, CompiledScenario, DemandId, DemandSpawnSource, FacilityDirection,
+    MovementDirection, MovementId, PermissionEffect, PermissionKind, PermissionSource,
+    parse_scenario_source, parse_scenario_source_v2,
 };
-use tangle_sim::{AgentMode, ManeuverState, RunConfig, Simulation, SnapshotDetail};
+use tangle_sim::{AgentId, AgentMode, Event, ManeuverState, RunConfig, Simulation, SnapshotDetail};
 
 /// A version-2 scenario: one capsule mode on a compiled `bikeway` facility that
 /// declares a lateral policy and a `pass` tactic, so the mode also compiles a
@@ -133,6 +134,51 @@ fn walking_sim(seed: u64) -> Simulation {
     Simulation::new(scenario, RunConfig::new(seed)).expect("the simulation builds")
 }
 
+/// A version-2 scenario whose rider enters at the reference end and travels the
+/// facility's reverse traversal, against the facility's authored forward nominal
+/// direction, with a `permit` statement binding the pair.
+fn opposing_source() -> tangle_model::ScenarioSourceV2 {
+    let mut source = parse_scenario_source_v2(ROUTE_STATE_V2).expect("the document is version 2");
+    source.movements[0].from = "exit".to_owned();
+    source.movements[0].to = "entry".to_owned();
+    source.movements[0].direction = MovementDirection::Reverse;
+    match &mut source.demand[0].spawn {
+        DemandSpawnSource::Rate(rate) => rate.portal = "exit".to_owned(),
+        DemandSpawnSource::Population(_) => panic!("the fixture's demand is a rate"),
+    }
+    source.permissions.push(PermissionSource {
+        id: "contraflow".to_owned(),
+        kind: PermissionKind::NominalDirection,
+        holder: "rider".to_owned(),
+        target: "bikeway".to_owned(),
+        effect: PermissionEffect::Permit,
+    });
+    source
+}
+
+/// Build the opposing-traversal simulation of [`opposing_source`].
+fn opposing_sim(seed: u64) -> Simulation {
+    let scenario = CompiledScenario::compile_v2(opposing_source()).expect("the scenario compiles");
+    Simulation::new(scenario, RunConfig::new(seed)).expect("the simulation builds")
+}
+
+/// Step until a live agent carries the wrong-way rule state and return it.
+fn live_opposing_agent(sim: &mut Simulation) -> (AgentId, MovementDirection) {
+    for _ in 0..1200 {
+        sim.step();
+        let frame = sim.snapshot(SnapshotDetail::Full);
+        for sample in frame.agents() {
+            let Some(route) = sample.motion.as_ref().and_then(|motion| motion.route_state) else {
+                continue;
+            };
+            if let Some(direction) = route.opposing_direction {
+                return (sample.id, direction);
+            }
+        }
+    }
+    panic!("a rider must reach the opposing traversal within 60 s");
+}
+
 /// Step until a steering agent is alive and return its position in the
 /// full-snapshot agent order.
 fn live_steering_agent(sim: &mut Simulation) -> usize {
@@ -211,6 +257,10 @@ fn a_steering_agent_spawns_with_route_coordinates_from_the_facility_projection()
     assert_eq!(route.target_offset_m, None);
     assert_eq!(route.target_facility, None);
     assert_eq!(route.predicted_min_clearance_m, None);
+    // Nominal travel carries no wrong-way rule state, so both columns stay
+    // absent rather than defaulted.
+    assert_eq!(route.perceived_rule, None);
+    assert_eq!(route.opposing_direction, None);
 }
 
 /// The pipeline keeps the tactical coordinates consistent with the integrated
@@ -402,4 +452,125 @@ fn a_steering_mode_without_a_lateral_policy_carries_absent_targets() {
         .expect("a wheeled mode still carries route coordinates");
     assert_eq!(route.target_clearance_m, None);
     assert_eq!(route.horizon_s, None);
+}
+
+/// A body travelling against its object's rule direction carries the wrong-way
+/// rule state: the direction it travels — the direction opposing the rule — and
+/// the permission statement it perceived. Both ride the same route state the
+/// agent already has, so a consumer reads why the body is on an opposing
+/// traversal without a second lookup.
+#[test]
+fn an_opposing_traversal_carries_its_perceived_rule_and_direction() {
+    let mut sim = opposing_sim(0);
+    let (agent, direction) = live_opposing_agent(&mut sim);
+
+    assert_eq!(direction, MovementDirection::Reverse);
+    let frame = sim.snapshot(SnapshotDetail::Full);
+    let sample = frame
+        .agents()
+        .iter()
+        .find(|sample| sample.id == agent)
+        .expect("the observed agent is live");
+    let route = sample
+        .motion
+        .as_ref()
+        .expect("full detail carries motion")
+        .route_state
+        .expect("a steering body carries route state");
+    assert_eq!(route.opposing_direction, Some(MovementDirection::Reverse));
+    assert_eq!(
+        route.perceived_rule,
+        Some(PermissionEffect::Permit),
+        "the applicable statement is the perceived rule"
+    );
+    assert!(
+        route.s_m >= 0.0,
+        "the state rides the object's extent: {}",
+        route.s_m
+    );
+}
+
+/// The rule state is derived from the traversal, not from a decision: the same
+/// authored reverse traversal under an `either` facility carries no rule
+/// direction and therefore no state, exactly as it opens no interval, so the
+/// columns stay absent rather than defaulting to a direction.
+#[test]
+fn an_either_object_carries_no_rule_state() {
+    let mut source = opposing_source();
+    source.facilities[0].nominal_direction = FacilityDirection::Either;
+    // A `nominal_direction` statement is about an opposite direction an
+    // `either` object does not have, so the fixture authors none.
+    source.permissions.clear();
+    let scenario = CompiledScenario::compile_v2(source).expect("the scenario compiles");
+    let mut sim = Simulation::new(scenario, RunConfig::new(1)).expect("the simulation builds");
+
+    let mut observed = 0;
+    for _ in 0..1200 {
+        sim.step();
+        for sample in sim.snapshot(SnapshotDetail::Full).agents() {
+            let Some(route) = sample.motion.as_ref().and_then(|motion| motion.route_state) else {
+                continue;
+            };
+            assert_eq!(
+                route.opposing_direction, None,
+                "an object with no rule direction carries no rule state"
+            );
+            assert_eq!(route.perceived_rule, None);
+            observed += 1;
+        }
+        if observed > 0 {
+            break;
+        }
+    }
+    assert!(observed > 0, "a rider must reach the facility");
+}
+
+/// The sampled rule state and the opposing-traversal boundary record the same
+/// instant: on the step an entry boundary is emitted for a body, that body's
+/// sample carries the boundary's own direction and perceived rule, so the two
+/// surfaces cannot drift apart.
+#[test]
+fn the_sampled_rule_state_agrees_with_the_interval_boundary() {
+    let mut sim = opposing_sim(2);
+    let mut checked = 0;
+    for _ in 0..1200 {
+        let output = sim.step();
+        let tick = output.time().tick();
+        let entries: Vec<(AgentId, MovementDirection, Option<PermissionEffect>)> = output
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::OpposingTraversal {
+                    agent,
+                    direction,
+                    perceived_rule,
+                    entering: true,
+                    ..
+                } => Some((*agent, *direction, *perceived_rule)),
+                _ => None,
+            })
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        let frame = sim.snapshot(SnapshotDetail::Full);
+        for (agent, direction, perceived_rule) in entries {
+            let sample = frame
+                .agents()
+                .iter()
+                .find(|sample| sample.id == agent)
+                .expect("an entering body is live at the boundary tick");
+            let route = sample
+                .motion
+                .as_ref()
+                .expect("full detail carries motion")
+                .route_state
+                .expect("a steering body carries route state");
+            assert_eq!(route.opposing_direction, Some(direction), "at tick {tick}");
+            assert_eq!(route.perceived_rule, perceived_rule, "at tick {tick}");
+            checked += 1;
+        }
+        break;
+    }
+    assert!(checked > 0, "the fixture must enter an opposing traversal");
 }

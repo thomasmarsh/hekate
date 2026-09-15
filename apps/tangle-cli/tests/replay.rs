@@ -18,7 +18,8 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
-use tangle_cli::{EVENT_STREAM_FILE, MANIFEST_FILE, RunManifest};
+use tangle_cli::{EVENT_STREAM_FILE, MANIFEST_FILE, RunManifest, read_trajectories};
+use tangle_model::{MovementDirection, PermissionEffect};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_tangle-cli");
@@ -26,6 +27,76 @@ const CLI: &str = env!("CARGO_BIN_EXE_tangle-cli");
 const WALKING: &str = "scenarios/walking/walking_guide_v1.json5";
 const GOLDEN_SEED: u64 = 0;
 const GOLDEN_TICKS: u64 = 250;
+
+/// A version-2 fixture whose rider enters at the reference end and travels the
+/// facility's reverse traversal, against its authored forward nominal direction,
+/// with a `nominal_direction` `permit` statement binding the pair. The run's
+/// sampled trajectories therefore carry the wrong-way rule state, which replay
+/// must leave exactly as recorded.
+const OPPOSING_V2: &str = r#"
+{
+  schema_version: 2,
+  id: 'opposing_state_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [ { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] } ],
+  portals: [
+    { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+    { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+  ],
+  boundaries: [ { id: 'world', points: [
+    { x: -10.0, y: -10.0 }, { x: 210.0, y: -10.0 },
+    { x: 210.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+  ] } ],
+  regions: [ { id: 'band', points: [
+    { x: 0.0, y: -1.5 }, { x: 200.0, y: -1.5 },
+    { x: 200.0, y: 1.5 }, { x: 0.0, y: 1.5 },
+  ] } ],
+  facilities: [
+    { id: 'bikeway', region: 'band', reference_path: 'guide',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: { modes: [ 'rider' ] }, lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'against', from: 'exit', to: 'entry', path: 'guide', priority: 0,
+      direction: 'reverse' },
+  ],
+  mode_templates: [
+    {
+      id: 'rider',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 6.0, max: 6.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [
+    { id: 'contraflow_bikeway', kind: 'nominal_direction', holder: 'rider',
+      target: 'bikeway', effect: 'permit' },
+  ],
+  demand: [
+    { id: 'rider_inflow', mode: 'rider',
+      spawn: { rate: {
+        portal: 'exit',
+        rate_per_hour: 900.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'against', weight: 1.0 } ] },
+      } } },
+  ],
+}
+"#;
 
 /// A scratch working directory that is removed when the test ends.
 struct Scratch {
@@ -212,6 +283,67 @@ fn replay_reproduces_the_recorded_stream_and_writes_no_artifact() {
         content_hashes(&run_dir),
         artifacts_before,
         "replay mutated the run directory"
+    );
+}
+
+/// A run directory whose trajectories carry the wrong-way rule state replays
+/// with verification, and replay leaves every recorded byte — the rule-state
+/// rows included — exactly as the run wrote them.
+#[test]
+fn replay_keeps_the_recorded_rule_state_and_touches_nothing() {
+    let scratch = Scratch::new("rule-state");
+    let scenario = scratch.path("opposing.json5");
+    std::fs::write(&scenario, OPPOSING_V2).expect("the fixture is written");
+    let seed = GOLDEN_SEED.to_string();
+    let output = Command::new(CLI)
+        .arg("run")
+        .arg(&scenario)
+        .args(["--seed", &seed, "--ticks", "400"])
+        .args(["--output", "trace.jsonl", "--run-dir", "run"])
+        .arg("--full-trajectories")
+        .current_dir(&scratch.dir)
+        .output()
+        .expect("tangle-cli runs");
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+
+    let run_dir = scratch.path("run");
+    let samples = read_trajectories(&run_dir).expect("trajectories read back");
+    let opposing: Vec<_> = samples
+        .iter()
+        .filter(|sample| sample.opposing_direction.is_some())
+        .collect();
+    assert!(
+        !opposing.is_empty(),
+        "the recorded run must carry the wrong-way rule state"
+    );
+    for sample in &opposing {
+        assert_eq!(sample.opposing_direction, Some(MovementDirection::Reverse));
+        assert_eq!(sample.perceived_rule, Some(PermissionEffect::Permit));
+    }
+
+    let before = content_hashes(&run_dir);
+    let verified = replay(&scratch, "run", &["--verify"]);
+
+    assert_eq!(
+        verified.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&verified)
+    );
+    assert!(
+        stderr(&verified).contains("replay verified:"),
+        "unexpected message: {}",
+        stderr(&verified)
+    );
+    assert_eq!(
+        content_hashes(&run_dir),
+        before,
+        "replay mutated the run directory"
+    );
+    assert_eq!(
+        read_trajectories(&run_dir).expect("trajectories read back"),
+        samples,
+        "replay replaced the recorded rule-state rows"
     );
 }
 

@@ -33,7 +33,7 @@ use parquet::basic::Compression;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use tangle_model::BodyKind;
+use tangle_model::{BodyKind, MovementDirection, PermissionEffect};
 use tangle_sim::{BodySegmentSample, ManeuverState, Simulation, SnapshotDetail};
 
 use crate::run_dir::TrajectorySampling;
@@ -48,14 +48,16 @@ pub const TRAJECTORY_FORMAT: &str = "parquet";
 /// Version of the sampled-trajectory artifact's column shape.
 ///
 /// Version 3 appends the optional route-relative tactical columns
-/// `route_s_m`, `route_d_m`, `target_offset_m`, `maneuver_state`, and
-/// `predicted_min_clearance_m`, so a run directory's trajectories describe a
-/// steering body's route coordinates and maneuver state where it has them and
-/// stay absent (`null`) where it does not. They are additive: no existing
-/// column changes meaning or position, and a run that authors no Increment 2
-/// policy writes `null` in each. Version 2 added `body_kind` and the ordered
-/// `segments` pose list; version 1 was the seven columns `tick`, `agent`,
-/// `mode`, `x_m`, `y_m`, `heading_rad`, and `speed_mps`.
+/// `route_s_m`, `route_d_m`, `target_offset_m`, `maneuver_state`,
+/// `predicted_min_clearance_m`, `perceived_rule`, and `opposing_direction`, so a
+/// run directory's trajectories describe a steering body's route coordinates,
+/// maneuver state, and wrong-way rule state where it has them and stay absent
+/// (`null`) where it does not. They are additive: no existing column changes
+/// meaning or position, and a run that authors no Increment 2 policy writes
+/// `null` in each. The whole additive column union lands under this one version,
+/// so the rule-state columns add no second bump. Version 2 added `body_kind` and
+/// the ordered `segments` pose list; version 1 was the seven columns `tick`,
+/// `agent`, `mode`, `x_m`, `y_m`, `heading_rad`, and `speed_mps`.
 pub const TRAJECTORY_FORMAT_VERSION: u32 = 3;
 
 /// The trajectory columns, in schema and declaration order.
@@ -64,10 +66,13 @@ pub const TRAJECTORY_FORMAT_VERSION: u32 = 3;
 /// contract: a consumer that reads by position and one that reads by name see
 /// the same record. Units are spelled into the names, as the event records do.
 /// `segments` is an ordered list of `{x_m, y_m, heading_rad}` poses, empty for a
-/// Phase 1 single-envelope body and never null. The final five columns are the
+/// Phase 1 single-envelope body and never null. The final seven columns are the
 /// optional route-relative tactical state: they are `null` for a pedestrian and
 /// a legacy version-1 path-following agent, which carry no route coordinates.
-/// The third tuple field is the column's nullability.
+/// `perceived_rule` and `opposing_direction` are the wrong-way rule state, so
+/// they are null in every row that is not on an opposing traversal: the state is
+/// sparse by nature, and a rule-state transition is an event record, never an
+/// extra row here. The third tuple field is the column's nullability.
 fn trajectory_columns() -> Vec<(&'static str, DataType, bool)> {
     vec![
         ("tick", DataType::UInt64, false),
@@ -84,6 +89,8 @@ fn trajectory_columns() -> Vec<(&'static str, DataType, bool)> {
         ("target_offset_m", DataType::Float64, true),
         ("maneuver_state", DataType::Utf8, true),
         ("predicted_min_clearance_m", DataType::Float64, true),
+        ("perceived_rule", DataType::Utf8, true),
+        ("opposing_direction", DataType::Utf8, true),
     ]
 }
 
@@ -140,6 +147,15 @@ pub struct TrajectorySample {
     pub maneuver_state: Option<ManeuverState>,
     /// Predicted minimum clearance over the maneuver horizon, once predicted.
     pub predicted_min_clearance_m: Option<f64>,
+    /// The applicable `nominal_direction` permission statement the agent
+    /// perceived, present exactly with `opposing_direction` and absent when no
+    /// statement binds the pair.
+    pub perceived_rule: Option<PermissionEffect>,
+    /// The direction the agent travels on its opposing traversal of the object
+    /// whose rule direction it is against, present only while it is on such a
+    /// traversal: a nominal traversal, an `either` object, and an agent without
+    /// route state all stay absent.
+    pub opposing_direction: Option<MovementDirection>,
 }
 
 /// The Parquet sampled-trajectory artifact a manifest describes.
@@ -260,6 +276,8 @@ impl TrajectoryRecorder {
                 target_offset_m: route.and_then(|route| route.target_offset_m),
                 maneuver_state: route.map(|route| route.maneuver_state),
                 predicted_min_clearance_m: route.and_then(|route| route.predicted_min_clearance_m),
+                perceived_rule: route.and_then(|route| route.perceived_rule),
+                opposing_direction: route.and_then(|route| route.opposing_direction),
             });
         }
     }
@@ -424,6 +442,12 @@ fn record_batch(schema: &SchemaRef, samples: &[TrajectorySample]) -> RecordBatch
                 .map(|sample| sample.predicted_min_clearance_m)
                 .collect::<Vec<_>>(),
         )),
+        Arc::new(StringArray::from_iter(samples.iter().map(|sample| {
+            sample.perceived_rule.map(PermissionEffect::label)
+        }))),
+        Arc::new(StringArray::from_iter(samples.iter().map(|sample| {
+            sample.opposing_direction.map(MovementDirection::label)
+        }))),
     ];
     RecordBatch::try_new(schema.clone(), columns)
         .expect("every column of the trajectory schema has the row count")
@@ -491,6 +515,8 @@ struct TrajectoryColumns<'a> {
     target_offset: &'a Float64Array,
     maneuver_states: Vec<Option<ManeuverState>>,
     predicted_min_clearances: &'a Float64Array,
+    perceived_rules: Vec<Option<PermissionEffect>>,
+    opposing_directions: Vec<Option<MovementDirection>>,
 }
 
 impl<'a> TrajectoryColumns<'a> {
@@ -543,21 +569,21 @@ impl<'a> TrajectoryColumns<'a> {
                 })
             })
             .collect::<Result<_, _>>()?;
-        let maneuver_states = downcast::<StringArray>(batch, 12)
-            .iter()
-            .map(|label| {
-                label
-                    .map(|label| {
-                        ManeuverState::from_label(label).ok_or_else(|| {
-                            schema_error(
-                                path,
-                                format!("the maneuver-state column holds unknown state '{label}'"),
-                            )
-                        })
-                    })
-                    .transpose()
-            })
-            .collect::<Result<_, _>>()?;
+        let maneuver_states = labels(batch, path, 12, "maneuver-state", ManeuverState::from_label)?;
+        let perceived_rules = labels(
+            batch,
+            path,
+            14,
+            "perceived-rule",
+            permission_effect_from_label,
+        )?;
+        let opposing_directions = labels(
+            batch,
+            path,
+            15,
+            "opposing-direction",
+            movement_direction_from_label,
+        )?;
         // The schema check above proves each column's type, so the downcasts
         // cannot fail.
         Ok(Self {
@@ -575,6 +601,8 @@ impl<'a> TrajectoryColumns<'a> {
             target_offset: downcast(batch, 11),
             maneuver_states,
             predicted_min_clearances: downcast(batch, 13),
+            perceived_rules,
+            opposing_directions,
         })
     }
 
@@ -595,6 +623,8 @@ impl<'a> TrajectoryColumns<'a> {
             target_offset_m: optional_float(self.target_offset, row),
             maneuver_state: self.maneuver_states[row],
             predicted_min_clearance_m: optional_float(self.predicted_min_clearances, row),
+            perceived_rule: self.perceived_rules[row],
+            opposing_direction: self.opposing_directions[row],
         }
     }
 }
@@ -641,6 +671,54 @@ fn body_kind_from_label(label: &str) -> Option<BodyKind> {
     ]
     .into_iter()
     .find(|kind| kind.label() == label)
+}
+
+/// Parse a permission-effect label back, the inverse of
+/// [`PermissionEffect::label`].
+fn permission_effect_from_label(label: &str) -> Option<PermissionEffect> {
+    [
+        PermissionEffect::Permit,
+        PermissionEffect::Prohibit,
+        PermissionEffect::Obligate,
+    ]
+    .into_iter()
+    .find(|effect| effect.label() == label)
+}
+
+/// Parse a movement-direction label back, the inverse of
+/// [`MovementDirection::label`].
+fn movement_direction_from_label(label: &str) -> Option<MovementDirection> {
+    [MovementDirection::Forward, MovementDirection::Reverse]
+        .into_iter()
+        .find(|direction| direction.label() == label)
+}
+
+/// One checked label column of an Arrow batch, decoded through `parse`.
+///
+/// A cell that holds no label is an absent value; an unknown label is a schema
+/// error rather than a silently dropped state.
+fn labels<T>(
+    batch: &RecordBatch,
+    path: &Path,
+    index: usize,
+    name: &str,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Vec<Option<T>>, TrajectoryError> {
+    downcast::<StringArray>(batch, index)
+        .iter()
+        .map(|label| {
+            label
+                .map(|label| {
+                    parse(label).ok_or_else(|| {
+                        schema_error(
+                            path,
+                            format!("the {name} column holds unknown label '{label}'"),
+                        )
+                    })
+                })
+                .transpose()
+        })
+        .collect()
 }
 
 /// One checked column of an Arrow batch.
@@ -716,13 +794,16 @@ mod tests {
                 target_offset_m: None,
                 maneuver_state: None,
                 predicted_min_clearance_m: None,
+                perceived_rule: None,
+                opposing_direction: None,
             }]
         );
     }
 
-    /// The artifact round-trips the optional route-relative tactical columns,
-    /// including their absence, so a consumer reads the same route state the
-    /// kernel reported and a legacy row stays absent rather than zero.
+    /// The artifact round-trips the optional route-relative tactical columns and
+    /// the wrong-way rule state, including their absence, so a consumer reads
+    /// the same route state the kernel reported and a legacy row stays absent
+    /// rather than zero.
     #[test]
     fn the_artifact_round_trips_optional_route_state() {
         let present = TrajectorySample {
@@ -740,6 +821,8 @@ mod tests {
             target_offset_m: Some(1.75),
             maneuver_state: Some(ManeuverState::Returning),
             predicted_min_clearance_m: Some(0.6),
+            perceived_rule: Some(PermissionEffect::Permit),
+            opposing_direction: Some(MovementDirection::Reverse),
         };
         let absent = TrajectorySample {
             route_s_m: None,
@@ -747,6 +830,8 @@ mod tests {
             target_offset_m: None,
             maneuver_state: None,
             predicted_min_clearance_m: None,
+            perceived_rule: None,
+            opposing_direction: None,
             ..present.clone()
         };
         let rows = vec![present, absent];
@@ -785,6 +870,8 @@ mod tests {
                 target_offset_m: None,
                 maneuver_state: None,
                 predicted_min_clearance_m: None,
+                perceived_rule: None,
+                opposing_direction: None,
             };
         let rows = vec![
             sample(0, BodyKind::Box, Vec::new()),
@@ -901,6 +988,75 @@ mod tests {
     }
     "#;
 
+    /// A version-2 narrow mode whose demand selects a compiled facility whose
+    /// authored nominal direction is forward, travelling the facility's reverse
+    /// traversal: a `nominal_direction` `permit` statement binds the pair, so
+    /// every rode row carries the rule state.
+    const OPPOSING_V2: &str = r#"
+    {
+      schema_version: 2,
+      id: 'opposing_state_v2',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [ { id: 'guide', points: [ { x: 0.0, y: 0.0 }, { x: 200.0, y: 0.0 } ] } ],
+      portals: [
+        { id: 'entry', path: 'guide', end: 'start', width_m: 3.5 },
+        { id: 'exit', path: 'guide', end: 'end', width_m: 3.5 },
+      ],
+      boundaries: [ { id: 'world', points: [
+        { x: -10.0, y: -10.0 }, { x: 210.0, y: -10.0 },
+        { x: 210.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+      ] } ],
+      regions: [ { id: 'band', points: [
+        { x: 0.0, y: -1.5 }, { x: 200.0, y: -1.5 },
+        { x: 200.0, y: 1.5 }, { x: 0.0, y: 1.5 },
+      ] } ],
+      facilities: [
+        { id: 'bikeway', region: 'band', reference_path: 'guide',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: { modes: [ 'rider' ] }, lateral_use: 'shared',
+          speed_policy: { limit_mps: null } },
+      ],
+      movements: [
+        { id: 'against', from: 'exit', to: 'entry', path: 'guide', priority: 0,
+          direction: 'reverse' },
+      ],
+      mode_templates: [
+        {
+          id: 'rider',
+          body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+            radius_m: { min: 0.35, max: 0.35 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 6.0, max: 6.0 },
+            max_accel_mps2: { min: 1.2, max: 1.2 },
+            comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+            time_gap_s: { min: 1.0, max: 1.0 },
+            steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+            lateral_clearance_m: { min: 0.3, max: 0.3 },
+            compliance: { min: 1.0, max: 1.0 },
+          },
+        },
+      ],
+      permissions: [
+        { id: 'contraflow_bikeway', kind: 'nominal_direction', holder: 'rider',
+          target: 'bikeway', effect: 'permit' },
+      ],
+      demand: [
+        { id: 'rider_inflow', mode: 'rider',
+          spawn: { rate: {
+            portal: 'exit',
+            rate_per_hour: 900.0,
+            interval_s: { start_s: 0.0, end_s: null },
+            choice: { movements: [ { movement: 'against', weight: 1.0 } ] },
+          } } },
+      ],
+    }
+    "#;
+
     /// The recorder reads a real run's route state into the artifact: a
     /// steering body on a compiled facility writes non-null `route_s_m`,
     /// `route_d_m`, and `maneuver_state`, while the maneuver targets it has not
@@ -938,6 +1094,78 @@ mod tests {
             assert_eq!(sample.maneuver_state, Some(ManeuverState::Following));
             assert_eq!(sample.target_offset_m, None);
             assert_eq!(sample.predicted_min_clearance_m, None);
+            assert_eq!(
+                sample.opposing_direction, None,
+                "a forward-nominal facility's riders are never on an opposing traversal"
+            );
+            assert_eq!(sample.perceived_rule, None);
         }
+    }
+
+    /// The recorder reads a real run's wrong-way rule state into the artifact: a
+    /// rider whose authored traversal is against its facility's rule direction
+    /// writes a non-null `opposing_direction` and the `perceived_rule` the
+    /// compiled statement binds. The state changes no row: the artifact holds
+    /// exactly the live agent frames of the same run replayed straight through
+    /// the kernel.
+    #[test]
+    fn an_opposing_run_records_its_rule_state_into_the_artifact() {
+        use tangle_model::{CompiledScenario, parse_scenario_source_v2};
+
+        let policy = TrajectorySampling {
+            retention: crate::run_dir::TrajectoryRetention::Full,
+            stride_ticks: 1,
+            max_samples: 400,
+        };
+        let compile = || {
+            let source = parse_scenario_source_v2(OPPOSING_V2).expect("the document is version 2");
+            CompiledScenario::compile_v2(source).expect("the scenario compiles")
+        };
+        let (_, _, samples) = crate::trace::canonical_run_sampled(
+            compile(),
+            tangle_sim::RunConfig::new(0),
+            400,
+            &policy,
+        )
+        .expect("the run completes");
+
+        let opposing: Vec<&TrajectorySample> = samples
+            .iter()
+            .filter(|sample| sample.opposing_direction.is_some())
+            .collect();
+        assert!(
+            !opposing.is_empty(),
+            "a rider travelling against its facility's rule direction carries the rule state"
+        );
+        for sample in &opposing {
+            assert_eq!(sample.opposing_direction, Some(MovementDirection::Reverse));
+            assert_eq!(
+                sample.perceived_rule,
+                Some(PermissionEffect::Permit),
+                "the applicable statement is the perceived rule"
+            );
+            assert!(sample.route_s_m.is_some(), "the state rides route state");
+        }
+
+        // No row is added or duplicated for a rule-state transition: the rows are
+        // exactly one per live agent frame of the same run replayed directly.
+        let mut sim = Simulation::new(compile(), tangle_sim::RunConfig::new(0))
+            .expect("the simulation builds");
+        let mut frames = Vec::new();
+        for _ in 0..400 {
+            sim.step();
+            let tick = sim.time().tick();
+            for agent in sim.snapshot(SnapshotDetail::Full).agents() {
+                frames.push((tick, agent.id.get()));
+            }
+        }
+        let recorded: Vec<(u64, u32)> = samples
+            .iter()
+            .map(|sample| (sample.tick, sample.agent))
+            .collect();
+        assert_eq!(
+            recorded, frames,
+            "the rule state must add no sampled row and drop none"
+        );
     }
 }

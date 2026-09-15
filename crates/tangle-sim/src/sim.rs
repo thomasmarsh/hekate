@@ -40,9 +40,9 @@ use tangle_model::{
     AdjacencySide, AgentFamily, CommitPolicySource, CompiledFacilityAdjacency, CompiledMovement,
     CompiledPath, CompiledPedestrianRoute, CompiledReferencePath, CompiledScenario, CrossingId,
     DemandId, FacilityId, FacilityTraversal, LateralTransition, ModeTemplateId, MovementDirection,
-    MovementId, PassingSide, PathEnd, PathId, PedestrianDemandId, PedestrianRouteId,
-    PermissionEffect, PortalId, RuleKind, SignalColor, SignalId, TacticKind, TacticalCapability,
-    TraversalTransitions,
+    MovementId, NominalDirection, PassingSide, PathEnd, PathId, PedestrianDemandId,
+    PedestrianRouteId, PermissionEffect, PortalId, RuleKind, SignalColor, SignalId, TacticKind,
+    TacticalCapability, TraversalTransitions,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
@@ -527,15 +527,20 @@ impl Simulation {
                         decision: self.agents.decision[index],
                         pedestrian_decision: self.agents.pedestrian_decision[index],
                         yield_crossing: self.agents.yield_crossing[index],
-                        route_state: self.agents.route_state[index].map(|state| RouteStateSample {
-                            s_m: state.s_m,
-                            d_m: state.d_m,
-                            maneuver_state: state.maneuver,
-                            target_offset_m: state.target_offset_m,
-                            target_facility: state.target_facility,
-                            predicted_min_clearance_m: state.predicted_min_clearance_m,
-                            target_clearance_m: state.target_clearance_m,
-                            horizon_s: state.horizon_s,
+                        route_state: self.agents.route_state[index].map(|state| {
+                            let rule_state = self.wrong_way_rule_state(index, state);
+                            RouteStateSample {
+                                s_m: state.s_m,
+                                d_m: state.d_m,
+                                maneuver_state: state.maneuver,
+                                target_offset_m: state.target_offset_m,
+                                target_facility: state.target_facility,
+                                predicted_min_clearance_m: state.predicted_min_clearance_m,
+                                target_clearance_m: state.target_clearance_m,
+                                horizon_s: state.horizon_s,
+                                perceived_rule: rule_state.and_then(|(rule, _)| rule),
+                                opposing_direction: rule_state.map(|(_, direction)| direction),
+                            }
                         }),
                     }),
                 },
@@ -543,6 +548,62 @@ impl Simulation {
             .collect();
 
         Snapshot::new(self.scenario.id().to_owned(), self.time(), detail, agents)
+    }
+
+    /// The wrong-way rule state of one agent, or `None` when it carries none.
+    ///
+    /// The state is the contract's opposing-traversal rule state and is present
+    /// exactly while the agent's body centre lies inside its object's compiled
+    /// reference extent and its traversal direction is against the object's
+    /// rule direction, the object's authored nominal direction. An `either`
+    /// object has no rule direction, a facility without a reference path has no
+    /// extent, and nominal travel is not counted at all, so each carries no
+    /// state. That is the predicate the opposing-traversal interval opens and
+    /// closes on ([`crate::wrong_way::traversal_record`]), so the direction and
+    /// rule a row carries agree with the `OpposingTraversal` boundary of the same
+    /// tick: the interval is the sparse event record, and this is the per-row
+    /// state it marks.
+    ///
+    /// The value is the direction the agent travels — the direction opposing the
+    /// rule — together with the rule it perceived: the most recent wrong-way
+    /// decision's own perceived rule when that decision selected the opposing
+    /// option on this facility, and otherwise the applicable compiled traversal
+    /// policy's nominal effect, exactly as the interval record reads it.
+    fn wrong_way_rule_state(
+        &self,
+        index: usize,
+        state: RouteState,
+    ) -> Option<(Option<PermissionEffect>, MovementDirection)> {
+        let facility = self.scenario.facility(state.facility)?;
+        let length_m = facility.reference()?.geometry().length();
+        if !(0.0..=length_m).contains(&state.s_m) {
+            return None;
+        }
+        let rule_direction = match facility.nominal_direction() {
+            NominalDirection::Forward => MovementDirection::Forward,
+            NominalDirection::Reverse => MovementDirection::Reverse,
+            NominalDirection::Either => return None,
+        };
+        let direction = movement_direction(self.agents.direction[index]);
+        if direction == rule_direction {
+            return None;
+        }
+        let perceived_rule = state
+            .wrong_way_decision
+            .filter(|decision| {
+                decision.option == WrongWayOption::Opposing && decision.facility == state.facility
+            })
+            .map(|decision| decision.perceived_rule)
+            .unwrap_or_else(|| {
+                self.scenario
+                    .traversal_policy(
+                        state.mode_template,
+                        state.facility,
+                        self.agents.movement[index],
+                    )
+                    .and_then(|policy| policy.nominal_effect())
+            });
+        Some((perceived_rule, direction))
     }
 
     /// Consume the simulation and report what happened.
