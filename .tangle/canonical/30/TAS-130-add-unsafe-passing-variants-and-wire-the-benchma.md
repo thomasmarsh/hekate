@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T05:23:07Z
+updated: 2026-09-15T05:29:52Z
 summary: Add unsafe-passing variants and wire the benchmark matrix.
-next: Resolve this node once a reviewer accepts the two variants' rejection/violation evidence and the three wired passing entries.
 ---
 
 Parent [[TAS-106-check-in-increment-2-passing-fixtures]].
@@ -30,7 +29,10 @@ Gated on [[TAS-095-complete-lane-transitions-and-safe-aborts]].
 Gated on [[TAS-101-measure-close-passes-with-exact-clearance-evidence]].
 Extends [[TAS-106-check-in-increment-2-passing-fixtures]]; reads the fixture gates
 in [[THO-016-increment-2-event-metric-trajectory-presenter-an]]. Owns the unsafe
-variants and the matrix wiring; the core fixtures are the sibling slice.
+variants and the matrix wiring; the core fixtures are the sibling slice. The
+accepted evidence below is measured at the Standard (0.05 s) preset;
+[[TAS-133-reproduce-every-increment-2-fixture-and-golden-i]] extends it to the
+other matrix presets.
 
 # Result
 
@@ -76,3 +78,24 @@ drawn per tick, so the Fine and Fast presets admit only the leader within the
 same simulated horizon (measured at 0.02 s / 4750 ticks). Per-preset
 reproduction needs the demand re-pinned and belongs to the reproducibility
 slice.
+
+## Gate evidence
+
+Fresh `gate130` run from the repository root on `a56d688`:
+
+| gate | command | exit | wall s | result |
+| --- | --- | --- | --- | --- |
+| format | `cargo fmt --all --check` | 0 | 1.1 | clean |
+| lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 1.5 | clean |
+| test | `cargo test --workspace --all-features` | 0 | 179.6 | 998 passed, 0 failed, 1 ignored |
+| dependency direction | `./scripts/check-dependency-direction.sh` | 0 | 0.7 | `dependency direction OK` |
+| graph | `tangle check` | 0 | 0.4 | `graph check: passed (194 nodes)` |
+
+Preset clause, recorded as delegated and not claimed: the "tests run every
+relevant fixture at the matrix presets" clause of this node's `# Done when` is
+NOT executed by this node's suite, which runs the five fixtures only at the
+pinned Standard (0.05 s) step. Per-preset reproduction is delivered by
+[[TAS-133-reproduce-every-increment-2-fixture-and-golden-i]] (child of
+[[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]]), which is
+gated on [[TAS-106-check-in-increment-2-passing-fixtures]]. No preset coverage is
+claimed here.
