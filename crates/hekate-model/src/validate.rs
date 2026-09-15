@@ -203,6 +203,14 @@ pub enum DiagnosticCode {
     ModeLateralClearance,
     /// A version-2 lateral horizon is non-finite or non-positive.
     ModeLateralHorizon,
+    /// A version-2 mode template's authored wheelbase is non-finite,
+    /// non-positive, inverted, on a non-wheeled motion, or authored without its
+    /// steering-angle companion.
+    ModeWheelbase,
+    /// A version-2 mode template's authored maximum steering angle is
+    /// non-finite, outside `(0, pi/2)`, inverted, on a non-wheeled motion, or
+    /// authored without its wheelbase companion.
+    ModeSteeringAngle,
     /// A version-2 mode template declares a lateral tactic but no maneuver policy.
     ManeuverPolicyMissing,
     /// A version-2 mode template declares `reverse_direction` but no wrong-way policy.
@@ -341,6 +349,8 @@ impl DiagnosticCode {
             Self::ModeTemplateLateral => "E_MODE_TEMPLATE_LATERAL",
             Self::ModeLateralClearance => "E_MODE_LATERAL_CLEARANCE",
             Self::ModeLateralHorizon => "E_MODE_LATERAL_HORIZON",
+            Self::ModeWheelbase => "E_MODE_WHEELBASE",
+            Self::ModeSteeringAngle => "E_MODE_STEERING_ANGLE",
             Self::ManeuverPolicyMissing => "E_MANEUVER_POLICY_MISSING",
             Self::WrongWayPolicyMissing => "E_WRONG_WAY_POLICY_MISSING",
             Self::CommitPolicyInvalid => "E_COMMIT_POLICY",
@@ -1839,6 +1849,75 @@ fn validate_mode_templates(
             }
         }
 
+        // Increment 3 axle geometry: a wheelbase and a maximum steering angle
+        // are authored together, only on a wheeled motion, and each is a
+        // strictly positive non-inverted range (the angle inside `(0, pi/2)`).
+        match (&template.wheelbase_m, &template.steering_angle_max_rad) {
+            (Some(wheelbase), Some(angle)) => {
+                if template.motion != MotionKind::SingleBodyWheeled {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::ModeWheelbase,
+                        Some(template.id.clone()),
+                        format!(
+                            "mode template '{}' authors axle geometry but is not a \
+                             single_body_wheeled motion",
+                            template.id
+                        ),
+                    ));
+                }
+                if !wheelbase.min.is_finite()
+                    || !wheelbase.max.is_finite()
+                    || wheelbase.min <= 0.0
+                    || wheelbase.min > wheelbase.max
+                {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::ModeWheelbase,
+                        Some(template.id.clone()),
+                        format!(
+                            "mode template '{}' wheelbase_m must be finite, positive, and \
+                             non-inverted, got [{}, {}]",
+                            template.id, wheelbase.min, wheelbase.max
+                        ),
+                    ));
+                }
+                if !angle.min.is_finite()
+                    || !angle.max.is_finite()
+                    || angle.min <= 0.0
+                    || angle.max >= std::f64::consts::FRAC_PI_2
+                    || angle.min > angle.max
+                {
+                    diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::ModeSteeringAngle,
+                        Some(template.id.clone()),
+                        format!(
+                            "mode template '{}' steering_angle_max_rad must be finite, inside \
+                             (0, pi/2), and non-inverted, got [{}, {}]",
+                            template.id, angle.min, angle.max
+                        ),
+                    ));
+                }
+            }
+            (Some(_), None) => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ModeWheelbase,
+                Some(template.id.clone()),
+                format!(
+                    "mode template '{}' authors wheelbase_m without its steering_angle_max_rad \
+                     companion, so the wheelbase alone bounds no curvature",
+                    template.id
+                ),
+            )),
+            (None, Some(_)) => diagnostics.push(Diagnostic::new(
+                DiagnosticCode::ModeSteeringAngle,
+                Some(template.id.clone()),
+                format!(
+                    "mode template '{}' authors steering_angle_max_rad without its wheelbase_m \
+                     companion, so the angle alone bounds no curvature",
+                    template.id
+                ),
+            )),
+            (None, None) => {}
+        }
+
         let required =
             required_profile_params(&template.body, template.motion, template.lateral.is_some());
         for name in required {
@@ -2335,16 +2414,45 @@ fn mode_lateral_clearance_m(template: &ModeTemplateSource) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// The tightest steady-turn curvature a wheeled mode can follow at its top
-/// desired speed from its authored maximum steering/heading rate, or `None`
-/// when the mode declares no steering response.
+/// The tightest steady-turn curvature a wheeled mode can follow, or `None`
+/// when the mode declares no usable steering limit.
+///
+/// Two independent bounds are intersected. The **rate** bound is the tightest
+/// steady curve the mode can hold at its top desired speed from its authored
+/// maximum heading rate (`steering_rate_max_rad_s / speed_mps`), the Increment 1
+/// rule. The **axle-geometry** bound is the tightest curve its wheelbase and
+/// maximum steering angle allow under the single-track relation
+/// `kappa = tan(steering_angle) / wheelbase`; it is the Increment 3 addition
+/// that gives an authored wheelbase real effect, because a heading-rate limit
+/// alone is independent of axle geometry. Across a sampled range the
+/// conservative (least capable) end is the longest wheelbase and the smallest
+/// steering angle, so a caller never admits a route some sampled agent could
+/// not follow.
 fn mode_turning_limit_curvature(template: &ModeTemplateSource) -> Option<f64> {
-    let steering = template.profiles.get("steering_rate_max_rad_s")?.max;
-    let speed = template.profiles.get("speed_mps")?.max;
-    if steering.is_finite() && steering > 0.0 && speed.is_finite() && speed > 0.0 {
-        Some(steering / speed)
-    } else {
-        None
+    let rate_bound = template
+        .profiles
+        .get("steering_rate_max_rad_s")
+        .zip(template.profiles.get("speed_mps"))
+        .and_then(|(steering, speed)| {
+            let (steering, speed) = (steering.max, speed.max);
+            (steering.is_finite() && steering > 0.0 && speed.is_finite() && speed > 0.0)
+                .then(|| steering / speed)
+        });
+    let geometry_bound = template
+        .wheelbase_m
+        .zip(template.steering_angle_max_rad)
+        .and_then(|(wheelbase, angle)| {
+            let (wheelbase, angle) = (wheelbase.max, angle.min);
+            (wheelbase.is_finite()
+                && wheelbase > 0.0
+                && angle.is_finite()
+                && angle > 0.0
+                && angle < std::f64::consts::FRAC_PI_2)
+                .then(|| angle.tan() / wheelbase)
+        });
+    match (rate_bound, geometry_bound) {
+        (Some(rate), Some(geometry)) => Some(rate.min(geometry)),
+        (bound, None) | (None, bound) => bound,
     }
 }
 
@@ -2369,15 +2477,61 @@ fn reference_max_abs_curvature(reference: &CompiledReferencePath) -> f64 {
     max
 }
 
+/// The largest discrete corner curvature, in `1/m`, of an authored polyline.
+///
+/// An authored reference path is a polyline, so its compiled segments are
+/// straight and [`reference_max_abs_curvature`] reads zero along them even when
+/// the vertices trace a curve. The direction change at each interior vertex
+/// over the mean adjacent segment length is the discrete curvature of the curve
+/// the polyline approximates: for points sampled on a circle it recovers
+/// `1 / radius` to within the chord discretization error, so a chord
+/// approximation of a constant-radius turn is measured at its true curvature.
+/// A straight or degenerate polyline is zero.
+fn authored_max_corner_curvature(points: &[PointSource]) -> f64 {
+    let mut max = 0.0_f64;
+    for window in points.windows(3) {
+        let [a, b, c] = window else { continue };
+        let ab = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+        let bc = ((c.x - b.x).powi(2) + (c.y - b.y).powi(2)).sqrt();
+        let mean = 0.5 * (ab + bc);
+        if !mean.is_finite() || mean <= 0.0 {
+            continue;
+        }
+        let incoming = (b.y - a.y).atan2(b.x - a.x);
+        let outgoing = (c.y - b.y).atan2(c.x - b.x);
+        let mut turn = (outgoing - incoming) % std::f64::consts::TAU;
+        if turn > std::f64::consts::PI {
+            turn -= std::f64::consts::TAU;
+        } else if turn < -std::f64::consts::PI {
+            turn += std::f64::consts::TAU;
+        }
+        max = max.max(turn.abs() / mean);
+    }
+    max
+}
+
 /// The curvature diagnostics for one facility reference against the turning
 /// limits of the modes permitted on it.
+///
+/// A mode that authors axle geometry (`wheelbase_m`) is additionally held to
+/// the authored polyline's discrete corner curvature, because such a mode's
+/// turning limit is a genuine geometric radius and an authored chord
+/// approximation of a curve otherwise reads as curvature-free. A mode without
+/// axle geometry keeps the Increment 1 rule and sees only the compiled
+/// segment/arc curvature, so no Increment 1/2 fixture changes behaviour.
 fn facility_curvature_diagnostics(
     facility_id: &str,
     reference: &CompiledReferencePath,
+    authored_corner_curvature: f64,
     modes: &[&ModeTemplateSource],
 ) -> Vec<Diagnostic> {
-    let curvature = reference_max_abs_curvature(reference);
+    let segment_curvature = reference_max_abs_curvature(reference);
     for template in modes {
+        let curvature = if template.wheelbase_m.is_some() {
+            segment_curvature.max(authored_corner_curvature)
+        } else {
+            segment_curvature
+        };
         if let Some(limit) = mode_turning_limit_curvature(template)
             && curvature > limit + TURNING_CURVATURE_TOLERANCE
         {
@@ -2688,9 +2842,16 @@ fn validate_facilities(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnost
 
         // Curvature against the turning limits of every permitted mode.
         if let Some(reference) = facility_reference(source, facility) {
+            let corner_curvature = facility
+                .reference_path
+                .as_ref()
+                .and_then(|name| source.paths.iter().find(|path| path.id == *name))
+                .map(|path| authored_max_corner_curvature(&path.points))
+                .unwrap_or(0.0);
             diagnostics.extend(facility_curvature_diagnostics(
                 &facility.id,
                 &reference,
+                corner_curvature,
                 &modes,
             ));
         }
@@ -3854,7 +4015,7 @@ mod tests {
 
         // A 3 m radius arc (`kappa = 1/3`) is far tighter than the limit.
         let tight = CompiledReferencePath::arc(DVec2::ZERO, 3.0, 0.0, std::f64::consts::FRAC_PI_2);
-        let diagnostics = facility_curvature_diagnostics("west", &tight, &modes);
+        let diagnostics = facility_curvature_diagnostics("west", &tight, 0.0, &modes);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, DiagnosticCode::FacilityCurvature);
 
@@ -3862,9 +4023,160 @@ mod tests {
         // polyline reference has zero curvature everywhere.
         let gentle =
             CompiledReferencePath::arc(DVec2::ZERO, 50.0, 0.0, std::f64::consts::FRAC_PI_2);
-        assert!(facility_curvature_diagnostics("west", &gentle, &modes).is_empty());
+        assert!(facility_curvature_diagnostics("west", &gentle, 0.0, &modes).is_empty());
         let straight = CompiledReferencePath::from_polyline(&[DVec2::ZERO, DVec2::new(80.0, 0.0)]);
-        assert!(facility_curvature_diagnostics("west", &straight, &modes).is_empty());
+        assert!(facility_curvature_diagnostics("west", &straight, 0.0, &modes).is_empty());
+    }
+
+    /// A minimal box `bus` document with an optional authored axle geometry.
+    fn axle_bus(geometry: &str, motion: &str) -> ScenarioSourceV2 {
+        let document = format!(
+            r#"{{ schema_version: 2, id: 'axle', coordinate_system: {{ x: 'a', y: 'b' }},
+                paths: [], portals: [],
+                mode_templates: [ {{
+                    id: 'bus',
+                    body: {{ kind: 'box', length_m: {{ min: 12.0, max: 12.0 }},
+                        width_m: {{ min: 2.55, max: 2.55 }} }},
+                    motion: '{motion}',
+                    tactics: [ 'follow', 'stop', 'yield' ],
+                    access: {{ facility_kinds: [ 'facility' ] }},
+                    occupancy: 'operator_only',
+                    {geometry}
+                    profiles: {{
+                        speed_mps: {{ min: 9.0, max: 9.0 }},
+                        max_accel_mps2: {{ min: 0.9, max: 0.9 }},
+                        comfortable_brake_mps2: {{ min: 1.8, max: 1.8 }},
+                        time_gap_s: {{ min: 1.6, max: 1.6 }},
+                        compliance: {{ min: 1.0, max: 1.0 }},
+                    }},
+                }} ],
+            }}"#
+        );
+        crate::source::parse_scenario_source_v2(&document).expect("the template parses")
+    }
+
+    /// A 6.0 m wheelbase and a 0.3 rad steering-angle limit, whose single-track
+    /// curvature `tan(0.3) / 6.0` is the mode's turning limit (`0.8 / 9.0` would
+    /// be a heading-rate bound, which a non-lateral box does not author).
+    const AXLE_GEOMETRY: &str = "wheelbase_m: { min: 6.0, max: 6.0 },\
+        steering_angle_max_rad: { min: 0.3, max: 0.3 },";
+
+    #[test]
+    fn authored_axle_geometry_bounds_the_turning_limit() {
+        let source = axle_bus(AXLE_GEOMETRY, "single_body_wheeled");
+        let diagnostics = validate_v2(&source);
+        assert!(
+            diagnostics.is_empty(),
+            "a wheelbase and steering angle on a wheeled motion are valid: {diagnostics:?}"
+        );
+        let modes: Vec<&ModeTemplateSource> = source.mode_templates.iter().collect();
+        let limit = mode_turning_limit_curvature(&source.mode_templates[0]).expect("an axle limit");
+        let geometry = 0.3_f64.tan() / 6.0;
+        assert!(
+            (limit - geometry).abs() < 1e-12,
+            "the axle geometry gives the turning limit {geometry}"
+        );
+
+        // A constant-radius arc inside the limit is admitted ...
+        let gentle =
+            CompiledReferencePath::arc(DVec2::ZERO, 40.0, 0.0, std::f64::consts::FRAC_PI_2);
+        assert!(facility_curvature_diagnostics("curve", &gentle, 0.0, &modes).is_empty());
+        // ... and one beyond it is rejected, even though its endpoints never
+        // overlap.
+        let tight = CompiledReferencePath::arc(DVec2::ZERO, 10.0, 0.0, std::f64::consts::FRAC_PI_2);
+        let diagnostics = facility_curvature_diagnostics("curve", &tight, 0.0, &modes);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, DiagnosticCode::FacilityCurvature);
+    }
+
+    #[test]
+    fn a_chord_approximation_of_an_authored_curve_is_measured_at_its_radius() {
+        // A quarter circle of `radius` as 24 chords: the authored `paths[].points`
+        // form a constant-radius fixture actually uses.
+        let chord = |radius: f64| -> Vec<PointSource> {
+            const SEGMENTS: usize = 24;
+            (0..=SEGMENTS)
+                .map(|index| {
+                    let theta = std::f64::consts::FRAC_PI_2 * index as f64 / SEGMENTS as f64;
+                    PointSource {
+                        x: radius * theta.cos(),
+                        y: radius * theta.sin(),
+                    }
+                })
+                .collect()
+        };
+        let compile = |points: &[PointSource]| {
+            CompiledReferencePath::from_polyline(
+                &points
+                    .iter()
+                    .map(|point| DVec2::new(point.x, point.y))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let source = axle_bus(AXLE_GEOMETRY, "single_body_wheeled");
+        let modes: Vec<&ModeTemplateSource> = source.mode_templates.iter().collect();
+
+        let gentle = chord(40.0);
+        let corner = authored_max_corner_curvature(&gentle);
+        assert!(
+            (corner - 1.0 / 40.0).abs() < 1e-5,
+            "a 40 m chord approximation reads as 1/40, got {corner}"
+        );
+        assert!(
+            facility_curvature_diagnostics("curve", &compile(&gentle), corner, &modes).is_empty()
+        );
+
+        let tight = chord(10.0);
+        let corner = authored_max_corner_curvature(&tight);
+        assert!((corner - 1.0 / 10.0).abs() < 1e-3);
+        assert_eq!(
+            facility_curvature_diagnostics("curve", &compile(&tight), corner, &modes).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn axle_geometry_must_be_a_wheeled_pair() {
+        // A wheelbase without its steering-angle companion bounds no curvature.
+        let lone_wheelbase = validate_v2(&axle_bus(
+            "wheelbase_m: { min: 6.0, max: 6.0 },",
+            "single_body_wheeled",
+        ));
+        assert!(
+            lone_wheelbase
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeWheelbase)
+        );
+        // A steering angle without its wheelbase companion is equally inert.
+        let lone_angle = validate_v2(&axle_bus(
+            "steering_angle_max_rad: { min: 0.3, max: 0.3 },",
+            "single_body_wheeled",
+        ));
+        assert!(
+            lone_angle
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeSteeringAngle)
+        );
+        // A steering angle at or beyond a right angle is not a range.
+        let right_angle = validate_v2(&axle_bus(
+            "wheelbase_m: { min: 6.0, max: 6.0 },\n        steering_angle_max_rad: { min: 0.3, max: 1.6 },",
+            "single_body_wheeled",
+        ));
+        assert!(
+            right_angle
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeSteeringAngle)
+        );
+        // Axle geometry on a walking motion has no axles to bound.
+        let walking = validate_v2(&axle_bus(
+            "wheelbase_m: { min: 6.0, max: 6.0 },\n        steering_angle_max_rad: { min: 0.3, max: 0.3 },",
+            "holonomic_walking",
+        ));
+        assert!(
+            walking
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeWheelbase)
+        );
     }
 
     #[test]

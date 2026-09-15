@@ -1,0 +1,182 @@
+// Increment 3: the heavy constant-radius turning fixture.
+//
+// `docs/benchmark-matrix.md` fixes `CC-HEAVY`'s declared reference as an
+// analytic straight/constant-radius envelope. This fixture is the
+// constant-radius rung: two concentric quarter-circle guide paths about the
+// origin, one per heavy mode, authored the only way `paths[].points` can
+// declare a curve — as the chord polyline of the arc (24 chords, so the
+// compiled reference and the analytic `CompiledReferencePath::arc` agree to
+// the chord tolerance the Increment 1 `narrow_isolated_curve_v2` fixture
+// fixes).
+//
+// | path | centre | radius | start angle | sweep |
+// | --- | --- | --- | --- | --- |
+// | `bus_arc_path` | `(0, 0)` | 40 m | `0` | `+pi/2` (counter-clockwise) |
+// | `truck_arc_path` | `(0, 0)` | 44 m | `0` | `+pi/2` (counter-clockwise) |
+//
+// Each heavy template authors the Increment 3 axle geometry — a wheelbase and
+// a maximum steering angle — so the compiler's turning-limit check sees a
+// genuine geometric radius. The bus (6.0 m wheelbase, 0.3 rad steering limit)
+// can hold `tan(0.3) / 6.0` and the rigid truck (5.0 m, 0.3 rad) `tan(0.3) /
+// 5.0`; both exceed the fixture's `1 / 40 m` and `1 / 44 m`. Tightening either
+// geometry below the facility curvature makes `validate_v2` reject the
+// document with `E_FACILITY_CURVATURE`, which the fixture's test exercises.
+//
+// Every authored body dimension and desired speed is constant (`min == max`),
+// so a realized body identifies its template. Each mode has its own facility
+// and demand source, so the two heavy bodies never interact and the run is an
+// isolated free-flow turn. The bodies are held to the facility's lane: no
+// corner of any body leaves the 4.0 m lane, which is the "bodies never clip
+// through a curb" contract at the geometry level the compiler admits.
+{
+  schema_version: 2,
+  id: 'heavy_turning_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'bus_arc_path', points: [
+        { x: 40, y: 0 },
+        { x: 39.9143569295441, y: 2.61612516920572 },
+        { x: 39.6577944549524, y: 5.22104768880206 },
+        { x: 39.2314112161292, y: 7.80361288064513 },
+        { x: 38.6370330515627, y: 10.3527618041008 },
+        { x: 37.8772051798042, y: 12.8575786121265 },
+        { x: 36.9551813004515, y: 15.3073372946036 },
+        { x: 35.8749096613075, y: 17.6915476087601 },
+        { x: 34.6410161513775, y: 20 },
+        { x: 33.2587844921018, y: 22.2228093207841 },
+        { x: 31.7341336116494, y: 24.3504571603488 },
+        { x: 30.0735922991591, y: 26.3738326040028 },
+        { x: 28.2842712474619, y: 28.2842712474619 },
+        { x: 26.3738326040028, y: 30.0735922991591 },
+        { x: 24.3504571603488, y: 31.7341336116494 },
+        { x: 22.2228093207841, y: 33.2587844921018 },
+        { x: 20, y: 34.6410161513775 },
+        { x: 17.6915476087601, y: 35.8749096613075 },
+        { x: 15.3073372946036, y: 36.9551813004515 },
+        { x: 12.8575786121265, y: 37.8772051798042 },
+        { x: 10.3527618041008, y: 38.6370330515627 },
+        { x: 7.80361288064513, y: 39.2314112161292 },
+        { x: 5.22104768880207, y: 39.6577944549524 },
+        { x: 2.61612516920573, y: 39.9143569295441 },
+        { x: 2.44929359829471e-15, y: 40 },
+    ] },
+    { id: 'truck_arc_path', points: [
+        { x: 44, y: 0 },
+        { x: 43.9057926224986, y: 2.87773768612629 },
+        { x: 43.6235739004477, y: 5.74315245768227 },
+        { x: 43.1545523377421, y: 8.58397416870964 },
+        { x: 42.500736356719, y: 11.3880379845109 },
+        { x: 41.6649256977847, y: 14.1433364733391 },
+        { x: 40.6506994304966, y: 16.838071024064 },
+        { x: 39.4624006274383, y: 19.4607023696361 },
+        { x: 38.1051177665153, y: 22 },
+        { x: 36.584662941312, y: 24.4450902528625 },
+        { x: 34.9075469728143, y: 26.7855028763837 },
+        { x: 33.080951529075, y: 29.011215864403 },
+        { x: 31.1126983722081, y: 31.1126983722081 },
+        { x: 29.011215864403, y: 33.080951529075 },
+        { x: 26.7855028763837, y: 34.9075469728143 },
+        { x: 24.4450902528625, y: 36.584662941312 },
+        { x: 22, y: 38.1051177665153 },
+        { x: 19.4607023696361, y: 39.4624006274383 },
+        { x: 16.838071024064, y: 40.6506994304966 },
+        { x: 14.1433364733391, y: 41.6649256977846 },
+        { x: 11.3880379845109, y: 42.500736356719 },
+        { x: 8.58397416870964, y: 43.1545523377421 },
+        { x: 5.74315245768228, y: 43.6235739004477 },
+        { x: 2.8777376861263, y: 43.9057926224986 },
+        { x: 2.69422295812418e-15, y: 44 },
+    ] },
+  ],
+  portals: [
+    { id: 'bus_entry', path: 'bus_arc_path', end: 'start', width_m: 4.0 },
+    { id: 'bus_exit', path: 'bus_arc_path', end: 'end', width_m: 4.0 },
+    { id: 'truck_entry', path: 'truck_arc_path', end: 'start', width_m: 4.0 },
+    { id: 'truck_exit', path: 'truck_arc_path', end: 'end', width_m: 4.0 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 70.0, y: -20.0 },
+      { x: 70.0, y: 70.0 }, { x: -20.0, y: 70.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'turning_band', points: [
+      { x: -10.0, y: -10.0 }, { x: 60.0, y: -10.0 },
+      { x: 60.0, y: 60.0 }, { x: -10.0, y: 60.0 },
+    ] },
+  ],
+  facilities: [
+    { id: 'bus_arc', region: 'turning_band', reference_path: 'bus_arc_path',
+      width_m: 4.0, nominal_direction: 'forward',
+      access: { modes: [ 'bus' ] },
+      lateral_use: 'shared', speed_policy: { limit_mps: null } },
+    { id: 'truck_arc', region: 'turning_band', reference_path: 'truck_arc_path',
+      width_m: 4.0, nominal_direction: 'forward',
+      access: { modes: [ 'rigid_truck' ] },
+      lateral_use: 'shared', speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'bus_through', from: 'bus_entry', to: 'bus_exit',
+      path: 'bus_arc_path', priority: 0, direction: 'forward' },
+    { id: 'truck_through', from: 'truck_entry', to: 'truck_exit',
+      path: 'truck_arc_path', priority: 0, direction: 'forward' },
+  ],
+  mode_templates: [
+    {
+      id: 'bus',
+      body: { kind: 'box', length_m: { min: 12.0, max: 12.0 },
+        width_m: { min: 2.55, max: 2.55 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      wheelbase_m: { min: 6.0, max: 6.0 },
+      steering_angle_max_rad: { min: 0.3, max: 0.3 },
+      profiles: {
+        speed_mps: { min: 9.0, max: 9.0 },
+        max_accel_mps2: { min: 0.9, max: 0.9 },
+        comfortable_brake_mps2: { min: 1.8, max: 1.8 },
+        time_gap_s: { min: 1.6, max: 1.6 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'rigid_truck',
+      body: { kind: 'box', length_m: { min: 9.5, max: 9.5 },
+        width_m: { min: 2.5, max: 2.5 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      wheelbase_m: { min: 5.0, max: 5.0 },
+      steering_angle_max_rad: { min: 0.3, max: 0.3 },
+      profiles: {
+        speed_mps: { min: 8.0, max: 8.0 },
+        max_accel_mps2: { min: 0.8, max: 0.8 },
+        comfortable_brake_mps2: { min: 1.6, max: 1.6 },
+        time_gap_s: { min: 1.8, max: 1.8 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [],
+  demand: [
+    { id: 'bus_inflow', mode: 'bus',
+      spawn: { rate: {
+        portal: 'bus_entry',
+        rate_per_hour: 720.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'bus_through', weight: 1.0 } ] },
+      } } },
+    { id: 'truck_inflow', mode: 'rigid_truck',
+      spawn: { rate: {
+        portal: 'truck_entry',
+        rate_per_hour: 720.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'truck_through', weight: 1.0 } ] },
+      } } },
+  ],
+}

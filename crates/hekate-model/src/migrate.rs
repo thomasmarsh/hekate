@@ -159,6 +159,8 @@ fn passenger_car_template(source: &ScenarioSource, population_in_use: bool) -> M
         profiles,
         // Increment 2: a migrated document authors no lateral maneuver.
         lateral: None,
+        wheelbase_m: None,
+        steering_angle_max_rad: None,
     }
 }
 
@@ -191,6 +193,8 @@ fn pedestrian_template(source: &ScenarioSource) -> ModeTemplateSource {
         profiles,
         // Increment 2: a migrated document authors no lateral maneuver.
         lateral: None,
+        wheelbase_m: None,
+        steering_angle_max_rad: None,
     }
 }
 

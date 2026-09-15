@@ -916,12 +916,34 @@
             "$ref": "#/$defs/ProfileRangeSource"
           }
         },
+        "steering_angle_max_rad": {
+          "description": "Authored maximum steering angle in radians, as a range. Additive\nIncrement 3 field; present exactly with [`Self::wheelbase_m`]. Together\nthey bound the steady-turn curvature the way axle geometry converts a\nsteering-angle limit into one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileRangeSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tactics": {
           "description": "Tactical capabilities the template supports.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/TacticKind"
           }
+        },
+        "wheelbase_m": {
+          "description": "Authored axle geometry: distance between the front and rear axles in\nmetres, as a range. Additive Increment 3 field; omitted means the mode\nauthors no wheelbase and keeps the Increment 1/2 turning limit. Present\nexactly with [`Self::steering_angle_max_rad`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileRangeSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,

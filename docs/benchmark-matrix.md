@@ -216,7 +216,8 @@ baseline it derives from. None is a golden-file or trace-hash comparison.
 ### 7.2 Checked-in fixtures
 
 The Increment 1 narrow-mode fixtures, the Increment 2 `CC-OVERTAKE` and
-`CC-OPPOSE` fixtures, and the Increment 3 heavy-mode isolated straight. Each
+`CC-OPPOSE` fixtures, and the Increment 3 heavy-mode isolated straight and
+constant-radius turn. Each
 path is checked in and loads through the CLI; later increments revise this
 section the same way, moving a planned path here when it checks the path in.
 
@@ -233,6 +234,7 @@ section the same way, moving a planned path here when it checks the path in.
 | `motor_lane_change_v2` | `scenarios/phase2/inc2/motor_lane_change_v2.json5` | motor-over-motor `CC-OVERTAKE`: configured change of lane around a slower leader |
 | `narrow_wrong_way_v2` | `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` | contextual wrong-way `CC-OPPOSE`: a permitted opposing choice, a prohibited-but-connected one, a disconnected refusal, and an occupied opposing corridor |
 | `heavy_isolated_v2` | `scenarios/phase2/inc3/heavy_isolated_v2.json5` | heavy `CC-HEAVY` independent cell, `bus` and `rigid_truck` alongside a passenger car: free-flow straight on each mode's own body and envelope |
+| `heavy_turning_v2` | `scenarios/phase2/inc3/heavy_turning_v2.json5` | heavy `CC-HEAVY` constant-radius turn, `bus` and `rigid_truck` on concentric quarter-circle arcs: authored axle geometry bounds the turning limit and every body corner stays inside the lane |
 
 ### 7.3 Planned fixtures
 

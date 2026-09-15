@@ -1136,6 +1136,18 @@ pub struct ModeTemplateSource {
     /// in Increment 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lateral: Option<ModeLateralSource>,
+    /// Authored axle geometry: distance between the front and rear axles in
+    /// metres, as a range. Additive Increment 3 field; omitted means the mode
+    /// authors no wheelbase and keeps the Increment 1/2 turning limit. Present
+    /// exactly with [`Self::steering_angle_max_rad`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheelbase_m: Option<ProfileRangeSource>,
+    /// Authored maximum steering angle in radians, as a range. Additive
+    /// Increment 3 field; present exactly with [`Self::wheelbase_m`]. Together
+    /// they bound the steady-turn curvature the way axle geometry converts a
+    /// steering-angle limit into one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_angle_max_rad: Option<ProfileRangeSource>,
 }
 
 /// The time interval of a version-2 rate demand spawn.

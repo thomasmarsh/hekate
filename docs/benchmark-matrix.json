@@ -520,7 +520,8 @@
       "narrow_wrong_way_v2": "scenarios/phase2/inc2/narrow_wrong_way_v2.json5"
     },
     "checked_in_increment_3": {
-      "heavy_isolated_v2": "scenarios/phase2/inc3/heavy_isolated_v2.json5"
+      "heavy_isolated_v2": "scenarios/phase2/inc3/heavy_isolated_v2.json5",
+      "heavy_turning_v2": "scenarios/phase2/inc3/heavy_turning_v2.json5"
     },
     "planned_patterns": {
       "pair": "scenarios/phase2/inc5/pair_<a>__<b>__<family>_v2.json5",
