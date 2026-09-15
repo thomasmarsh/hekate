@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T07:05:44Z
+updated: 2026-09-15T07:26:00Z
 summary: Prove stream isolation and preserve the Phase 1 baseline.
-next: Rerun the node's gate commands on the delivered commit and record them in # Result.
 ---
 
 Parent [[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]].
@@ -79,3 +78,49 @@ passed; `cargo test -p hekate-sim --test signal_compliance --test pedestrian_flo
 passed. The node's clause 3 (existing demand/profile/compliance/perception
 streams and Phase 1 baseline unchanged) is carried by those unchanged suites; no
 file under `scenarios/benchmarks/*_v1` or `baselines/phase1/` was touched.
+
+## Gate evidence
+
+Full five-gate run on the delivered commit (`1e655d5`), gate worker `gate134`:
+
+| gate | command | exit | wall | result |
+| --- | --- | --- | --- | --- |
+| fmt | `cargo fmt --all --check` | 0 | 1 s | clean |
+| clippy | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 1 s | clean (`Finished dev profile`, no warnings) |
+| test | `cargo test --workspace --all-features` | 0 | 315 s | 1016 passed, 0 failed, 1 ignored across 90 suites |
+| deps | `./scripts/check-dependency-direction.sh` | 0 | 1 s | `dependency direction OK` |
+| graph | `tangle check` | 0 | 1 s | `graph check: passed (195 nodes)` |
+
+Done-when disposition:
+
+- Clause 1 (isolation tests add unrelated car and narrow demand and reversed
+  declaration order without changing owned maneuver draws or unaffected agent
+  traces) is **met** by
+  `the_inc2_maneuver_stream_stays_isolated_from_unrelated_car_and_narrow_demand`
+  (`apps/hekate-cli/tests/inc2_determinism.rs`), which passed in the workspace
+  run: the three runs agree on the focus source's arrival series, on the
+  unaffected focus agents' canonical trace lines, and on their keyed `maneuver`
+  draws, and the run is proven non-empty (the request is admitted, the added
+  sources admit agents, the compared prefix records an `opposing_traversal`, and
+  distinct focus agents hold distinct draws). The trace comparison is scoped to
+  the focus agents admitted before the added demand's first id, the boundary the
+  node's `# Result` records: agent ids are admission order, so a focus agent
+  admitted later takes a different id and a different per-agent `profile` draw.
+- Clause 2 (falsification probe catches draw-order coupling or an unkeyed
+  maneuver choice) is **met** by
+  `the_stream_isolation_check_flags_unrelated_demand_declared_before_the_focus`,
+  which declares the unrelated sources before the focus source, moves the focus
+  source's dense demand index, and requires the same comparisons to report the
+  moved arrival series, requested agent id, trace lines, and keyed draw; the
+  unkeyed-choice half is the distinct-draws assertion inside clause 1's test.
+- Clause 3 (existing demand, profile, compliance, and perception streams and
+  Phase 1 baseline artifacts unchanged) is **met**: `git show --stat 1e655d5`
+  lists only `apps/hekate-cli/tests/inc2_determinism.rs` and this node, so no
+  scenario, baseline, golden, production, or schema path moved, and the
+  workspace run passes `baseline.rs`, `narrow_determinism.rs`, `seed_bank.rs`,
+  `replay.rs`, `inc2_trace.rs`, the hekate-sim flow/compliance suites
+  (`signal_compliance`, `vehicle_flow`, `pedestrian_flow`,
+  `pedestrian_compliance`), and the `rng::` named-stream unit tests unchanged.
+  `crates/hekate-sim/src/rng.rs` documents the `perception` stream as belonging
+  to a later increment and never derives it, so no perception draw exists to
+  change.
