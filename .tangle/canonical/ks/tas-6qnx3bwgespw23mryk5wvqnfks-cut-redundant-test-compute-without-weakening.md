@@ -1,10 +1,9 @@
 ---
 context_rev: 1
 priority: P2
-status: proposed
-updated: 2026-09-15T16:27:25Z
+status: resolved
+updated: 2026-09-15T17:04:48Z
 summary: Cut redundant test compute without weakening assertions.
-next: Delete the inc2_determinism cases already covered by the golden suite and drop the duplicate batch runs.
 ---
 
 Area [[IDX-001-hekate]].
@@ -62,3 +61,56 @@ evidence); the `run_metrics` close-pass trio (share a run); the
 `migration_regression` differential horizon; the `scenarios.rs` seed sweeps; the
 `narrow_determinism` second run; and a two-band scripted unit fixture that could
 replace the TAS-114 integration family.
+
+# Result
+
+Deletion and merging (no new parallelism) cut the workspace gate's CPU spend by
+more than the earlier parallelization work: `user` CPU 619.79 -> 440.52 s
+(-179.27 s, -28.9 %) and test count 1118 -> 1086 (-32), warm wall about 157 s.
+Every load-bearing assertion still runs; each removal names the cheaper owner.
+
+Slice 1, hekate-cli (commit `c009763`): `user` 281.54 -> 143.14 s (-49.2 %),
+workspace `user` 619.79 -> 485.34 s (-21.7 %), -29 tests. Removed the 12
+`*_admits_its_maneuver_at_*` cases (owned by `inc2_trace`'s `declared_run`), 11 of
+12 `*_reproduces_its_trace_hash_at_*` cases (owned by the stronger golden; kept
+one live-runs canary), the 3 `*_standard_run_is_the_canonical_cli_trace` cases
+(transitive), the `right` batch run in both seed-bank tests (owned by
+`assert_batch_hash_is_canonical` and the run-directory stream pin), and
+`the_inc2_seed_bank_batch_runs_every_fixture`; merged the two
+`increment6_trace` tests; dropped the present two-projection test. Kept the six
+`*_changes_its_trace_for_a_seed_outside_the_bank` cases and the bank-declaration
+test.
+
+Slice 2, hekate-sim (commit `727f580`): `user` 341.81 -> 286.55 s (-16.2 %),
+workspace `user` 485.34 -> 440.52 s (-9.2 %), -3 tests. Merged the four
+`close_pass` 900-tick runs into one
+`a_passing_run_reports_its_bands_events_and_run_end_closure` (all assertion
+families kept as helpers plus the still-open prefix run); removed the
+byte-identical `lane_transitions` control run; removed the duplicated
+`narrow_passing` forward case and strengthened the remaining reverse test with a
+`PassSide::Left` assertion; removed `motor_overtaking`'s third run (owned by the
+cited `sim.rs` unit tests); reduced `performance_counters` `FOCUSED_TICKS`
+2000 -> 1000.
+
+Not cut (declared evidence or sole guard): the 24x4000 `mixed_interaction`
+sweep, the PET convergence test, the TAS-114 constraint behaviours, the
+seed-varies cases, the inc2 goldens, the CLI end-to-end `run`/`replay` test, and
+the `wrong_way` permutation test.
+
+Recorded residuals (P2, not silently accepted): the batch-test name and comment
+still advertise an event-stream comparison they no longer make, whose real owner
+is `apps/hekate-cli/tests/batch.rs` and `run_directory.rs`; the
+`inc2_fixture_overlays` comment overstates the golden (it pins landmark frames
+plus run-end, not every frame or the `target_offset`/`predicted_gap` streams);
+and the removed trace-vs-observation spawn-count equality is not otherwise pinned
+though its substance is guarded by the byte-exact golden and maneuver
+membership. Recorded judgment calls (need a measurement or ledger decision): the
+`lane_transitions` horizon 6.0 -> 4.0 and 600 -> 300-tick drives (about -30 to
+-45 s, measurement-gated, TAS-114-named evidence); the `run_metrics` close-pass
+trio (share a run, about -12 to -20 s); the `migration_regression` differential
+horizon; the `scenarios.rs` seed sweeps; the `narrow_determinism` second run; and
+a two-band scripted unit fixture that could replace the TAS-114 integration
+family (up to about -56 s, a ledger decision).
+
+Evidence: commits `c009763`, `727f580`; `/tmp/tas137/after-r1.md`,
+`/tmp/tas137/after-r2.md`.
