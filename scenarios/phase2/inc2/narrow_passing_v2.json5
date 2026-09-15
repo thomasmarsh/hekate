@@ -25,7 +25,7 @@
 // of the 350 m guide path inside the suite's horizon, which is the fixture's
 // route-completion evidence.
 //
-// This is `CC-OVERTAKE` evidence: `docs/benchmark-matrix.md` §7.3 names
+// This is `CC-OVERTAKE` evidence: `docs/benchmark-matrix.md` §7.2 names
 // `scenarios/phase2/inc2/narrow_passing_v2.json5` as the narrow-narrow
 // overtaking fixture (§7.4 item 6).
 {

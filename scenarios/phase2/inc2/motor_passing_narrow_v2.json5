@@ -24,7 +24,7 @@
 // the clearance the authored geometry yields (the pass is measured at 1.06 m),
 // so the pass records the study band's duration without a violation.
 //
-// This is `CC-OVERTAKE` evidence: `docs/benchmark-matrix.md` §7.3 names
+// This is `CC-OVERTAKE` evidence: `docs/benchmark-matrix.md` §7.2 names
 // `scenarios/phase2/inc2/motor_passing_narrow_v2.json5` for motor or articulated
 // modes overtaking a narrow mode (§7.4 item 6).
 {

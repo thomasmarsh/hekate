@@ -7,10 +7,12 @@
 //! replaceable interface the kernel reaches it through, [`NarrowProfile`] is the
 //! sampled parameter set it reads, and [`IdmNarrowWheeledController`] is the
 //! initial implementation — the documented Intelligent Driver Model law of
-//! [`crate::control`] under a narrow profile. The narrow-specific steering and
-//! lateral-clearance parameters are carried on the profile for the Increment 2
-//! lateral machinery; this Increment 1 model is longitudinal only, before free
-//! lateral maneuvers are enabled.
+//! [`crate::control`] under a narrow profile. The narrow-specific steering,
+//! lateral-acceleration, and lateral-clearance parameters are carried on the
+//! profile and projected into the shared bounded-steering limits of
+//! [`crate::steering`], so a narrow template that declares `lateral` takes part
+//! in the Increment 2 lateral machinery through the same compiled components a
+//! car does, and a template that declares none stays longitudinal only.
 //!
 //! The two cards below document the two modes the family parameterizes. They
 //! follow the checked-in template (`docs/model-card-template.md`), the inventory
@@ -20,23 +22,34 @@
 //!
 //! # Model card — bicycle
 //!
-//! The bicycle mode's longitudinal model. It is the shared documented
-//! Intelligent Driver Model (IDM) law of [`crate::control`] — Martin Treiber,
-//! Ansgar Hennecke, and Dirk Helbing, "Congested Traffic States in Empirical
-//! Observations and Microscopic Simulations" (2000) — parameterized by a
-//! bicycle's sampled [`NarrowProfile`] and reached only through
-//! [`NarrowWheeledController`]. It is a documented, replaceable model, not a
-//! calibrated scientific claim, and it is not fitted to bicycle observations.
+//! The bicycle mode's longitudinal and lateral model. Its longitudinal command
+//! is the shared documented Intelligent Driver Model (IDM) law of
+//! [`crate::control`] — Martin Treiber, Ansgar Hennecke, and Dirk Helbing,
+//! "Congested Traffic States in Empirical Observations and Microscopic
+//! Simulations" (2000) — parameterized by a bicycle's sampled [`NarrowProfile`]
+//! and reached only through [`NarrowWheeledController`]. Its lateral motion,
+//! present only when the mode's compiled template declares `lateral`, is the
+//! shared bounded-steering law of [`crate::steering`] driven by the maneuver
+//! lifecycle of [`crate::sim`]. Both are documented, replaceable models, not a
+//! calibrated scientific claim, and neither is fitted to bicycle observations.
 //!
 //! ## State
 //!
 //! The kernel holds one bicycle's longitudinal state: the speed `v` in m/s
 //! along its reference path, the path progress that fixes its position and its
 //! front-bumper progress, and the capsule body length that turns a
-//! centre-to-centre distance into a bumper-to-bumper gap. In Increment 1 the
-//! lateral offset and heading follow the reference path, so this model steers
-//! nothing and has no lateral state; free lateral motion is Increment 2. Its
-//! full output is one commanded acceleration.
+//! centre-to-centre distance into a bumper-to-bumper gap. The longitudinal
+//! output is one commanded acceleration.
+//!
+//! When the mode's compiled template declares `lateral`, the kernel additionally
+//! holds the bicycle's signed lateral offset `d` in metres (positive to the left
+//! of its own direction of travel), its world heading, the target offset and
+//! target facility of its active maneuver, the five-state maneuver lifecycle
+//! (`following`, `preparing`, `committed`, `returning`, `aborted`), and the
+//! bounded-steering limits and usable lateral interval its profile compiled to.
+//! The lateral output is one bounded steering step. Without `lateral` the offset
+//! and heading stay on the reference path and none of that state exists, so an
+//! Increment 1 template behaves exactly as it did before.
 //!
 //! ## Parameters
 //!
@@ -66,7 +79,14 @@
 //! free-flow acceleration exponent `delta = 4` ([`crate::control`]'s
 //! `IDM_FREE_FLOW_EXPONENT`), the leader standstill gap the kernel uses when it
 //! builds a leader constraint, and the gap floor that keeps a touching
-//! constraint finite. This model adds no constant of its own.
+//! constraint finite. The lateral machinery adds its own shared constants, which
+//! this model reads and does not own: the approach time constant
+//! `LATERAL_APPROACH_S` = 2.0 s, the speed floor
+//! `MIN_SPEED_FOR_LATERAL_BOUND_MPS` = 0.5 m/s that keeps the
+//! lateral-acceleration bound finite at a standstill, the corridor test's
+//! `CORRIDOR_TOLERANCE_M` = 1e-9 m, the settle tolerance `SETTLE_TOLERANCE_M` =
+//! 1e-3 m, and `DEFAULT_SUBDIVISIONS` = 8 fine steps per decision cadence in the
+//! predictor ([`crate::prediction`]). This model adds no constant of its own.
 //!
 //! ## Decision inputs
 //!
@@ -78,6 +98,15 @@
 //! profile, and the current speed; the kernel owns which of them exist, and the
 //! position caps in [Emergency backstop](#emergency-backstop) are applied
 //! outside the model.
+//!
+//! One lateral decision sees a different set, none of which this model picks:
+//! the compiled usable lateral interval at the bicycle's arc length, the target
+//! facility's own usable interval and compiled shared boundary for a change of
+//! lane, every other live body as an exact shape with its velocity, and the
+//! compiled lateral policy (`target_clearance_m`, `horizon_s`) and commit policy
+//! (`min_predicted_clearance_m`, `hold_timeout_s`). The kernel owns which of them
+//! exist; this model contributes only the projected motion limits and the
+//! sampled profile.
 //!
 //! ## Longitudinal law
 //!
@@ -93,12 +122,134 @@
 //! [`crate::control`] IDM law under a bicycle profile, so cars, bicycles, and
 //! scooters share one wheeled longitudinal family.
 //!
+//! ## Lateral dynamics
+//!
+//! When the mode's compiled template declares `lateral`, the bicycle joins the
+//! shared wheeled lateral machinery and contributes its own compiled limits to
+//! it. `NarrowProfile::lateral_limits` projects `steering_rate_max_rad_s`,
+//! `lateral_accel_max_mps2`, and `lateral_clearance_m` into the compiled
+//! bounded-steering limits and the corridor test, and every lateral decision is
+//! one bounded step under these laws ([`crate::steering`]):
+//!
+//! - the desired lateral rate toward the target offset is the signed offset
+//!   error divided by `LATERAL_APPROACH_S` = 2.0 s, so an offset closes over
+//!   several decisions and is never snapped to its target in one step;
+//! - the command heading rate is the desired rate clamped to
+//!   `min(steering_rate_max_rad_s, lateral_accel_max_mps2 / max(v, MIN_SPEED_FOR_LATERAL_BOUND_MPS))`,
+//!   so both compiled limits hold at every speed;
+//! - the lateral offset rate follows from the integrated heading,
+//!   `d_dot = v * sin(theta_error)`. No target offset is ever written to `d` or
+//!   to a world position: world pose is collision and output truth, and the
+//!   route-relative offset is the projection of that pose back onto the compiled
+//!   reference;
+//! - the usable interval is the facility's compiled band less the body envelope
+//!   and `lateral_clearance_m`; a step that would leave it is rejected within
+//!   `CORRIDOR_TOLERANCE_M` = 1e-9 m, so the bicycle brakes or holds rather than
+//!   clipping the band.
+//!
+//! The bicycle's 1.8 m long, 0.35 m radius capsule also fixes the clearance its
+//! body can promise: the checked-in 6.0 m bikeway fixture authors a 0.75 m target
+//! clearance and measures a 0.78 m pass, while the 3.6 m unsafe variant authors
+//! the 0.4 m target its narrower corridor admits.
+//!
+//! ## Decision cadence and predictor horizon
+//!
+//! Tactical lateral clauses (`following -> preparing`, `preparing -> committed`,
+//! `returning -> following`) are evaluated at the run's lateral-decision cadence;
+//! the safety clauses (the committed abort, the bounded braking response, and
+//! boundary prevention) are evaluated every step, so a hazard between two
+//! decisions brakes immediately. The kernel currently resolves the
+//! lateral-decision cadence as the run's fixed physics step
+//! (`crate::config::DEFAULT_STEP` = 0.05 s, or the Fast 0.10 s and Fine 0.02 s
+//! steps `docs/benchmark-matrix.md` §2 fixes), so a bicycle re-decides two and a
+//! half times as often at Fine as at Standard.
+//!
+//! The predictor horizon is the mode's own authored `lateral.horizon_s` and not a
+//! run-wide constant: every checked-in lateral fixture authors 2.0 s. A candidate
+//! corridor must stay feasible for that long from the decision instant at the
+//! current speed and inside the bounded motion, and the prediction subdivides one
+//! decision of motion into `DEFAULT_SUBDIVISIONS` = 8 bounded steps
+//! ([`crate::prediction`]) from the current pose. The predicted minimum clearance
+//! a maneuver carries is the swept clearance over that horizon.
+//!
+//! ## Permissions and tactic eligibility
+//!
+//! A bicycle may start a pass or an overtake only where its compiled
+//! `TacticalCapability` set carries one, the facility offers a lateral target, no
+//! applicable `permissions[]` statement prohibits it, a visible slower leader
+//! exists, and the candidate corridor is feasible over the horizon. A rejection is
+//! recorded with its stable code rather than silently dropped: `capability`,
+//! `no_permission`, `no_benefit`, `insufficient_width`, `no_corridor`, or
+//! `boundary_forbidden`. A `lane_use` `permit` lets a bicycle select any offset in
+//! its usable interval and cross into a laterally adjacent facility it may use, a
+//! `prohibit` holds it on the reference centerline, and an `overtake` `prohibit`
+//! makes a preparing pass ineligible. Absent statements leave passing permitted
+//! wherever capability and geometry allow, and a `permit` never widens physical
+//! possibility: a prohibited but connected traversal stays available as violation
+//! context. `T-O3` requires zero boundary crossings without the recorded
+//! `FacilityTransition` fact, so the preventable half aborts with
+//! `boundary_forbidden` and never crosses.
+//!
+//! ## Clearance bands and close-pass evidence
+//!
+//! A fixture's `clearance_bands[]` are metric definitions for that scenario, not
+//! declarations of safety. Each band is a signed body-to-body surface clearance
+//! threshold, `violation` says whether a pass below it is recorded as a violation
+//! in this scenario, and the bands are declared in strictly increasing thresholds
+//! so the nested durations report in declaration order. A pass accumulates each
+//! applicable band's duration below its threshold, and the close-pass observation
+//! records the minimum clearance and its time, the relative speed, the boundary
+//! and opposing facts, every band duration, and the bands that named a violation.
+//! The bicycle's checked-in passing fixture authors a 0.5 m violating band and a
+//! 2.0 m study band applying to the narrow modes; its executed pass measures
+//! 0.78 m, records both durations, and names no violation, while the 3.6 m unsafe
+//! variant measures 0.4001 m at 44.75 s, records band 0 as its violation, and
+//! still records no contact.
+//!
+//! ## Unsafe-commit response
+//!
+//! Once committed, the response to a predicted-clearance loss is fixed and
+//! ordered: brake within the profile's comfortable `b` and never accelerate while
+//! the corridor admits it; hold the committed target while the swept clearance
+//! stays at or above `maneuver_policy.commit.min_predicted_clearance_m`, for at
+//! most `hold_timeout_s`; and abort when that clearance falls below the floor, the
+//! hold times out, or the target disappears, returning to the pre-maneuver offset
+//! and facility under the same bounded steering. Every checked-in lateral fixture
+//! authors `min_predicted_clearance_m` = 0.25 m and `hold_timeout_s` = 2.0 s. The
+//! kernel's position caps stay the last-resort backstop: an executed pass engages
+//! them exactly once, on the passed body, when the passer's rear draws level with
+//! that body's front, and the fixtures assert that relationship instead of
+//! relying on it.
+//!
+//! ## Wrong-way context
+//!
+//! A bicycle whose template declares `reverse_direction` evaluates the opposing
+//! option from immutable inputs only: physical connectivity of the reverse
+//! traversal, the object's authored nominal direction, the estimated time saving,
+//! the observed opposing density, the applicable `permissions[]` effect, the
+//! sampled `compliance`, and the scenario's `maneuver_policy.wrong_way`
+//! thresholds, with one draw from the versioned `maneuver` stream keyed by the
+//! root seed and the stable agent id. The decision records the perceived rule, the
+//! selected option, the reason code (`no_opposing_path`, `no_nominal_direction`,
+//! `insufficient_time_saving`, `opposing_density_too_high`, `compliant_choice`,
+//! `noncompliant_choice`, `legal_permission`, or `legal_obligation`), and the
+//! context values it used, so a legal opposing traversal is reported under its
+//! rule and never as a violation. An occupied opposing corridor is not a
+//! precondition failure: the ordinary leader, prediction, yielding, and collision
+//! machinery acts and the corridor is never bypassed. The checked-in wrong-way
+//! fixture drives its four cases (permitted, prohibited-but-connected, physically
+//! disconnected, occupied) through `Simulation::request_wrong_way_entry`, the
+//! seam a tactical leaf supplies; no production demand path calls that seam yet,
+//! so no CLI run of a checked-in fixture opens a wrong-way interval on its own.
+//!
 //! ## Bounds
 //!
-//! The raw acceleration is clamped to `[-b, +a_max]`, so a bicycle's commanded
-//! braking never exceeds its comfortable deceleration and its acceleration
-//! never exceeds its maximum. The kernel additionally integrates speed within
-//! `[0, v0]`.
+//! The raw longitudinal acceleration is clamped to `[-b, +a_max]`, so a
+//! bicycle's commanded braking never exceeds its comfortable deceleration and its
+//! acceleration never exceeds its maximum. The kernel additionally integrates
+//! speed within `[0, v0]`. The lateral command's own bounds are the two
+//! bounded-steering limits and the corridor test of [Lateral
+//! dynamics](#lateral-dynamics).
 //!
 //! ## Tie-breaks
 //!
@@ -106,6 +257,12 @@
 //! chooses between candidates. The kernel scans live agents in ascending
 //! [`crate::AgentId`] order and replaces the leader only for a strictly smaller
 //! gap, so two candidates at exactly equal gaps resolve to the lowest agent id.
+//! Two conflicting lateral claims are arbitrated as a batch over one immutable
+//! observation by a total key — an already committed claimant first, then the
+//! smaller remaining distance to the contested corridor, then the smaller
+//! [`crate::AgentId`] — so the winner is invariant to declaration, discovery, and
+//! insertion order; the loser aborts with `claim_rejected`, and an exact tie is
+//! therefore won by the lowest agent id.
 //!
 //! ## Emergency backstop
 //!
@@ -115,35 +272,53 @@
 //! occupied crossing in one step. Each step where a cap brakes harder than the
 //! profile's comfortable value is counted in `Simulation::emergency_cap_steps`,
 //! so a caller can assert the backstop stayed idle. A bicycle's low comfortable
-//! braking makes the cap bind sooner than a car's at the same approach speed.
+//! braking makes the cap bind sooner than a car's at the same approach speed, and
+//! an executed pass draws on it exactly once on the passed body, as [Unsafe-commit
+//! response](#unsafe-commit-response) records.
 //!
 //! ## Assumptions
 //!
-//! The model assumes one longitudinal degree of freedom: the bicycle is a point
-//! mass on a fixed reference path, with no lateral state and no balance, lean,
-//! pedaling, or dismounting. It assumes the sampled profile fully describes the
-//! rider and is fixed for the run. It assumes the kernel supplies every
-//! interaction constraint and every position cap above. Nothing here is
-//! calibrated against observed bicycle trajectories.
+//! The model assumes one longitudinal degree of freedom plus, when `lateral` is
+//! declared, one kinematic lateral degree of freedom: the bicycle is a point mass
+//! on a fixed reference path whose heading is integrated kinematically, with no
+//! balance, lean, steering geometry, wheelbase, pedaling, or dismounting. It
+//! assumes the sampled profile fully describes the rider and is fixed for the run,
+//! that a lateral target offset is a command rather than a trajectory, and that
+//! the kernel supplies every interaction constraint, every predicted body, and
+//! every position cap above. Nothing here is calibrated against observed bicycle
+//! trajectories.
 //!
 //! ## Parameter sources
 //!
-//! Every parameter is authored scenario data: the normalized `bicycle` mode
-//! template's profile ranges, checked in by the mode-template fixture
+//! Every profile parameter is authored scenario data: the normalized `bicycle`
+//! mode template's profile ranges, checked in by the mode-template fixture
 //! (`crates/hekate-model/tests/fixtures/narrow_mode_templates_v2.json5`) and
-//! required in full by the schema's narrow-wheeled validation rule. The numbers
-//! are provisional engineering defaults, not fitted to observations, and no
-//! parser default supplies them — a narrow wheeled template must state each
-//! parameter explicitly or validation rejects it.
+//! required in full by the schema's narrow-wheeled validation rule, plus the
+//! maneuver parameters `lateral.target_clearance_m` and `lateral.horizon_s` on the
+//! same template. The numbers are provisional engineering defaults, not fitted to
+//! observations, and no parser default supplies them — a narrow wheeled template
+//! must state each parameter explicitly or validation rejects it.
 //!
 //! ## Validated ranges
 //!
-//! Evidence so far covers the authored bicycle envelope above — desired speed
+//! Increment 1 evidence covers the authored bicycle envelope — desired speed
 //! 3.5–6.5 m/s, acceleration 0.8–1.5 m/s², braking 1.5–3.0 m/s², time gap
 //! 0.8–1.4 s — through this model's bound tests and the checked-in narrow
-//! mode-template fixture. The end-to-end bicycle fixtures (straight, curve,
-//! braking, following, signal, and crossing) are separate Increment 1 evidence,
-//! so behavior outside the authored envelope is unvalidated rather than
+//! mode-template fixture, and the six longitudinal fixtures under
+//! `scenarios/phase2/inc1/` (straight, curve, braking, following, signal, and
+//! crossing).
+//!
+//! Increment 2 evidence covers the authored lateral envelope the checked-in
+//! fixtures exercise: a 1.8 m long, 0.35 m radius capsule, a constant desired
+//! speed of 4.5, 6.0, or 9.0 m/s, `steering_rate_max_rad_s` 0.9,
+//! `lateral_accel_max_mps2` 2.0, `lateral_clearance_m` 0.3, compliance 0.0 or
+//! 1.0, and `lateral` target clearances of 0.4 m on a 3.6 m bikeway and 0.75 m on
+//! a 6.0 m one at a 2.0 s horizon. Two of those numbers sit outside the Increment
+//! 1 template's authored ranges and are validated only by the fixtures that
+//! author them: the constant 9.0 m/s desired speed is above the 3.5–6.5 m/s
+//! envelope, and the lateral parameters and the maneuver policy are new in this
+//! increment. Speeds above 9.0 m/s, capsule radii other than 0.35 m, and
+//! clearances or horizons outside those fixtures are unvalidated rather than
 //! credible.
 //!
 //! ## Known failure modes
@@ -153,39 +328,104 @@
 //!   position caps, not this model, keep bodies from overlapping.
 //! - A low desired speed with a nonzero closing speed can demand more braking
 //!   than `b`; the kernel cap then binds and the emergency count rises.
-//! - The model has no lateral or steering state, so it cannot represent
-//!   passing, lane changes, or wrong-way riding; those are Increment 2.
+//! - The lateral law is kinematic: a distant target clearance reached over a short
+//!   approach saturates the heading-rate or lateral-acceleration bound, and the
+//!   corridor test then rejects the step so the bicycle holds instead of reaching
+//!   its target. It models no tire slip, counter-steer, or rider stabilization, so
+//!   a real rider's low-speed balance is not represented.
+//! - A bicycle whose template declares no `lateral` (and so no
+//!   `lateral_accel_max_mps2`) has no free lateral motion: a pass, lane change, or
+//!   lateral request against it is rejected with `no_corridor`, so it cannot
+//!   represent lateral passing at all.
 //! - A non-positive or non-finite desired speed is floored to
 //!   `f64::MIN_POSITIVE`, and a non-finite gap contributes no interaction, so a
 //!   malformed parameter or constraint is silently absorbed rather than
 //!   rejected.
 //!
+//! ## Evidence
+//!
+//! Every claim above is checked by resolved evidence, named so a reader can
+//! re-run it from the repository root:
+//!
+//! - `crates/hekate-sim/tests/inc2_passing_fixtures.rs` runs the five checked-in
+//!   passing fixtures under `scenarios/phase2/inc2/` and asserts the lifecycle
+//!   edges, finite continuous lateral samples, the motion and world-boundary
+//!   limits, the close-pass bands, route completion, and no silent contact.
+//! - `crates/hekate-sim/tests/close_pass.rs` asserts the per-band accumulation,
+//!   the declaration order, and one `Event::ClosePass` per closed observation.
+//! - `crates/hekate-sim/tests/prediction.rs` bounds `T-O1` = 0.10 m between the
+//!   production prediction and the fine-step executed minimum at every preset
+//!   (worst measured 0.0139 m at Fast, 0.0071 m at Standard, 0.0028 m at Fine) and
+//!   falsifies an endpoint-only fold; `prediction_reference.rs` holds the
+//!   hand-computable references.
+//! - `crates/hekate-sim/tests/claims.rs` with `stage`'s own tests proves the
+//!   arbitration key, and `maneuver_lifecycle.rs` with `sim`'s in-crate hazard
+//!   tests proves the brake, hold, and abort responses; `wrong_way.rs` and
+//!   `apps/hekate-cli/tests/run_metrics.rs` prove the wrong-way reasons, interval
+//!   boundaries, and disaggregated metrics, including the occupied corridor's
+//!   least bumper gap of -1.3e-15 m with one near miss and one contact.
+//! - `apps/hekate-cli/tests/{inc2_determinism,inc2_trace}.rs` and the twelve
+//!   goldens under `apps/hekate-cli/tests/golden/inc2/` reproduce each fixture at
+//!   Standard and Fine, and `scenarios/phase2/inc2/inc2_seed_bank.json` declares
+//!   its seeds {11, 48, 102}.
+//! - `docs/benchmark-matrix.md` §7.2 names the checked-in Increment 2 paths, and
+//!   §5.2 fixes the `CC-OVERTAKE` and `CC-OPPOSE` classes judged on `T-O1`,
+//!   `T-O2`, `T-O3`, `T-H1`, and `T-H2`.
+//!
 //! ## Incompatible fidelity settings
 //!
-//! The model takes no fidelity parameter: `a_max`, `b`, `T`, and `delta` are
-//! properties of the model, not of the step, so Fast, Standard, and Fine
-//! produce the same command from the same state. It is incompatible with any
-//! preset that disables the kernel's position caps or that requires lateral or
-//! steering state, which it does not express.
+//! The longitudinal command takes no fidelity parameter: `a_max`, `b`, `T`, and
+//! `delta` are properties of the model, not of the step, so Fast, Standard, and
+//! Fine produce the same command from the same state. The lateral motion is
+//! preset-dependent by construction, because the decision cadence is the preset's
+//! step and the predictor subdivides that cadence; the authored `horizon_s` and
+//! every motion limit are unchanged, so a coarser preset merely decides less often
+//! and predicts more coarsely. The model is incompatible with any preset that
+//! disables the kernel's position caps or its corridor test, and with a `lateral`
+//! declaration whose profile omits `lateral_accel_max_mps2`, which leaves the mode
+//! without lateral motion rather than with an unbounded one.
+//!
+//! ## Exclusions
+//!
+//! The model deliberately excludes, and represents by no state, parameter, or
+//! constant above: rider balance, lean, and falls; the biomechanics of pedaling,
+//! steering torque, or effort; tire, suspension, and single-track steering
+//! geometry; dooring, parking maneuvers, and curb activity; implicit sidewalk
+//! riding (a bicycle rides only a facility whose `access.modes` names it); any
+//! calibrated crash or injury probability; and field calibration of any parameter
+//! against observed bicycle trajectories. `PHASE_2_PLAN.md` and
+//! `docs/benchmark-matrix.md` §11 defer these, and this increment adds no model for
+//! any of them.
 //!
 //! # Model card — scooter
 //!
-//! The standing-scooter mode's longitudinal model. It is the same shared
-//! documented Intelligent Driver Model (IDM) law of [`crate::control`] —
-//! Treiber, Hennecke & Helbing (2000) — parameterized by a scooter's sampled
-//! [`NarrowProfile`] and reached only through [`NarrowWheeledController`]. Like
-//! the bicycle card it documents a replaceable model, not a calibrated claim,
-//! and it is not fitted to scooter observations.
+//! The standing-scooter mode's longitudinal and lateral model. Its longitudinal
+//! command is the same shared documented Intelligent Driver Model (IDM) law of
+//! [`crate::control`] — Treiber, Hennecke & Helbing (2000) — parameterized by a
+//! scooter's sampled [`NarrowProfile`] and reached only through
+//! [`NarrowWheeledController`]. Its lateral motion, present only when the mode's
+//! compiled template declares `lateral`, is the same shared bounded-steering law
+//! of [`crate::steering`] driven by the maneuver lifecycle of [`crate::sim`].
+//! Like the bicycle card it documents replaceable models, not a calibrated
+//! claim, and neither is fitted to scooter observations.
 //!
 //! ## State
 //!
 //! The kernel holds one scooter's longitudinal state: the speed `v` in m/s
 //! along its reference path, the path progress that fixes its position and its
 //! front-bumper progress, and the capsule body length that turns a
-//! centre-to-centre distance into a bumper-to-bumper gap. In Increment 1 the
-//! lateral offset and heading follow the reference path, so this model steers
-//! nothing and has no lateral state; free lateral motion is Increment 2. Its
-//! full output is one commanded acceleration.
+//! centre-to-centre distance into a bumper-to-bumper gap. The longitudinal output
+//! is one commanded acceleration.
+//!
+//! When the mode's compiled template declares `lateral`, the kernel additionally
+//! holds the scooter's signed lateral offset `d` in metres (positive to the left
+//! of its own direction of travel), its world heading, the target offset and
+//! target facility of its active maneuver, the five-state maneuver lifecycle
+//! (`following`, `preparing`, `committed`, `returning`, `aborted`), and the
+//! bounded-steering limits and usable lateral interval its profile compiled to.
+//! The lateral output is one bounded steering step. Without `lateral` the offset
+//! and heading stay on the reference path and none of that state exists, so an
+//! Increment 1 template behaves exactly as it did before.
 //!
 //! ## Parameters
 //!
@@ -204,14 +444,25 @@
 //!   mode;
 //! - `steering_rate_max_rad_s` (authored 0.8–1.5 rad/s, quicker than a
 //!   bicycle's), `lateral_accel_max_mps2`, and `lateral_clearance_m` (authored
-//!   0.20–0.50 m) are carried for the Increment 2 lateral machinery and are not
-//!   read by this longitudinal model;
-//! - `compliance` (authored 0.6–1.0, wider and lower than a bicycle's) belongs
-//!   to the signal-compliance decision ([`crate::compliance`]), not to this
-//!   longitudinal model.
+//!   0.20–0.50 m) are the lateral wheeled parameters. The longitudinal law
+//!   ignores them; `NarrowProfile::lateral_limits` projects them into the
+//!   compiled bounded-steering limits ([`crate::steering`]) and the usable
+//!   lateral interval the lateral machinery reads. `lateral_accel_max_mps2` is
+//!   required exactly when the template declares `lateral`, so a template without
+//!   it has no free lateral motion rather than an unbounded one;
+//! - `compliance` (authored 0.6–1.0, wider and lower than a bicycle's) belongs to
+//!   the signal-compliance decision ([`crate::compliance`]) and to the wrong-way
+//!   draw ([Wrong-way context](#wrong-way-context)), not to this longitudinal
+//!   model.
 //!
 //! The controller never substitutes its own value for a parameter, so a sampled
-//! profile fully determines the command.
+//! profile fully determines the command. The mode's own maneuver parameters are
+//! authored on the template instead of sampled: `lateral.target_clearance_m` is
+//! the signed body-to-body surface clearance a maneuver by this mode targets at
+//! its closest approach, and `lateral.horizon_s` is the feasible time horizon a
+//! candidate corridor must hold for. Both compile into
+//! [`hekate_model::CompiledLateralPolicy`] and reach the kernel as component
+//! data, never as a template-id branch.
 //!
 //! ## Constants
 //!
@@ -219,7 +470,14 @@
 //! free-flow acceleration exponent `delta = 4` ([`crate::control`]'s
 //! `IDM_FREE_FLOW_EXPONENT`), the leader standstill gap the kernel uses when it
 //! builds a leader constraint, and the gap floor that keeps a touching
-//! constraint finite. This model adds no constant of its own.
+//! constraint finite. The lateral machinery adds its own shared constants, which
+//! this model reads and does not own: the approach time constant
+//! `LATERAL_APPROACH_S` = 2.0 s, the speed floor
+//! `MIN_SPEED_FOR_LATERAL_BOUND_MPS` = 0.5 m/s that keeps the
+//! lateral-acceleration bound finite at a standstill, the corridor test's
+//! `CORRIDOR_TOLERANCE_M` = 1e-9 m, the settle tolerance `SETTLE_TOLERANCE_M` =
+//! 1e-3 m, and `DEFAULT_SUBDIVISIONS` = 8 fine steps per decision cadence in the
+//! predictor ([`crate::prediction`]). This model adds no constant of its own.
 //!
 //! ## Decision inputs
 //!
@@ -231,6 +489,15 @@
 //! profile, and the current speed; the kernel owns which of them exist, and the
 //! position caps in [Emergency backstop](#emergency-backstop) are applied
 //! outside the model.
+//!
+//! One lateral decision sees a different set, none of which this model picks:
+//! the compiled usable lateral interval at the scooter's arc length, the target
+//! facility's own usable interval and compiled shared boundary for a change of
+//! lane, every other live body as an exact shape with its velocity, and the
+//! compiled lateral policy (`target_clearance_m`, `horizon_s`) and commit policy
+//! (`min_predicted_clearance_m`, `hold_timeout_s`). The kernel owns which of them
+//! exist; this model contributes only the projected motion limits and the sampled
+//! profile.
 //!
 //! ## Longitudinal law
 //!
@@ -246,12 +513,137 @@
 //! narrow wheeled law as the bicycle, differing only in its sampled
 //! parameters.
 //!
+//! ## Lateral dynamics
+//!
+//! When the mode's compiled template declares `lateral`, the scooter joins the
+//! shared wheeled lateral machinery and contributes its own compiled limits to
+//! it. `NarrowProfile::lateral_limits` projects `steering_rate_max_rad_s`,
+//! `lateral_accel_max_mps2`, and `lateral_clearance_m` into the compiled
+//! bounded-steering limits and the corridor test, and every lateral decision is
+//! one bounded step under these laws ([`crate::steering`]):
+//!
+//! - the desired lateral rate toward the target offset is the signed offset
+//!   error divided by `LATERAL_APPROACH_S` = 2.0 s, so an offset closes over
+//!   several decisions and is never snapped to its target in one step;
+//! - the command heading rate is the desired rate clamped to
+//!   `min(steering_rate_max_rad_s, lateral_accel_max_mps2 / max(v, MIN_SPEED_FOR_LATERAL_BOUND_MPS))`,
+//!   so both compiled limits hold at every speed;
+//! - the lateral offset rate follows from the integrated heading,
+//!   `d_dot = v * sin(theta_error)`. No target offset is ever written to `d` or
+//!   to a world position: world pose is collision and output truth, and the
+//!   route-relative offset is the projection of that pose back onto the compiled
+//!   reference;
+//! - the usable interval is the facility's compiled band less the body envelope
+//!   and `lateral_clearance_m`; a step that would leave it is rejected within
+//!   `CORRIDOR_TOLERANCE_M` = 1e-9 m, so the scooter brakes or holds rather than
+//!   clipping the band.
+//!
+//! The scooter's 1.2 m long, 0.28 m radius capsule is the narrower body of the
+//! two narrow modes, so its envelope occupies less of a facility band than a
+//! bicycle's and it steers the same law from the same profile parameters.
+//!
+//! ## Decision cadence and predictor horizon
+//!
+//! Tactical lateral clauses (`following -> preparing`, `preparing -> committed`,
+//! `returning -> following`) are evaluated at the run's lateral-decision cadence;
+//! the safety clauses (the committed abort, the bounded braking response, and
+//! boundary prevention) are evaluated every step, so a hazard between two
+//! decisions brakes immediately. The kernel currently resolves the
+//! lateral-decision cadence as the run's fixed physics step
+//! (`crate::config::DEFAULT_STEP` = 0.05 s, or the Fast 0.10 s and Fine 0.02 s
+//! steps `docs/benchmark-matrix.md` §2 fixes), so a scooter re-decides two and a
+//! half times as often at Fine as at Standard.
+//!
+//! The predictor horizon is the mode's own authored `lateral.horizon_s` and not a
+//! run-wide constant: every checked-in lateral fixture authors 2.0 s. A candidate
+//! corridor must stay feasible for that long from the decision instant at the
+//! current speed and inside the bounded motion, and the prediction subdivides one
+//! decision of motion into `DEFAULT_SUBDIVISIONS` = 8 bounded steps
+//! ([`crate::prediction`]) from the current pose. The predicted minimum clearance
+//! a maneuver carries is the swept clearance over that horizon.
+//!
+//! ## Permissions and tactic eligibility
+//!
+//! A scooter may start a pass or an overtake only where its compiled
+//! `TacticalCapability` set carries one, the facility offers a lateral target, no
+//! applicable `permissions[]` statement prohibits it, a visible slower leader
+//! exists, and the candidate corridor is feasible over the horizon. A rejection is
+//! recorded with its stable code rather than silently dropped: `capability`,
+//! `no_permission`, `no_benefit`, `insufficient_width`, `no_corridor`, or
+//! `boundary_forbidden`. A `lane_use` `permit` lets a scooter select any offset in
+//! its usable interval and cross into a laterally adjacent facility it may use, a
+//! `prohibit` holds it on the reference centerline, and an `overtake` `prohibit`
+//! makes a preparing pass ineligible. Absent statements leave passing permitted
+//! wherever capability and geometry allow, and a `permit` never widens physical
+//! possibility: a prohibited but connected traversal stays available as violation
+//! context. `T-O3` requires zero boundary crossings without the recorded
+//! `FacilityTransition` fact, so the preventable half aborts with
+//! `boundary_forbidden` and never crosses.
+//!
+//! ## Clearance bands and close-pass evidence
+//!
+//! A fixture's `clearance_bands[]` are metric definitions for that scenario, not
+//! declarations of safety. Each band is a signed body-to-body surface clearance
+//! threshold, `violation` says whether a pass below it is recorded as a violation
+//! in this scenario, and the bands are declared in strictly increasing thresholds
+//! so the nested durations report in declaration order. A pass accumulates each
+//! applicable band's duration below its threshold, and the close-pass observation
+//! records the minimum clearance and its time, the relative speed, the boundary
+//! and opposing facts, every band duration, and the bands that named a violation.
+//! The scooter's checked-in passing fixture authors a 0.5 m violating band and a
+//! 2.0 m study band applying to the narrow modes, and the scooter is the slower of
+//! the two narrow modes there at a constant 4.5 m/s: the observation names the
+//! overtaking bicycle as its agent and the scooter as its passed partner. **No
+//! checked-in fixture has a scooter as the passing agent**, so a scooter's own
+//! executed pass is not covered by the close-pass evidence; the narrow passing
+//! evidence is the bicycle's.
+//!
+//! ## Unsafe-commit response
+//!
+//! When a scooter is the passing agent, the response to a predicted-clearance
+//! loss is fixed and ordered: brake within the profile's comfortable `b` and
+//! never accelerate while the corridor admits it; hold the committed target while
+//! the swept clearance stays at or above
+//! `maneuver_policy.commit.min_predicted_clearance_m`, for at most
+//! `hold_timeout_s`; and abort when that clearance falls below the floor, the hold
+//! times out, or the target disappears, returning to the pre-maneuver offset and
+//! facility under the same bounded steering. Every checked-in lateral fixture
+//! authors `min_predicted_clearance_m` = 0.25 m and `hold_timeout_s` = 2.0 s. The
+//! kernel's position caps stay the last-resort backstop: an executed pass engages
+//! them exactly once, on the passed body, when the passer's rear draws level with
+//! that body's front, and the fixtures assert that relationship instead of
+//! relying on it.
+//!
+//! ## Wrong-way context
+//!
+//! A scooter whose template declares `reverse_direction` evaluates the opposing
+//! option from immutable inputs only: physical connectivity of the reverse
+//! traversal, the object's authored nominal direction, the estimated time saving,
+//! the observed opposing density, the applicable `permissions[]` effect, the
+//! sampled `compliance`, and the scenario's `maneuver_policy.wrong_way`
+//! thresholds, with one draw from the versioned `maneuver` stream keyed by the
+//! root seed and the stable agent id. The decision records the perceived rule, the
+//! selected option, the reason code (`no_opposing_path`, `no_nominal_direction`,
+//! `insufficient_time_saving`, `opposing_density_too_high`, `compliant_choice`,
+//! `noncompliant_choice`, `legal_permission`, or `legal_obligation`), and the
+//! context values it used, so a legal opposing traversal is reported under its
+//! rule and never as a violation. An occupied opposing corridor is not a
+//! precondition failure: the ordinary leader, prediction, yielding, and collision
+//! machinery acts and the corridor is never bypassed. The checked-in wrong-way
+//! fixture declares a scooter `reverse_direction` capability and a scooter
+//! `nominal_direction` `permit` on its occupied corridor, and drives its four
+//! cases through `Simulation::request_wrong_way_entry`, the seam a tactical leaf
+//! supplies; no production demand path calls that seam yet, so no CLI run of a
+//! checked-in fixture opens a wrong-way interval on its own.
+//!
 //! ## Bounds
 //!
-//! The raw acceleration is clamped to `[-b, +a_max]`, so a scooter's commanded
-//! braking never exceeds its comfortable deceleration and its acceleration
-//! never exceeds its maximum. The kernel additionally integrates speed within
-//! `[0, v0]`.
+//! The raw longitudinal acceleration is clamped to `[-b, +a_max]`, so a scooter's
+//! commanded braking never exceeds its comfortable deceleration and its
+//! acceleration never exceeds its maximum. The kernel additionally integrates
+//! speed within `[0, v0]`. The lateral command's own bounds are the two
+//! bounded-steering limits and the corridor test of [Lateral
+//! dynamics](#lateral-dynamics).
 //!
 //! ## Tie-breaks
 //!
@@ -259,6 +651,12 @@
 //! chooses between candidates. The kernel scans live agents in ascending
 //! [`crate::AgentId`] order and replaces the leader only for a strictly smaller
 //! gap, so two candidates at exactly equal gaps resolve to the lowest agent id.
+//! Two conflicting lateral claims are arbitrated as a batch over one immutable
+//! observation by a total key — an already committed claimant first, then the
+//! smaller remaining distance to the contested corridor, then the smaller
+//! [`crate::AgentId`] — so the winner is invariant to declaration, discovery, and
+//! insertion order; the loser aborts with `claim_rejected`, and an exact tie is
+//! therefore won by the lowest agent id.
 //!
 //! ## Emergency backstop
 //!
@@ -269,35 +667,53 @@
 //! profile's comfortable value is counted in `Simulation::emergency_cap_steps`,
 //! so a caller can assert the backstop stayed idle. A scooter's higher free-flow
 //! speed means a stop line entered while still fast can bind the cap despite its
-//! firm braking.
+//! firm braking, and an executed pass draws on it exactly once on the passed
+//! body, as [Unsafe-commit response](#unsafe-commit-response) records.
 //!
 //! ## Assumptions
 //!
-//! The model assumes one longitudinal degree of freedom: the scooter is a point
-//! mass on a fixed reference path, with no lateral state and no balance, lean,
-//! kick, or dismount. It assumes the sampled profile fully describes the rider
-//! and is fixed for the run. It assumes the kernel supplies every interaction
-//! constraint and every position cap above. Nothing here is calibrated against
-//! observed scooter trajectories.
+//! The model assumes one longitudinal degree of freedom plus, when `lateral` is
+//! declared, one kinematic lateral degree of freedom: the scooter is a point mass
+//! on a fixed reference path whose heading is integrated kinematically, with no
+//! balance, lean, kick, steering geometry, wheelbase, or dismount. It assumes the
+//! sampled profile fully describes the rider and is fixed for the run, that a
+//! lateral target offset is a command rather than a trajectory, and that the
+//! kernel supplies every interaction constraint, every predicted body, and every
+//! position cap above. Nothing here is calibrated against observed scooter
+//! trajectories.
 //!
 //! ## Parameter sources
 //!
-//! Every parameter is authored scenario data: the normalized `scooter` mode
-//! template's profile ranges, checked in by the mode-template fixture
+//! Every profile parameter is authored scenario data: the normalized `scooter`
+//! mode template's profile ranges, checked in by the mode-template fixture
 //! (`crates/hekate-model/tests/fixtures/narrow_mode_templates_v2.json5`) and
-//! required in full by the schema's narrow-wheeled validation rule. The numbers
-//! are provisional engineering defaults, not fitted to observations, and no
-//! parser default supplies them — a narrow wheeled template must state each
-//! parameter explicitly or validation rejects it.
+//! required in full by the schema's narrow-wheeled validation rule, plus the
+//! maneuver parameters `lateral.target_clearance_m` and `lateral.horizon_s` on the
+//! same template. The numbers are provisional engineering defaults, not fitted to
+//! observations, and no parser default supplies them — a narrow wheeled template
+//! must state each parameter explicitly or validation rejects it.
 //!
 //! ## Validated ranges
 //!
-//! Evidence so far covers the authored scooter envelope above — desired speed
+//! Increment 1 evidence covers the authored scooter envelope — desired speed
 //! 4.0–7.5 m/s, acceleration 1.0–2.0 m/s², braking 2.0–3.5 m/s², time gap
 //! 0.8–1.4 s — through this model's bound tests and the checked-in narrow
-//! mode-template fixture. The end-to-end scooter fixtures (straight, curve,
-//! braking, following, signal, and crossing) are separate Increment 1 evidence,
-//! so behavior outside the authored envelope is unvalidated rather than
+//! mode-template fixture, and the six longitudinal fixtures under
+//! `scenarios/phase2/inc1/` (straight, curve, braking, following, signal, and
+//! crossing).
+//!
+//! Increment 2 evidence covers the authored lateral envelope the checked-in
+//! fixtures exercise: a 1.2 m long, 0.28 m radius capsule, a constant desired
+//! speed of 4.5 or 6.0 m/s, `steering_rate_max_rad_s` 0.9,
+//! `lateral_accel_max_mps2` 2.0, `lateral_clearance_m` 0.3, compliance 0.0 or
+//! 1.0, and `lateral` target clearances of 0.4 m on a 3.6 m bikeway and 0.75 m on
+//! a 6.0 m one at a 2.0 s horizon, plus the 1.4 m long, 0.28 m radius capsule of
+//! the wrong-way fixture. The lateral parameters and the maneuver policy are new
+//! in this increment, so no earlier evidence covers them. No checked-in fixture
+//! has a scooter as the passing agent, so a scooter's own pass is exercised only
+//! through the shared law, not through the close-pass fixture. Speeds above
+//! 6.0 m/s, capsule lengths other than 1.2 and 1.4 m, radii other than 0.28 m, and
+//! clearances or horizons outside those fixtures are unvalidated rather than
 //! credible.
 //!
 //! ## Known failure modes
@@ -308,20 +724,74 @@
 //! - The scooter's higher free-flow speed and lower mass assumption mean a
 //!   stop line entered at speed can bind the kernel cap even when the
 //!   comfortable braking is applied.
-//! - The model has no lateral or steering state, so it cannot represent
-//!   passing, lane changes, or wrong-way riding; those are Increment 2.
+//! - The lateral law is kinematic: a distant target clearance reached over a short
+//!   approach saturates the heading-rate or lateral-acceleration bound, and the
+//!   corridor test then rejects the step so the scooter holds instead of reaching
+//!   its target. It models no tire slip, counter-steer, or rider stabilization, so
+//!   the standing rider's own balance is not represented.
+//! - A scooter whose template declares no `lateral` (and so no
+//!   `lateral_accel_max_mps2`) has no free lateral motion: a pass, lane change, or
+//!   lateral request against it is rejected with `no_corridor`, so it cannot
+//!   represent lateral passing at all.
 //! - A non-positive or non-finite desired speed is floored to
 //!   `f64::MIN_POSITIVE`, and a non-finite gap contributes no interaction, so a
 //!   malformed parameter or constraint is silently absorbed rather than
 //!   rejected.
 //!
+//! ## Evidence
+//!
+//! Every claim above is checked by resolved evidence, named so a reader can
+//! re-run it from the repository root:
+//!
+//! - `crates/hekate-sim/tests/inc2_passing_fixtures.rs` runs the five checked-in
+//!   passing fixtures under `scenarios/phase2/inc2/` and asserts the lifecycle
+//!   edges, finite continuous lateral samples, the motion and world-boundary
+//!   limits, the close-pass bands, route completion, and no silent contact.
+//! - `crates/hekate-sim/tests/close_pass.rs` asserts the per-band accumulation,
+//!   the declaration order, and one `Event::ClosePass` per closed observation.
+//! - `crates/hekate-sim/tests/prediction.rs` bounds `T-O1` = 0.10 m between the
+//!   production prediction and the fine-step executed minimum at every preset
+//!   (worst measured 0.0139 m at Fast, 0.0071 m at Standard, 0.0028 m at Fine) and
+//!   falsifies an endpoint-only fold; `prediction_reference.rs` holds the
+//!   hand-computable references.
+//! - `crates/hekate-sim/tests/claims.rs` with `stage`'s own tests proves the
+//!   arbitration key, and `maneuver_lifecycle.rs` with `sim`'s in-crate hazard
+//!   tests proves the brake, hold, and abort responses for a scooter exactly as
+//!   for a bicycle; `wrong_way.rs` and `apps/hekate-cli/tests/run_metrics.rs`
+//!   prove the wrong-way reasons, interval boundaries, and disaggregated metrics
+//!   for both narrow modes, including the occupied corridor's least bumper gap of
+//!   -1.3e-15 m with one near miss and one contact.
+//! - `apps/hekate-cli/tests/{inc2_determinism,inc2_trace}.rs` and the twelve
+//!   goldens under `apps/hekate-cli/tests/golden/inc2/` reproduce each fixture at
+//!   Standard and Fine, and `scenarios/phase2/inc2/inc2_seed_bank.json` declares
+//!   its seeds {11, 48, 102}.
+//! - `docs/benchmark-matrix.md` §7.2 names the checked-in Increment 2 paths, and
+//!   §5.2 fixes the `CC-OVERTAKE` and `CC-OPPOSE` classes judged on `T-O1`,
+//!   `T-O2`, `T-O3`, `T-H1`, and `T-H2`.
+//!
 //! ## Incompatible fidelity settings
 //!
-//! The model takes no fidelity parameter: `a_max`, `b`, `T`, and `delta` are
-//! properties of the model, not of the step, so Fast, Standard, and Fine
-//! produce the same command from the same state. It is incompatible with any
-//! preset that disables the kernel's position caps or that requires lateral or
-//! steering state, which it does not express.
+//! The longitudinal command takes no fidelity parameter: `a_max`, `b`, `T`, and
+//! `delta` are properties of the model, not of the step, so Fast, Standard, and
+//! Fine produce the same command from the same state. The lateral motion is
+//! preset-dependent by construction, because the decision cadence is the preset's
+//! step and the predictor subdivides that cadence; the authored `horizon_s` and
+//! every motion limit are unchanged, so a coarser preset merely decides less often
+//! and predicts more coarsely. The model is incompatible with any preset that
+//! disables the kernel's position caps or its corridor test, and with a `lateral`
+//! declaration whose profile omits `lateral_accel_max_mps2`, which leaves the mode
+//! without lateral motion rather than with an unbounded one.
+//!
+//! ## Exclusions
+//!
+//! The model deliberately excludes, and represents by no state, parameter, or
+//! constant above: rider balance, lean, and falls; the biomechanics of kicking,
+//! steering torque, or effort; tire, suspension, and steering geometry; dooring,
+//! parking maneuvers, and curb activity; implicit sidewalk riding (a scooter rides
+//! only a facility whose `access.modes` names it); any calibrated crash or injury
+//! probability; and field calibration of any parameter against observed scooter
+//! trajectories. `PHASE_2_PLAN.md` and `docs/benchmark-matrix.md` §11 defer these,
+//! and this increment adds no model for any of them.
 
 use hekate_model::{AgentBody, CompiledModeTemplate, PassingSide};
 use rand_chacha::ChaCha20Rng;

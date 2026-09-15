@@ -63,7 +63,7 @@
 // encounter leaves open is the one the run end closes.
 //
 // This is the Increment 2 `CC-OPPOSE` reference: `docs/benchmark-matrix.md`
-// §7.3 names `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` as the wrong-way
+// §7.2 names `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` as the wrong-way
 // fixture and §7.4 item 7 resolves a bicycle/scooter pairing under `opposing`
 // here. It is a checked-in scenario, so it authors no request: the kernel's
 // wrong-way pass evaluates one entry request recorded through
