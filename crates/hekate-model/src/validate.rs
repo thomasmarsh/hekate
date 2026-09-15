@@ -211,6 +211,13 @@ pub enum DiagnosticCode {
     /// non-finite, outside `(0, pi/2)`, inverted, on a non-wheeled motion, or
     /// authored without its wheelbase companion.
     ModeSteeringAngle,
+    /// A version-2 articulated-chain body has fewer than two segments, a lead
+    /// segment authoring a hitch offset, a trailing segment omitting one, or a
+    /// segment dimension that is non-finite, non-positive, or inverted.
+    ModeArticulatedSegments,
+    /// A version-2 articulated-chain body's articulation limit is non-finite,
+    /// outside `(0, pi)`, or inverted.
+    ModeArticulationLimit,
     /// A version-2 mode template declares a lateral tactic but no maneuver policy.
     ManeuverPolicyMissing,
     /// A version-2 mode template declares `reverse_direction` but no wrong-way policy.
@@ -351,6 +358,8 @@ impl DiagnosticCode {
             Self::ModeLateralHorizon => "E_MODE_LATERAL_HORIZON",
             Self::ModeWheelbase => "E_MODE_WHEELBASE",
             Self::ModeSteeringAngle => "E_MODE_STEERING_ANGLE",
+            Self::ModeArticulatedSegments => "E_MODE_ARTICULATED_SEGMENTS",
+            Self::ModeArticulationLimit => "E_MODE_ARTICULATION_LIMIT",
             Self::ManeuverPolicyMissing => "E_MANEUVER_POLICY_MISSING",
             Self::WrongWayPolicyMissing => "E_WRONG_WAY_POLICY_MISSING",
             Self::CommitPolicyInvalid => "E_COMMIT_POLICY",
@@ -1745,6 +1754,16 @@ pub(crate) fn required_profile_params(
             "compliance",
         ],
         (_, MotionKind::HolonomicWalking) => &["speed_mps", "compliance"],
+        // Increment 3 claims no new dynamics for the articulated-wheeled
+        // family: it reuses the plain wheeled parameter set, matching
+        // `compiled_profile`'s choice of `AgentBehaviorProfile::wheeled`.
+        (_, MotionKind::ArticulatedWheeled) => &[
+            "speed_mps",
+            "max_accel_mps2",
+            "comfortable_brake_mps2",
+            "time_gap_s",
+            "compliance",
+        ],
     }
 }
 
@@ -1916,6 +1935,113 @@ fn validate_mode_templates(
                 ),
             )),
             (None, None) => {}
+        }
+
+        // Increment 3 articulated-chain geometry: at least a tractor and one
+        // trailer, hitch offsets on exactly the trailing segments, every
+        // segment dimension finite and positive, and a physically sane
+        // articulation limit. Off-tracking and corner curvature under
+        // articulation stay out of scope; only the authored geometry itself is
+        // checked here.
+        if let ModeBodySource::ArticulatedChain {
+            segments,
+            articulation_limit_rad,
+        } = &template.body
+        {
+            if segments.len() < 2 {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ModeArticulatedSegments,
+                    Some(template.id.clone()),
+                    format!(
+                        "mode template '{}' articulated chain must have at least two segments \
+                         (a tractor and one trailer), got {}",
+                        template.id,
+                        segments.len()
+                    ),
+                ));
+            }
+            for (index, segment) in segments.iter().enumerate() {
+                for (label, dimension) in
+                    [("length_m", segment.length_m), ("width_m", segment.width_m)]
+                {
+                    if !dimension.min.is_finite()
+                        || !dimension.max.is_finite()
+                        || dimension.min <= 0.0
+                        || dimension.min > dimension.max
+                    {
+                        diagnostics.push(Diagnostic::new(
+                            DiagnosticCode::ModeArticulatedSegments,
+                            Some(template.id.clone()),
+                            format!(
+                                "mode template '{}' articulated segment {index} {label} must be \
+                                 finite, positive, and non-inverted, got [{}, {}]",
+                                template.id, dimension.min, dimension.max
+                            ),
+                        ));
+                    }
+                }
+                match (index, &segment.hitch_offset_m) {
+                    (0, Some(_)) => diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::ModeArticulatedSegments,
+                        Some(template.id.clone()),
+                        format!(
+                            "mode template '{}' articulated segment 0 is the lead segment and \
+                             must not author a hitch offset",
+                            template.id
+                        ),
+                    )),
+                    (0, None) => {}
+                    (_, None) => diagnostics.push(Diagnostic::new(
+                        DiagnosticCode::ModeArticulatedSegments,
+                        Some(template.id.clone()),
+                        format!(
+                            "mode template '{}' articulated segment {index} trails the lead \
+                             segment and must author a hitch offset",
+                            template.id
+                        ),
+                    )),
+                    (_, Some(offset)) => {
+                        if !offset.min.is_finite()
+                            || !offset.max.is_finite()
+                            || offset.min <= 0.0
+                            || offset.min > offset.max
+                        {
+                            diagnostics.push(Diagnostic::new(
+                                DiagnosticCode::ModeArticulatedSegments,
+                                Some(template.id.clone()),
+                                format!(
+                                    "mode template '{}' articulated segment {index} \
+                                     hitch_offset_m must be finite, positive, and non-inverted, \
+                                     got [{}, {}]",
+                                    template.id, offset.min, offset.max
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // The articulation limit must be a strictly positive angle less
+            // than a full reversal (`pi`): at `pi` a trailing segment would
+            // fold flat back onto the one ahead of it, which is a jackknife,
+            // not a bound on one, so `(0, pi)` is the widest physically
+            // meaningful range for this field.
+            if !articulation_limit_rad.min.is_finite()
+                || !articulation_limit_rad.max.is_finite()
+                || articulation_limit_rad.min <= 0.0
+                || articulation_limit_rad.max >= std::f64::consts::PI
+                || articulation_limit_rad.min > articulation_limit_rad.max
+            {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ModeArticulationLimit,
+                    Some(template.id.clone()),
+                    format!(
+                        "mode template '{}' articulation_limit_rad must be finite, inside \
+                         (0, pi), and non-inverted, got [{}, {}]",
+                        template.id, articulation_limit_rad.min, articulation_limit_rad.max
+                    ),
+                ));
+            }
         }
 
         let required =
@@ -2400,6 +2526,10 @@ fn body_envelope_width_m(body: &ModeBodySource) -> f64 {
         ModeBodySource::Box { width_m, .. } => width_m.max,
         ModeBodySource::Circle { radius_m } => 2.0 * radius_m.max,
         ModeBodySource::Capsule { radius_m, .. } => 2.0 * radius_m.max,
+        ModeBodySource::ArticulatedChain { segments, .. } => segments
+            .iter()
+            .map(|segment| segment.width_m.max)
+            .fold(0.0, f64::max),
     }
 }
 
@@ -4176,6 +4306,149 @@ mod tests {
             walking
                 .iter()
                 .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeWheelbase)
+        );
+    }
+
+    /// A minimal `tractor_semitrailer` document with a substitutable body
+    /// clause, so a test can author a broken chain without repeating the rest
+    /// of the template.
+    fn articulated_document(body: &str) -> ScenarioSourceV2 {
+        let document = format!(
+            r#"{{ schema_version: 2, id: 'articulated', coordinate_system: {{ x: 'a', y: 'b' }},
+                paths: [], portals: [],
+                mode_templates: [ {{
+                    id: 'tractor_semitrailer',
+                    body: {body},
+                    motion: 'articulated_wheeled',
+                    tactics: [ 'follow', 'stop', 'yield' ],
+                    access: {{ facility_kinds: [ 'facility' ] }},
+                    occupancy: 'operator_only',
+                    profiles: {{
+                        speed_mps: {{ min: 8.0, max: 8.0 }},
+                        max_accel_mps2: {{ min: 0.7, max: 0.7 }},
+                        comfortable_brake_mps2: {{ min: 1.4, max: 1.4 }},
+                        time_gap_s: {{ min: 2.0, max: 2.0 }},
+                        compliance: {{ min: 1.0, max: 1.0 }},
+                    }},
+                }} ],
+            }}"#
+        );
+        crate::source::parse_scenario_source_v2(&document).expect("the template parses")
+    }
+
+    /// A valid two-segment tractor-semitrailer chain: a 6.0 m tractor with no
+    /// hitch offset and a 13.6 m trailer hitched 1.2 m behind it, under a
+    /// 0.9 rad (about 51.5 degree) articulation limit.
+    const VALID_CHAIN: &str = "{ kind: 'articulated_chain',
+        segments: [
+            { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } },
+            { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 2.55, max: 2.55 },
+                hitch_offset_m: { min: 1.2, max: 1.2 } },
+        ],
+        articulation_limit_rad: { min: 0.9, max: 0.9 } }";
+
+    #[test]
+    fn a_valid_articulated_chain_is_accepted() {
+        let diagnostics = validate_v2(&articulated_document(VALID_CHAIN));
+        assert!(
+            diagnostics.is_empty(),
+            "a two-segment chain with a lead-only-omitted hitch offset and a sane articulation \
+             limit is valid: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn an_articulated_chain_needs_at_least_two_segments() {
+        let single_segment = "{ kind: 'articulated_chain',
+            segments: [ { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } } ],
+            articulation_limit_rad: { min: 0.9, max: 0.9 } }";
+        let diagnostics = validate_v2(&articulated_document(single_segment));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeArticulatedSegments)
+        );
+    }
+
+    #[test]
+    fn the_lead_segment_must_not_author_a_hitch_offset() {
+        let lead_with_hitch = "{ kind: 'articulated_chain',
+            segments: [
+                { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 },
+                    hitch_offset_m: { min: 1.0, max: 1.0 } },
+                { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 2.55, max: 2.55 },
+                    hitch_offset_m: { min: 1.2, max: 1.2 } },
+            ],
+            articulation_limit_rad: { min: 0.9, max: 0.9 } }";
+        let diagnostics = validate_v2(&articulated_document(lead_with_hitch));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeArticulatedSegments)
+        );
+    }
+
+    #[test]
+    fn a_trailing_segment_must_author_a_hitch_offset() {
+        let trailer_without_hitch = "{ kind: 'articulated_chain',
+            segments: [
+                { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } },
+                { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 2.55, max: 2.55 } },
+            ],
+            articulation_limit_rad: { min: 0.9, max: 0.9 } }";
+        let diagnostics = validate_v2(&articulated_document(trailer_without_hitch));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeArticulatedSegments)
+        );
+    }
+
+    #[test]
+    fn an_inverted_segment_dimension_is_rejected() {
+        let inverted_width = "{ kind: 'articulated_chain',
+            segments: [
+                { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } },
+                { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 3.0, max: 2.0 },
+                    hitch_offset_m: { min: 1.2, max: 1.2 } },
+            ],
+            articulation_limit_rad: { min: 0.9, max: 0.9 } }";
+        let diagnostics = validate_v2(&articulated_document(inverted_width));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeArticulatedSegments)
+        );
+    }
+
+    #[test]
+    fn the_articulation_limit_must_be_inside_zero_pi() {
+        let too_wide = "{ kind: 'articulated_chain',
+            segments: [
+                { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } },
+                { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 2.55, max: 2.55 },
+                    hitch_offset_m: { min: 1.2, max: 1.2 } },
+            ],
+            articulation_limit_rad: { min: 0.9, max: 3.2 } }";
+        let diagnostics = validate_v2(&articulated_document(too_wide));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeArticulationLimit)
+        );
+
+        let negative = "{ kind: 'articulated_chain',
+            segments: [
+                { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } },
+                { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 2.55, max: 2.55 },
+                    hitch_offset_m: { min: 1.2, max: 1.2 } },
+            ],
+            articulation_limit_rad: { min: -0.1, max: 0.5 } }";
+        let diagnostics = validate_v2(&articulated_document(negative));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::ModeArticulationLimit)
         );
     }
 

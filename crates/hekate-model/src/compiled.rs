@@ -4103,9 +4103,9 @@ fn zero_range() -> ProfileRangeSource {
 fn car_profile_from_template(template: &ModeTemplateSource) -> ProfileSource {
     let (length_m, width_m) = match &template.body {
         ModeBodySource::Box { length_m, width_m } => (*length_m, *width_m),
-        ModeBodySource::Circle { .. } | ModeBodySource::Capsule { .. } => {
-            (zero_range(), zero_range())
-        }
+        ModeBodySource::Circle { .. }
+        | ModeBodySource::Capsule { .. }
+        | ModeBodySource::ArticulatedChain { .. } => (zero_range(), zero_range()),
     };
     ProfileSource {
         speed_mps: profile_param(template, "speed_mps"),
@@ -4122,7 +4122,9 @@ fn car_profile_from_template(template: &ModeTemplateSource) -> ProfileSource {
 fn pedestrian_profile_from_template(template: &ModeTemplateSource) -> PedestrianProfileSource {
     let radius_m = match &template.body {
         ModeBodySource::Circle { radius_m } => *radius_m,
-        ModeBodySource::Box { .. } | ModeBodySource::Capsule { .. } => zero_range(),
+        ModeBodySource::Box { .. }
+        | ModeBodySource::Capsule { .. }
+        | ModeBodySource::ArticulatedChain { .. } => zero_range(),
     };
     PedestrianProfileSource {
         radius_m,

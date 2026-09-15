@@ -643,6 +643,40 @@ pub enum ModeBodySource {
         /// Body radius range in metres.
         radius_m: ProfileRangeSource,
     },
+    /// An ordered articulated chain of convex box segments, such as a
+    /// tractor-semitrailer.
+    ///
+    /// Additive Increment 3 kind for the articulated-wheeled family; it
+    /// compiles to the existing `AgentBody::ArticulatedChain`. This node
+    /// authors the static geometry only: hitch kinematics, runtime dispatch,
+    /// and swept collision are a later child's.
+    ArticulatedChain {
+        /// Segments in chain order, front to back; at least a tractor and one
+        /// trailer.
+        segments: Vec<ArticulatedSegmentSource>,
+        /// Maximum articulation angle range in radians between two adjacent
+        /// segments at their shared hitch.
+        articulation_limit_rad: ProfileRangeSource,
+    },
+}
+
+/// One authored segment of an [`ModeBodySource::ArticulatedChain`] body.
+///
+/// Dimensions are ranges, not sampled values, exactly like every other
+/// authored body shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArticulatedSegmentSource {
+    /// Segment length range in metres.
+    pub length_m: ProfileRangeSource,
+    /// Segment width range in metres.
+    pub width_m: ProfileRangeSource,
+    /// This segment's hitch offset range in metres: the distance from the
+    /// preceding segment's hitch point to this segment's own hitch/kingpin.
+    /// `None` for the lead segment (which hitches nothing ahead of it) and
+    /// `Some` for every trailing segment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hitch_offset_m: Option<ProfileRangeSource>,
 }
 
 /// Motion family a version-2 mode template uses.
@@ -653,6 +687,10 @@ pub enum MotionKind {
     HolonomicWalking,
     /// A single wheeled body following a reference path.
     SingleBodyWheeled,
+    /// A wheeled tractor pulling hinged, articulated segments. Additive
+    /// Increment 3 variant; it compiles to the existing
+    /// `AgentMotion::ArticulatedWheeled`.
+    ArticulatedWheeled,
 }
 
 /// Tactical capability a version-2 mode template supports.

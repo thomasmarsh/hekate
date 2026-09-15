@@ -51,12 +51,24 @@ impl BodyKind {
 pub struct BodySegment {
     length_m: ProfileRange,
     width_m: ProfileRange,
+    hitch_offset_m: Option<ProfileRange>,
 }
 
 impl BodySegment {
-    /// Construct a segment from its length and width distributions.
-    pub const fn new(length_m: ProfileRange, width_m: ProfileRange) -> Self {
-        Self { length_m, width_m }
+    /// Construct a segment from its length and width distributions and its
+    /// hitch offset: `None` for the lead segment, `Some` for every trailing
+    /// segment (the distance from the preceding segment's hitch point to this
+    /// segment's own hitch/kingpin).
+    pub const fn new(
+        length_m: ProfileRange,
+        width_m: ProfileRange,
+        hitch_offset_m: Option<ProfileRange>,
+    ) -> Self {
+        Self {
+            length_m,
+            width_m,
+            hitch_offset_m,
+        }
     }
 
     /// Segment length distribution in metres.
@@ -67,6 +79,12 @@ impl BodySegment {
     /// Segment width distribution in metres.
     pub fn width_m(self) -> ProfileRange {
         self.width_m
+    }
+
+    /// This segment's hitch offset distribution in metres: `None` for the lead
+    /// segment, `Some` for every trailing segment.
+    pub fn hitch_offset_m(self) -> Option<ProfileRange> {
+        self.hitch_offset_m
     }
 }
 
@@ -101,6 +119,9 @@ pub enum AgentBody {
     ArticulatedChain {
         /// Segments in chain order, front to back; the list must not be empty.
         segments: Vec<BodySegment>,
+        /// Maximum articulation angle distribution in radians between two
+        /// adjacent segments at their shared hitch.
+        articulation_limit_rad: ProfileRange,
     },
 }
 
@@ -119,7 +140,7 @@ impl AgentBody {
     /// shape, the chain length for an articulated body.
     pub fn segment_count(&self) -> usize {
         match self {
-            Self::ArticulatedChain { segments } => segments.len(),
+            Self::ArticulatedChain { segments, .. } => segments.len(),
             Self::Circle { .. } | Self::Box { .. } | Self::Capsule { .. } => 1,
         }
     }
@@ -1093,9 +1114,10 @@ mod tests {
             ),
             AgentBody::ArticulatedChain {
                 segments: vec![
-                    BodySegment::new(range(5.0, 5.5), range(2.4, 2.5)),
-                    BodySegment::new(range(12.0, 13.6), range(2.4, 2.6)),
+                    BodySegment::new(range(5.0, 5.5), range(2.4, 2.5), None),
+                    BodySegment::new(range(12.0, 13.6), range(2.4, 2.6), Some(range(1.2, 1.2))),
                 ],
+                articulation_limit_rad: range(0.7, 0.9),
             },
             AgentMotion::ArticulatedWheeled,
             [TacticalCapability::Follow, TacticalCapability::Overtake]
@@ -1202,11 +1224,24 @@ mod tests {
         assert_eq!(agent.body().kind(), BodyKind::ArticulatedChain);
         assert_eq!(agent.motion(), AgentMotion::ArticulatedWheeled);
         assert_eq!(agent.body().segment_count(), 2);
-        let AgentBody::ArticulatedChain { segments } = agent.body() else {
+        let AgentBody::ArticulatedChain {
+            segments,
+            articulation_limit_rad,
+        } = agent.body()
+        else {
             panic!("the articulated bundle carries a chain body");
         };
         assert!((segments[0].length_m().min() - 5.0).abs() < 1e-9);
         assert!((segments[1].length_m().max() - 13.6).abs() < 1e-9);
+        assert!(
+            segments[0].hitch_offset_m().is_none(),
+            "the lead segment hitches nothing ahead"
+        );
+        assert!(
+            segments[1].hitch_offset_m().is_some(),
+            "the trailing segment hitches to the segment ahead"
+        );
+        assert!(articulation_limit_rad.min() > 0.0);
     }
 
     #[test]
@@ -1274,7 +1309,8 @@ mod tests {
                 AgentBehaviorProfile::walking(range(1.0, 1.6), range(1.0, 1.0)),
             ),
             AgentBody::ArticulatedChain {
-                segments: vec![BodySegment::new(range(5.0, 5.5), range(2.4, 2.5))],
+                segments: vec![BodySegment::new(range(5.0, 5.5), range(2.4, 2.5), None)],
+                articulation_limit_rad: range(0.7, 0.9),
             },
             AgentMotion::HolonomicWalking,
             TacticalCapabilities::none(),

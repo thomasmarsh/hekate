@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T21:27:39Z
+updated: 2026-09-15T22:02:18Z
 summary: Increment 3 adds buses, rigid trucks, and a tractor-semitrailer with segment-level swept collision evidence.
-next: "[[tas-4ep58y0syjtnwny4bgcg5q41j7-author-tractor-semitrailer-geometry-and-make]]"
+next: "[[tas-5vc5c3cbttnvcztafvns26bcs4-add-hitch-integration-runtime-dispatch-and]]"
 ---
 
 # Outcome

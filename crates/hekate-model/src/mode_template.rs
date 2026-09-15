@@ -23,8 +23,8 @@
 use crate::compiled::ProfileRange;
 use crate::components::{
     AgentAccess, AgentBehaviorProfile, AgentBody, AgentComponents, AgentCore, AgentFamily,
-    AgentMotion, AgentOccupancy, ComponentMismatch, NominalDirection, SocialState, SpeedPolicy,
-    TacticalCapabilities, TacticalCapability, derive_family,
+    AgentMotion, AgentOccupancy, BodySegment, ComponentMismatch, NominalDirection, SocialState,
+    SpeedPolicy, TacticalCapabilities, TacticalCapability, derive_family,
 };
 use crate::source::{
     AccessSource, FacilityDirection, ModeBodySource, ModeTemplateSource, MotionKind, OccupancyKind,
@@ -188,7 +188,7 @@ impl CompiledModeTemplate {
             AgentBody::Box { width_m, .. } => width_m.max(),
             AgentBody::Circle { radius_m } => 2.0 * radius_m.max(),
             AgentBody::Capsule { radius_m, .. } => 2.0 * radius_m.max(),
-            AgentBody::ArticulatedChain { segments } => segments
+            AgentBody::ArticulatedChain { segments, .. } => segments
                 .iter()
                 .map(|segment| segment.width_m().max())
                 .fold(0.0, f64::max),
@@ -353,6 +353,22 @@ pub(crate) fn compiled_body(body: &ModeBodySource) -> AgentBody {
             length_m: range(*length_m),
             radius_m: range(*radius_m),
         },
+        ModeBodySource::ArticulatedChain {
+            segments,
+            articulation_limit_rad,
+        } => AgentBody::ArticulatedChain {
+            segments: segments
+                .iter()
+                .map(|segment| {
+                    BodySegment::new(
+                        range(segment.length_m),
+                        range(segment.width_m),
+                        segment.hitch_offset_m.map(range),
+                    )
+                })
+                .collect(),
+            articulation_limit_rad: range(*articulation_limit_rad),
+        },
     }
 }
 
@@ -361,6 +377,7 @@ pub(crate) fn compiled_motion(motion: MotionKind) -> AgentMotion {
     match motion {
         MotionKind::HolonomicWalking => AgentMotion::HolonomicWalking,
         MotionKind::SingleBodyWheeled => AgentMotion::SingleBodyWheeled,
+        MotionKind::ArticulatedWheeled => AgentMotion::ArticulatedWheeled,
     }
 }
 
@@ -506,6 +523,16 @@ fn compiled_profile(
             AgentBehaviorProfile::walking(param("speed_mps"), param("compliance"))
         }
         (_, MotionKind::SingleBodyWheeled) => AgentBehaviorProfile::wheeled(
+            param("speed_mps"),
+            param("time_gap_s"),
+            param("max_accel_mps2"),
+            param("comfortable_brake_mps2"),
+            param("compliance"),
+        ),
+        // Increment 3 claims no new dynamics for the articulated-wheeled
+        // family: it reuses the plain wheeled profile shape, exactly as
+        // `required_profile_params` requires the same parameter set.
+        (_, MotionKind::ArticulatedWheeled) => AgentBehaviorProfile::wheeled(
             param("speed_mps"),
             param("time_gap_s"),
             param("max_accel_mps2"),

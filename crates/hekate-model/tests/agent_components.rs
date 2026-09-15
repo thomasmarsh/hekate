@@ -130,9 +130,10 @@ fn articulated_bundle() -> AgentComponents {
         ),
         AgentBody::ArticulatedChain {
             segments: vec![
-                BodySegment::new(range(5.0, 5.5), range(2.4, 2.5)),
-                BodySegment::new(range(12.0, 13.6), range(2.4, 2.6)),
+                BodySegment::new(range(5.0, 5.5), range(2.4, 2.5), None),
+                BodySegment::new(range(12.0, 13.6), range(2.4, 2.6), Some(range(1.2, 1.2))),
             ],
+            articulation_limit_rad: range(0.7, 0.9),
         },
         AgentMotion::ArticulatedWheeled,
         driving_tactics(),
@@ -169,13 +170,26 @@ fn composes_an_articulated_bundle_from_ordered_segments() {
         2,
         "both chain segments survive"
     );
-    let AgentBody::ArticulatedChain { segments } = truck.body() else {
+    let AgentBody::ArticulatedChain {
+        segments,
+        articulation_limit_rad,
+    } = truck.body()
+    else {
         panic!("the articulated bundle carries a chain body");
     };
     assert!(
         segments[0].length_m().max() < segments[1].length_m().min(),
         "chain order is preserved front to back"
     );
+    assert!(
+        segments[0].hitch_offset_m().is_none(),
+        "the lead segment has no hitch offset"
+    );
+    assert!(
+        segments[1].hitch_offset_m().is_some(),
+        "a trailing segment carries its hitch offset"
+    );
+    assert!(articulation_limit_rad.min() > 0.0);
 }
 
 #[test]

@@ -1,0 +1,56 @@
+// Increment 3: the tractor-semitrailer static geometry fixture.
+//
+// `PHASE_2_PLAN.md` "Articulated trucks" (around line 185) fixes the intent:
+// an ordered kinematic chain whose authored geometry specifies segment
+// lengths and widths, hitch offsets, and a maximum articulation angle. This
+// fixture is the first checked-in `tractor_semitrailer` mode template: it
+// authors a two-segment `articulated_chain` body (a 6.0 m tractor and a
+// 13.6 m semitrailer hitched 1.2 m behind the tractor's own hitch point) and
+// an `articulated_wheeled` motion under a 0.9 rad (about 51.5 degree)
+// articulation limit, a typical fifth-wheel jackknife bound.
+//
+// This node is strictly the static authoring/compile/validate slice: hitch
+// kinematics, runtime dispatch, and swept collision are a later child's, so
+// the fixture authors no path, portal, facility, or demand — only the mode
+// template a compiler and validator can check today. The checked-in test
+// (`crates/hekate-model/tests/articulated_chain_geometry.rs`) proves the
+// document parses, validates with no diagnostics, and compiles to the
+// existing `AgentBody::ArticulatedChain`/`AgentMotion::ArticulatedWheeled`
+// components, pinning the segment count, each segment's dimensions and hitch
+// offset, and the articulation limit.
+{
+  schema_version: 2,
+  id: 'tractor_semitrailer_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [],
+  portals: [],
+  mode_templates: [
+    {
+      id: 'tractor_semitrailer',
+      body: {
+        kind: 'articulated_chain',
+        segments: [
+          // The tractor: the lead segment hitches nothing ahead of it.
+          { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } },
+          // The semitrailer: hitched 1.2 m behind the tractor's own hitch
+          // point (its kingpin setback).
+          { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 2.55, max: 2.55 },
+            hitch_offset_m: { min: 1.2, max: 1.2 } },
+        ],
+        articulation_limit_rad: { min: 0.9, max: 0.9 },
+      },
+      motion: 'articulated_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 8.0, max: 8.0 },
+        max_accel_mps2: { min: 0.7, max: 0.7 },
+        comfortable_brake_mps2: { min: 1.4, max: 1.4 },
+        time_gap_s: { min: 2.0, max: 2.0 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+}

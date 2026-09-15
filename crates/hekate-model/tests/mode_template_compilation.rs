@@ -261,7 +261,8 @@ fn rejects_articulation_parameters_on_a_holonomic_body() {
     let bundle = CompiledModeTemplate::new(
         "holonomic_lorry".to_owned(),
         AgentBody::ArticulatedChain {
-            segments: vec![BodySegment::new(range(5.0, 5.5), range(2.4, 2.5))],
+            segments: vec![BodySegment::new(range(5.0, 5.5), range(2.4, 2.5), None)],
+            articulation_limit_rad: range(0.7, 0.9),
         },
         AgentMotion::HolonomicWalking,
         TacticalCapabilities::none(),

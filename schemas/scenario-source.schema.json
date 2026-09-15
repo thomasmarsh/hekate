@@ -230,6 +230,36 @@
         }
       ]
     },
+    "ArticulatedSegmentSource": {
+      "description": "One authored segment of an [`ModeBodySource::ArticulatedChain`] body.\n\nDimensions are ranges, not sampled values, exactly like every other\nauthored body shape.",
+      "type": "object",
+      "properties": {
+        "hitch_offset_m": {
+          "description": "This segment's hitch offset range in metres: the distance from the\npreceding segment's hitch point to this segment's own hitch/kingpin.\n`None` for the lead segment (which hitches nothing ahead of it) and\n`Some` for every trailing segment.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileRangeSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "length_m": {
+          "description": "Segment length range in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        },
+        "width_m": {
+          "description": "Segment width range in metres.",
+          "$ref": "#/$defs/ProfileRangeSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "length_m",
+        "width_m"
+      ]
+    },
     "ClearanceBandSource": {
       "description": "One scenario-scoped clearance band: a labeled body-to-body signed surface\nclearance threshold.\n\nBands are metric definitions for the scenario that authors them, never\nuniversal declarations of safety. A band accumulates the duration during\nwhich the observed clearance is below its `threshold_m`, so bands declared\nin strictly increasing threshold nest.",
       "type": "object",
@@ -850,6 +880,32 @@
             "length_m",
             "radius_m"
           ]
+        },
+        {
+          "description": "An ordered articulated chain of convex box segments, such as a\ntractor-semitrailer.\n\nAdditive Increment 3 kind for the articulated-wheeled family; it\ncompiles to the existing `AgentBody::ArticulatedChain`. This node\nauthors the static geometry only: hitch kinematics, runtime dispatch,\nand swept collision are a later child's.",
+          "type": "object",
+          "properties": {
+            "articulation_limit_rad": {
+              "description": "Maximum articulation angle range in radians between two adjacent\nsegments at their shared hitch.",
+              "$ref": "#/$defs/ProfileRangeSource"
+            },
+            "kind": {
+              "type": "string",
+              "const": "articulated_chain"
+            },
+            "segments": {
+              "description": "Segments in chain order, front to back; at least a tractor and one\ntrailer.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArticulatedSegmentSource"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "segments",
+            "articulation_limit_rad"
+          ]
         }
       ]
     },
@@ -969,6 +1025,11 @@
           "description": "A single wheeled body following a reference path.",
           "type": "string",
           "const": "single_body_wheeled"
+        },
+        {
+          "description": "A wheeled tractor pulling hinged, articulated segments. Additive\nIncrement 3 variant; it compiles to the existing\n`AgentMotion::ArticulatedWheeled`.",
+          "type": "string",
+          "const": "articulated_wheeled"
         }
       ]
     },
