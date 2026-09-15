@@ -1,4 +1,5 @@
 .lavish/
+.obsidian/
 /target/
 
 # Tangle regenerates these derived Markdown views from canonical nodes; they are
