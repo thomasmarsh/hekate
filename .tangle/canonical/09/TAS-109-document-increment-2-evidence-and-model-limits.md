@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T07:40:39Z
+updated: 2026-09-15T07:49:46Z
 summary: Reconcile the benchmark matrix and narrow-mode cards with checked Increment 2 evidence.
-next: Review the two narrow-mode model cards and the new matrix-consistency gate, then resolve TAS-109 or route any remaining acceptance work.
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -52,8 +51,8 @@ and scooter model cards only.
 
 # Result
 
-Delivered, node left active for review. No production, simulation, tolerance,
-disposition, or matrix-cell change. The only edits outside documentation are
+Delivered and resolved. No production, simulation, tolerance, disposition, or
+matrix-cell change. The only edits outside documentation are
 three stale section pointers in scenario comments and one new
 documentation-consistency test; no fixture was added and no scenario value,
 demand, or golden byte moved.
@@ -157,5 +156,35 @@ inc2_determinism` 4 passed, `--test run_metrics` 22 passed; `cargo test -p
 hekate-sim --test model_cards` 4 passed, `--test narrow_isolated` 6 passed,
 `--test prediction` 15 passed, `--test wrong_way` 20 passed, `--test
 inc2_passing_fixtures` 5 passed; and `docs/benchmark-matrix.json` parses.
-`cargo test --workspace` and the full five-gate run were not executed here, per
-the brief.
+`cargo test --workspace` and the full five-gate run were not executed by the
+implementing worker, per the brief.
+
+Gate run (fresh verification worker `gate109`, clean tree at the delivered
+commit `2450520`, warm `target/`, no `cargo clean`), all five green in order:
+
+- `cargo fmt --all --check` exit 0 (1 s).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` exit 0
+  (8 s), no warnings.
+- `cargo test --workspace --all-features` exit 0 (372 s): 1021 passed, 0
+  failed, 1 ignored across 91 result lines (85 unit/integration binaries plus 6
+  doc-test groups).
+- `./scripts/check-dependency-direction.sh` exit 0 (1 s), "dependency direction
+  OK".
+- `tangle check` exit 0 (1 s), "graph check: passed (195 nodes)".
+
+Done-when clauses are met: the new `benchmark_matrix` suite holds the Markdown
+and JSON representations together on the checked-in Increment 2 paths, presets,
+quantities, tolerances, baselines, and dispositions with zero planned Increment
+2 evidence (clause 1); `model_cards` holds both narrow-mode cards to the
+checked-in template's section inventory and order, which now carries lateral
+dynamics, cadence, horizon, permissions, clearance bands, unsafe-commit
+response, wrong-way context, validated ranges, evidence, and failure modes
+(clause 2); both cards state the required exclusions (clause 3); every number is
+a named source constant or a checked-in fixture or resolved-test value, and the
+matrix-consistency and model-card tests pass in the workspace run (clause 4).
+Clause 5 (no source, simulation, scenario, tolerance, or interaction disposition
+change) is met in substance: the only non-documentation edits are the new
+`apps/hekate-cli/tests/benchmark_matrix.rs` consistency test, comment-only
+`narrow.rs` card text, and three comment-only §7.3→§7.2 pointer fixes in
+`scenarios/phase2/inc2/*.json5`; no simulation, tolerance, disposition, matrix
+cell, or scenario value changed.

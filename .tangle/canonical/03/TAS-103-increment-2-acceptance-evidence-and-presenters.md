@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T07:26:00Z
+updated: 2026-09-15T07:49:46Z
 summary: Close Increment 2 analytic, adversarial, reproducibility, performance, matrix, and viewer gates.
-next: [[TAS-109-document-increment-2-evidence-and-model-limits]]
+next: [[TAS-110-record-the-increment-2-representative-performance-profile]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].
