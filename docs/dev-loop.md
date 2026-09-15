@@ -81,3 +81,43 @@ stopping at the first one. It changes nothing about which tests run.
 environment through to every test process, so the suites rewrite their fixtures
 unchanged. Only that script writes goldens, and each suite owns distinct files,
 so no nextest test group serializes them.
+
+## Target housekeeping
+
+A long-lived checkout accumulates regenerable build output under `target/`.
+Reclaim it with
+
+```sh
+scripts/clean-target.sh --dry-run   # list exactly what would be removed
+scripts/clean-target.sh             # remove it and report the reclaimed space
+```
+
+The script prints `du -sh target` before and after plus the reclaimed delta, and
+removes three kinds of pure build output that cargo rebuilds on demand:
+
+- `target/**/tangle*` — fingerprints, rlibs, and test binaries from before the
+  workspace crates were renamed from `tangle-*` to `hekate-*`. No current
+  manifest names a `tangle-*` crate, so nothing reads them again.
+- `target/debug/incremental/` — the per-hash incremental cache.
+- `target/doc/` — the rustdoc output.
+
+On the 2026-09-15 tree (34 GB) the measured reclaim is about 17 GiB: 9.2 GiB of
+unique pre-rename `tangle*` artifacts, 7.9 GiB of non-`tangle*` incremental
+cache (the whole directory measures 13 GiB, and 5.15 GiB of it is the `tangle*`
+already counted once above), and 24 MiB of rustdoc output. The two rules overlap
+by design, so those 5.15 GiB are removed by whichever runs first, never twice.
+The script only ever descends from `target/`, so source, checked-in goldens,
+scenarios, schemas, and `Cargo.lock` are never candidates, and re-running it is
+a no-op.
+
+What it costs: deleting the `tangle*` artifacts is free, because no `hekate-*`
+fingerprint references them, so the next build reuses every `hekate-*` artifact
+it keeps and neither invalidates nor relinks them. Deleting
+`target/debug/incremental` is not free: the next incremental build recompiles
+rather than reusing the per-crate cache, so the first `cargo nextest` after the
+prune is slower and then the cache refills.
+
+Cargo never collects superseded hashed test binaries, so `target/debug/deps`
+also holds several stale `hekate_viewer-*` binaries of about 390 MB each. They
+are safe to delete by hand, keeping the one for the revision you are debugging,
+but picking them out is a judgment call, so the script leaves them alone.
