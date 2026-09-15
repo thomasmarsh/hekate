@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T03:44:29Z
+updated: 2026-09-15T03:55:22Z
 summary: Prove deterministic simultaneous-claim resolution.
-next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-105-prove-deterministic-claims-and-unsafe-commit-policy]].
@@ -50,6 +49,23 @@ Verified: `cargo test -p hekate-sim stage::tests` (13 passed),
 `cargo clippy -p hekate-sim --all-targets` and `cargo fmt --all` clean. No
 permutation changed a winner and no fixed-seed repetition differed, so no seam
 defect was found.
+
+## Resolution gate
+
+All five gates green on `a151b4af4a9cb7238b15df87f3cb78934a1aea0c` at
+2026-09-15T03:55:22Z, run from the repo root with no `cargo clean`:
+
+| gate | command | exit | wall |
+| --- | --- | --- | --- |
+| 1 | `cargo fmt --all --check` | 0 | 2 s |
+| 2 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 11 s |
+| 3 | `cargo test --workspace --all-features` | 0 | 364 s |
+| 4 | `./scripts/check-dependency-direction.sh` | 0 | 1 s |
+| 5 | `tangle check` | 0 | 1 s |
+
+Full suite: 987 passed, 0 failed, 1 ignored across 81 test binaries and six
+doctest blocks; `dependency direction OK`; `graph check: passed (194 nodes)`.
+No gate was red, so no repair was needed and no seam or schema change was made.
 
 # Context
 

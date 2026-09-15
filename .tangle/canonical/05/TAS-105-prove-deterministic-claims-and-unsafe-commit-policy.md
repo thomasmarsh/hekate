@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T03:55:22Z
 summary: Prove deterministic simultaneous claims and every unsafe committed-maneuver response.
-next: [[TAS-127-prove-deterministic-simultaneous-claim-resolutio]]
+next: [[TAS-128-prove-each-unsafe-commit-hazard-response-with-a]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
