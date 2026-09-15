@@ -1,0 +1,131 @@
+// TAS-129: the Increment 2 motor-over-narrow overtaking fixture.
+//
+// One shared continuous-width road carries a motor mode and a narrow mode, and
+// the motor declares the `overtake` tactic with an authored lateral policy, so
+// the kernel's own eligibility tactic decides the maneuver: the passenger car
+// catches the slower bicycle and displaces to the road's passing side with the
+// motor's wider body. Nothing scripts a speed or a position.
+//
+// The two demand rates are authored sparse on purpose: over the 1900-tick
+// horizon the suite runs, the bicycle source admits one leader and the car
+// source one follower, so the run carries exactly one overtaking interval — the
+// contract's "one observation per participant pair". Each rate is the smallest
+// that admits its one arrival at the benchmark seed, which the suite pins; the
+// faster car is admitted 17.5 s behind the slower bicycle, which is what gives
+// it a leader to catch inside the run, and each participant reaches the end of
+// the 350 m guide path inside that horizon.
+//
+// The motor template is named `passenger_car` because the version-2 to
+// version-1 view derives the shared wheeled longitudinal distribution from that
+// template; the kernel reads only its compiled components. Every body, speed,
+// and profile entry is constant (`min == max`), so the sampled profile is the
+// authored value. The clearance bands are declared in strictly increasing
+// thresholds, the close band names the narrow mode it measures and sits below
+// the clearance the authored geometry yields (the pass is measured at 1.06 m),
+// so the pass records the study band's duration without a violation.
+//
+// This is `CC-OVERTAKE` evidence: `docs/benchmark-matrix.md` §7.3 names
+// `scenarios/phase2/inc2/motor_passing_narrow_v2.json5` for motor or articulated
+// modes overtaking a narrow mode (§7.4 item 6).
+{
+  schema_version: 2,
+  id: 'motor_passing_narrow_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'road_guide', points: [ { x: 0.0, y: 0.0 }, { x: 350.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'entry', path: 'road_guide', end: 'start', width_m: 10.0 },
+    { id: 'exit', path: 'road_guide', end: 'end', width_m: 10.0 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 370.0, y: -20.0 },
+      { x: 370.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'road_band', points: [
+      { x: 0.0, y: -5.0 }, { x: 350.0, y: -5.0 },
+      { x: 350.0, y: 5.0 }, { x: 0.0, y: 5.0 },
+    ] },
+  ],
+  facilities: [
+    { id: 'road', region: 'road_band', reference_path: 'road_guide',
+      width_m: 10.0, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car', 'bicycle' ] }, lateral_use: 'shared',
+      lateral_policy: { passing_side: 'left' },
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'through', from: 'entry', to: 'exit', path: 'road_guide',
+      priority: 0, direction: 'forward' },
+  ],
+  permissions: [],
+  clearance_bands: [
+    { id: 'motor_close', threshold_m: 0.5, violation: true,
+      applies_to_modes: [ 'bicycle' ] },
+    { id: 'all_study', threshold_m: 3.0, violation: false },
+  ],
+  maneuver_policy: {
+    commit: { min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 },
+  },
+  mode_templates: [
+    {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+        width_m: { min: 1.8, max: 1.8 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield', 'overtake' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 9.0, max: 9.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+      lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+    },
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 4.5, max: 4.5 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  demand: [
+    { id: 'car_inflow', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'entry',
+        rate_per_hour: 100.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+    { id: 'bicycle_inflow', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'entry',
+        rate_per_hour: 20.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+      } } },
+  ],
+}

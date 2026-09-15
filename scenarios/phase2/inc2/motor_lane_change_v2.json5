@@ -1,0 +1,136 @@
+// TAS-129: the Increment 2 configured lane-change fixture.
+//
+// A wide carriageway band carries a passenger-car population with an authored
+// desired-speed distribution, and a kerb-side band is joined to it by an
+// authored adjacency. A slower car leads and a faster car follows it in the
+// carriageway; the tactical leaf — the integration suite — records a
+// cross-facility `change_lane` request naming the kerb band and the slower car
+// as the passed body. The kernel then predicts the crossing corridor, commits,
+// displaces within the carriageway around the slower leader, crosses the
+// compiled shared boundary into the kerb band, and returns over that same
+// boundary to its own band once the leader is cleared: the configured lane
+// change around a slower leader.
+//
+// Both participants are the one `passenger_car` mode, which is the matrix's
+// motor-over-motor cell: `docs/benchmark-matrix.md` §7.4 item 6 resolves motor
+// or articulated overtaking a motor or articulated mode to this fixture, and §8
+// lists `passenger_car__passenger_car` overtaking as supported. The slower
+// leader is a sampled member of the authored desired-speed distribution, so the
+// fixture declares the population's distribution and the two demand rates are
+// authored sparse so that one slower car leads and one faster car follows it
+// over the horizon the suite runs; the suite pins the seed, asserts the pair's
+// sampled speeds, and records the request from the same approach window every
+// run, so the evidence is reproducible rather than incidental.
+//
+// The car declares `change_lane` with no `overtake` capability, so the kernel's
+// own within-facility tactic is inert and the requested change of lane is the
+// only maneuver the run performs: the run carries exactly one overtaking
+// interval, measured between the two cars while both ride the carriageway, with
+// the authored clearance bands in declaration order. The gentle lateral
+// acceleration is the lane-change limit that keeps the bounded displacement
+// inside the carriageway until the passer has drawn level with the leader, so
+// the pass is measured on the carriageway and the crossing hands the pair to
+// the next band rather than the kernel's position cap. Bodies, accelerations,
+// braking, gaps, and steering are constant (`min == max`), so every sampled
+// value except the desired speed is the authored one.
+{
+  schema_version: 2,
+  id: 'motor_lane_change_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'carriageway_guide', points: [ { x: 0.0, y: 0.0 }, { x: 350.0, y: 0.0 } ] },
+    { id: 'kerb_guide', points: [ { x: 0.0, y: 5.5 }, { x: 350.0, y: 5.5 } ] },
+  ],
+  portals: [
+    { id: 'carriageway_entry', path: 'carriageway_guide', end: 'start',
+      width_m: 3.6 },
+    { id: 'carriageway_exit', path: 'carriageway_guide', end: 'end',
+      width_m: 3.6 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 370.0, y: -20.0 },
+      { x: 370.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'carriageway_band', points: [
+      { x: 0.0, y: -5.0 }, { x: 350.0, y: -5.0 },
+      { x: 350.0, y: 5.0 }, { x: 0.0, y: 5.0 },
+    ] },
+    { id: 'kerb_band', points: [
+      { x: 0.0, y: 5.0 }, { x: 350.0, y: 5.0 },
+      { x: 350.0, y: 10.0 }, { x: 0.0, y: 10.0 },
+    ] },
+  ],
+  facilities: [
+    { id: 'carriageway', region: 'carriageway_band',
+      reference_path: 'carriageway_guide',
+      width_m: 10.0, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car' ] }, lateral_use: 'shared',
+      lateral_policy: { passing_side: 'left' },
+      speed_policy: { limit_mps: null } },
+    { id: 'kerb_lane', region: 'kerb_band', reference_path: 'kerb_guide',
+      width_m: 5.0, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car' ] }, lateral_use: 'shared',
+      lateral_policy: { passing_side: 'left' },
+      speed_policy: { limit_mps: null } },
+  ],
+  facility_adjacencies: [
+    { id: 'carriageway_beside_kerb', first: 'carriageway', second: 'kerb_lane',
+      side: 'left' },
+  ],
+  movements: [
+    { id: 'carriageway_through', from: 'carriageway_entry',
+      to: 'carriageway_exit', path: 'carriageway_guide', priority: 0,
+      direction: 'forward' },
+  ],
+  permissions: [],
+  clearance_bands: [
+    { id: 'car_close', threshold_m: 0.5, violation: true,
+      applies_to_modes: [ 'passenger_car' ] },
+    { id: 'all_study', threshold_m: 5.0, violation: false },
+  ],
+  maneuver_policy: {
+    commit: { min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 },
+  },
+  mode_templates: [
+    {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+        width_m: { min: 1.8, max: 1.8 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield', 'change_lane' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 2.0, max: 14.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_accel_max_mps2: { min: 0.6, max: 0.6 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+      lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+    },
+  ],
+  demand: [
+    { id: 'follower_inflow', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'carriageway_entry',
+        rate_per_hour: 100.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'carriageway_through', weight: 1.0 } ] },
+      } } },
+    { id: 'leader_inflow', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'carriageway_entry',
+        rate_per_hour: 20.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'carriageway_through', weight: 1.0 } ] },
+      } } },
+  ],
+}
