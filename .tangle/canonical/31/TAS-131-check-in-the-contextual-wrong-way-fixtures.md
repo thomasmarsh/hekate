@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T05:46:56Z
+updated: 2026-09-15T05:52:05Z
 summary: Check in the contextual wrong-way fixtures.
-next: Wire `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` into both benchmark-matrix representations and prove declaration-order invariance in the sibling TAS-132 slice.
 ---
 
 Parent [[TAS-107-check-in-contextual-wrong-way-fixtures]].
@@ -88,3 +87,19 @@ and declaration-order invariance. Note for it that a CLI run of this fixture at
 the default 250-tick horizon records no opposing traversal and shows only the
 occupied corridor's traffic, because the decision needs a request the kernel does
 not yet produce on its own.
+
+## Gate evidence
+
+Fresh `gate131` run from the repository root on `d3053ab`:
+
+| gate | command | exit | wall s | result |
+| --- | --- | --- | --- | --- |
+| format | `cargo fmt --all --check` | 0 | 1.0 | clean |
+| lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 2.0 | clean |
+| test | `cargo test --workspace --all-features` | 0 | 184.0 | 1004 passed, 0 failed, 1 ignored |
+| dependency direction | `./scripts/check-dependency-direction.sh` | 0 | 0.0 | `dependency direction OK` |
+| graph | `tangle check` | 0 | 0.0 | `graph check: passed (194 nodes)` |
+
+CLI `validate` and `run --seed 0` re-run by the gate: valid, and the trace hash
+`fab298dccfdff4a91f2a0f9ad318b654724c711c97f3ee55c5a84affcfe5fb6b` matches. No
+fix was needed for any gate.

@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T05:52:17Z
 summary: Check in contextual wrong-way fixtures including an occupied opposing corridor.
-next: [[TAS-131-check-in-the-contextual-wrong-way-fixtures]]
+next: "[[TAS-132-prove-declaration-order-invariance-and-wire-the]]"
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
