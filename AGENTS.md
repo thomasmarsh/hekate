@@ -20,9 +20,9 @@ Repo-specific conventions layered on the skill:
   only to repair or rebuild it from Markdown.
 - Every commit that implements tracked work names its node in the body —
   `Refs <node-id>` while the work continues, `Closes <node-id>` once the node's
-  outcome is complete. The id is the actual node basename, for example
-  `tas-5syjgmtr…` or a legacy `TAS-101`. Untracked commits are rejected in
-  review.
+  outcome is complete. The id is the leading identity in the node's basename,
+  for example `tas-5syjgmtr…` or a legacy `TAS-101`. Untracked commits are
+  rejected in review.
 - Run `tangle check` before every handoff and before committing graph
   changes; a failing check blocks the commit. Fix the graph, not the checker.
 
@@ -33,10 +33,11 @@ sessions and one session may advance several frontier nodes. Size the work to th
 session, not the session to the node.
 
 - Before writing code, read the frontier node's `# Done when` and state the slice
-  you will deliver and what explicitly stays out of scope. If that slice would
-  exceed roughly one focused session, or touch more than a few subsystems, split
-  it into child nodes before starting; only a split that adds an outcome the
-  request did not ask for needs the user's agreement.
+  you will deliver and what explicitly stays out of scope. Split it into child
+  nodes before starting when it bundles outcomes with independent acceptance or
+  verification boundaries; only a split that adds an outcome the request did not
+  ask for needs the user's agreement. Session duration, file count, subsystem
+  count, and anticipated commits are sizing guidance, never split evidence.
 - If a node's `# Done when` cannot be met in one session, do not expand the
   session to meet it. Deliver the smallest coherent slice that clears its blocker
   or completes one deliverable, record the exact remaining scope and evidence in
@@ -60,7 +61,8 @@ when a pointer requires it.
   fixed cost of a session. Once a session has paid it, record the durable
   findings — code seams and symbols, prior-session evidence, decision context —
   as `THO` nodes routed to the appropriate hub, and have the working nodes link
-  them. Link reconnaissance with a plain wikilink (opt-in context), not a
+  them. Link reconnaissance with the non-pinned `Informed by [[TARGET]].` line
+  in `# Context` (opt-in context), not a
   `Depends on` pin, which stays reserved for context-bearing dependencies. A
   node that needs the context loads the linked node on demand; it does not
   restate it.
