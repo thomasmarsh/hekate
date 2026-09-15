@@ -1,0 +1,154 @@
+// TAS-130: the Increment 2 prohibited-boundary passing variant.
+//
+// A shared carriageway carries a slower bicycle and a faster passenger car; the
+// car declares the `change_lane` tactic and no `overtake` or `pass`, so its own
+// within-facility tactic is inert and the only way past the bicycle is the
+// cross-facility change of lane an adjacent band offers. That adjacent band is
+// authored `nominal_direction: 'reverse'`, so the applicable traversal rule does
+// not permit forward travel in it.
+//
+// The tactical leaf — the integration suite — records the change-of-lane request
+// naming the adjacent band and the bicycle as the passed body: the intent to
+// overtake across the boundary. `docs/schema-v2-contract.md` fixes the response:
+// the preventable half of the contract's forbidden-boundary crossing is
+// `ManeuverReason::BoundaryForbidden` on the attempt, with no
+// `FacilityTransitionRecord` produced — the crossing is prevented, and the car
+// keeps ordinary forward travel on its own facility. The suite asserts exactly
+// that: the recorded reason, no handoff at any step, no overtaking interval, and
+// both participants completing their route with no contact, no teleport, and no
+// boundary violation.
+//
+// This is Increment 2's forbidden-boundary evidence for `CC-OVERTAKE`: the
+// increment's gate is that no maneuver "crosses a forbidden boundary without an
+// event", and this fixture is the case where the crossing never happens because
+// the policy prevents it. The bicycle leads at a constant 4.5 m/s and the car
+// samples its desired speed from an authored distribution whose lower bound
+// (6.0 m/s) is above it, so the requested pass is always one the car wants; the
+// car's lateral target clearance is the `motor_lane_change_v2` value. Measured
+// at the pinned benchmark seed (0) and step (0.05 s): the bicycle (1.8 m body)
+// is admitted at tick 17 and the car (4.5 m body) at tick 371, 17.7 s behind it;
+// the car settles at a 9.72 m following gap, which is the approach window the
+// suite records its request from; and the run records the boundary-forbidden
+// reason, zero facility handoffs, zero maneuver transitions, and no overtaking
+// interval over its 2500-tick horizon.
+{
+  schema_version: 2,
+  id: 'motor_lane_change_boundary_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'carriageway_guide', points: [ { x: 0.0, y: 0.0 }, { x: 350.0, y: 0.0 } ] },
+    { id: 'contraflow_guide', points: [ { x: 0.0, y: 5.5 }, { x: 350.0, y: 5.5 } ] },
+  ],
+  portals: [
+    { id: 'carriageway_entry', path: 'carriageway_guide', end: 'start',
+      width_m: 3.6 },
+    { id: 'carriageway_exit', path: 'carriageway_guide', end: 'end',
+      width_m: 3.6 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 370.0, y: -20.0 },
+      { x: 370.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'carriageway_band', points: [
+      { x: 0.0, y: -5.0 }, { x: 350.0, y: -5.0 },
+      { x: 350.0, y: 5.0 }, { x: 0.0, y: 5.0 },
+    ] },
+    { id: 'contraflow_band', points: [
+      { x: 0.0, y: 5.0 }, { x: 350.0, y: 5.0 },
+      { x: 350.0, y: 10.0 }, { x: 0.0, y: 10.0 },
+    ] },
+  ],
+  facilities: [
+    { id: 'carriageway', region: 'carriageway_band',
+      reference_path: 'carriageway_guide',
+      width_m: 10.0, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car', 'bicycle' ] }, lateral_use: 'shared',
+      lateral_policy: { passing_side: 'left' },
+      speed_policy: { limit_mps: null } },
+    { id: 'contraflow_lane', region: 'contraflow_band',
+      reference_path: 'contraflow_guide',
+      width_m: 5.0, nominal_direction: 'reverse',
+      access: { modes: [ 'passenger_car' ] }, lateral_use: 'shared',
+      lateral_policy: { passing_side: 'left' },
+      speed_policy: { limit_mps: null } },
+  ],
+  facility_adjacencies: [
+    { id: 'carriageway_beside_contraflow', first: 'carriageway',
+      second: 'contraflow_lane', side: 'left' },
+  ],
+  movements: [
+    { id: 'carriageway_through', from: 'carriageway_entry',
+      to: 'carriageway_exit', path: 'carriageway_guide', priority: 0,
+      direction: 'forward' },
+  ],
+  permissions: [],
+  clearance_bands: [
+    { id: 'car_close', threshold_m: 0.5, violation: true,
+      applies_to_modes: [ 'passenger_car' ] },
+    { id: 'all_study', threshold_m: 5.0, violation: false },
+  ],
+  maneuver_policy: {
+    commit: { min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 },
+  },
+  mode_templates: [
+    {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+        width_m: { min: 1.8, max: 1.8 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield', 'change_lane' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 6.0, max: 14.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_accel_max_mps2: { min: 0.6, max: 0.6 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+      lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+    },
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 4.5, max: 4.5 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  demand: [
+    { id: 'car_inflow', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'carriageway_entry',
+        rate_per_hour: 100.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'carriageway_through', weight: 1.0 } ] },
+      } } },
+    { id: 'bicycle_inflow', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'carriageway_entry',
+        rate_per_hour: 20.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'carriageway_through', weight: 1.0 } ] },
+      } } },
+  ],
+}

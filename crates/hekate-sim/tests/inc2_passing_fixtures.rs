@@ -1,4 +1,4 @@
-//! TAS-129: the checked-in Increment 2 passing fixtures.
+//! TAS-129 and TAS-130: the checked-in Increment 2 passing fixtures.
 //!
 //! Every fixture under `scenarios/phase2/inc2/` runs here through the kernel,
 //! loaded from the same path the CLI and the benchmark matrix name:
@@ -8,13 +8,23 @@
 //! - `motor_passing_narrow_v2` — a passenger car overtaking a slower bicycle on
 //!   one shared road;
 //! - `motor_lane_change_v2` — a configured adjacent-band change of lane around
-//!   a slower motor leader, recorded by a tactical leaf's request.
+//!   a slower motor leader, recorded by a tactical leaf's request;
+//! - `narrow_passing_unsafe_v2` — the narrow pair on a bikeway whose corridor
+//!   executes a pass inside the fixture's authored violation band;
+//! - `motor_lane_change_boundary_v2` — a requested change of lane into an
+//!   adjacent band the rule does not permit, prevented with the contract's
+//!   reason instead of crossed.
 //!
 //! Each fixture is asserted for the same Increment 2 set: the attempt, commit,
 //! and completion edges of the maneuver lifecycle; continuous, finite lateral
 //! samples with no teleport; the motion and world-boundary limits of the
 //! command envelope; the exact close-pass evidence of the declared clearance
 //! bands; the route completion of both participants; and no silent contact.
+//!
+//! The two variants TAS-130 adds assert the other half of the same set: the
+//! unsafe variant asserts the documented violation the authored band records,
+//! and the prohibited-boundary variant asserts the documented rejection that
+//! prevents the crossing and the maneuver lifecycle it never reaches.
 //!
 //! ## What the fixtures pin, and what the kernel pins
 //!
@@ -47,7 +57,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DVec2;
-use hekate_model::{CompiledScenario, FacilityId, parse_scenario_source_v2};
+use hekate_model::{ClearanceBandId, CompiledScenario, FacilityId, parse_scenario_source_v2};
 use hekate_sim::{
     AgentId, BodyShape, DespawnReason, Event, LateralManeuverRequest, ManeuverEdge, ManeuverReason,
     ManeuverState, RunConfig, Simulation, SnapshotDetail, StepOutput, body_clearance_m,
@@ -59,6 +69,11 @@ const NARROW: &str = include_str!("../../../scenarios/phase2/inc2/narrow_passing
 const MOTOR: &str = include_str!("../../../scenarios/phase2/inc2/motor_passing_narrow_v2.json5");
 /// The checked-in configured lane-change fixture.
 const LANE: &str = include_str!("../../../scenarios/phase2/inc2/motor_lane_change_v2.json5");
+/// The checked-in unsafe narrow passing variant.
+const UNSAFE: &str = include_str!("../../../scenarios/phase2/inc2/narrow_passing_unsafe_v2.json5");
+/// The checked-in prohibited-boundary passing variant.
+const BOUNDARY: &str =
+    include_str!("../../../scenarios/phase2/inc2/motor_lane_change_boundary_v2.json5");
 
 /// The default 0.05 s step, so a per-step displacement has one bound.
 const DT: f64 = 0.05;
@@ -541,5 +556,168 @@ fn motor_lane_change_fixture_changes_lane_around_a_slower_leader() {
     assert!(
         trace.completed_maneuver(passer).is_some(),
         "the change of lane completed"
+    );
+}
+
+/// The unsafe variant: the same narrow pair and the same overtaking tactic on a
+/// 3.6 m bikeway, whose corridor puts the executed pass inside the fixture's
+/// authored 0.5 m violation band.
+///
+/// The documented violation is the assertion, not a widened tolerance: the pass
+/// is admissible, it completes, and the tracker records the exact clearance, its
+/// time, the relative speed, and the authored band it fell inside. This fixture
+/// is the close-pass violation evidence of `CC-OVERTAKE`; the cell's `T-O2`
+/// reference pass is `narrow_passing_v2`, which stays at or above the band.
+#[test]
+fn narrow_passing_unsafe_variant_records_the_documented_violation() {
+    let mut sim = build(UNSAFE);
+    let trace = drive(&mut sim, NARROW_TICKS, Plan::Autonomous);
+    let passer = trace
+        .passer()
+        .expect("the bicycle completes the pass the corridor admits");
+    let observations = sim.close_pass_tracker().overtakes();
+    assert_eq!(
+        observations.len(),
+        1,
+        "the fixture carries exactly one overtaking interval: {observations:?}"
+    );
+    let observation = &observations[0];
+    assert!(
+        trace
+            .reasons
+            .get(&passer)
+            .is_some_and(|reasons| reasons.contains(&ManeuverReason::SlowerLeader)),
+        "{passer:?} selected the slower leader: {:?}",
+        trace.reasons.get(&passer)
+    );
+    assert!(
+        trace.spawned.contains(&observation.agent) && trace.spawned.contains(&observation.partner),
+        "both participants were admitted"
+    );
+    assert!(
+        trace.completed_route.contains(&passer)
+            && trace.completed_route.contains(&observation.partner),
+        "both participants reached the end of their guide path"
+    );
+    assert!(
+        observation.start_tick <= observation.end_tick && observation.end_tick < NARROW_TICKS,
+        "the interval lies inside the run: {observation:?}"
+    );
+    // The violation: the observed minimum is positive (the pair never contacts)
+    // and below the authored 0.5 m band the fixture marks as a violation.
+    assert!(
+        observation.min_clearance_m.is_finite() && observation.min_clearance_m > 0.0,
+        "the unsafe pass carries no contact: {observation:?}"
+    );
+    assert!(
+        observation.min_clearance_m < 0.5,
+        "the executed pass fell inside the authored violation band: {observation:?}"
+    );
+    assert_eq!(
+        observation.violating_bands,
+        vec![ClearanceBandId::from_index(0)],
+        "the authored violation band records the violation, and only it: {observation:?}"
+    );
+    let ids: Vec<u32> = observation
+        .bands
+        .iter()
+        .map(|band| band.band.get())
+        .collect();
+    assert_eq!(
+        ids,
+        (0..ids.len() as u32).collect::<Vec<u32>>(),
+        "both declared bands participate in declaration order: {observation:?}"
+    );
+    assert!(
+        observation.bands.iter().all(|band| band.duration_s > 0.0),
+        "each declared band accumulated the close pass's duration: {observation:?}"
+    );
+    assert!(
+        !observation.crossed_boundary && !observation.entered_opposing,
+        "the pass stays on one nominal traversal: {observation:?}"
+    );
+    assert!(
+        trace.lateral_samples > 0,
+        "the fixture produced lateral samples"
+    );
+    assert_eq!(
+        sim.emergency_cap_steps(),
+        1,
+        "one executed pass engages the anti-overlap backstop exactly once, as the \
+         safe fixture and the landed model fixture report"
+    );
+}
+
+/// The prohibited-boundary variant: the car's requested change of lane into an
+/// adjacent band its rule does not permit is prevented with the documented
+/// `boundary_forbidden` reason, and the crossing never happens.
+///
+/// The car declares no `overtake` or `pass`, so the requested cross-facility
+/// change of lane around the slower bicycle is the run's only maneuver intent;
+/// the tracked reason set carries the contract's preventable-crossing reason, no
+/// facility handoff is recorded at any step, and no overtaking interval opens
+/// because the car never draws alongside.
+#[test]
+fn motor_lane_change_boundary_variant_is_prevented_without_a_crossing() {
+    let mut sim = build(BOUNDARY);
+    // The window is the car's own following equilibrium behind the bicycle, the
+    // same approach-window form the configured lane-change fixture records from.
+    let trace = drive(
+        &mut sim,
+        LANE_TICKS,
+        Plan::LaneChange {
+            target: FacilityId::from_index(1),
+            window_m: (9.0, 10.5),
+        },
+    );
+    let (passer, passed) = trace.requested.expect("the approach opened the request");
+    assert_eq!(
+        sim.agent_profile(passer).map(|profile| profile.length_m),
+        Some(4.5),
+        "the agent requesting the crossing is the motor vehicle"
+    );
+    assert!(
+        sim.agent_profile(passed).map(|profile| profile.length_m) < Some(2.0),
+        "the passed body is the narrow bicycle"
+    );
+    assert_eq!(
+        sim.close_pass_tracker().overtakes().len(),
+        0,
+        "the prevented crossing passes nobody"
+    );
+    assert!(
+        trace
+            .reasons
+            .get(&passer)
+            .is_some_and(|reasons| reasons.contains(&ManeuverReason::BoundaryForbidden)),
+        "the preventable crossing records the contract's reason: {:?}",
+        trace.reasons.get(&passer)
+    );
+    assert!(
+        trace.edges.is_empty(),
+        "a prevented crossing records no maneuver lifecycle: {:?}",
+        trace.edges
+    );
+    assert_eq!(
+        trace.facility_transitions, 0,
+        "the forbidden boundary is never crossed, so no handoff is recorded"
+    );
+    assert!(
+        trace.spawned.contains(&passer) && trace.spawned.contains(&passed),
+        "both participants were admitted"
+    );
+    assert!(
+        trace.completed_route.contains(&passer) && trace.completed_route.contains(&passed),
+        "both participants reached the end of their guide path"
+    );
+    assert!(
+        trace.max_step_m <= 12.0 * DT + 1e-6,
+        "no agent teleported: the largest step was {} m",
+        trace.max_step_m
+    );
+    assert_eq!(
+        sim.emergency_cap_steps(),
+        0,
+        "a prevented crossing engages no position cap"
     );
 }
