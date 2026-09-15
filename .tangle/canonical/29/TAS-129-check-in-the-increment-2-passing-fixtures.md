@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T04:48:07Z
+updated: 2026-09-15T04:55:53Z
 summary: Check in the Increment 2 passing fixtures.
-next: Resolve this node once a reviewer accepts the three checked-in fixtures as the matrix's checked-in core passing set.
 ---
 
 Parent [[TAS-106-check-in-increment-2-passing-fixtures]].
@@ -68,3 +67,21 @@ evidence.
 
 Remaining scope (TAS-130): the unsafe/prohibited variants and the
 benchmark-matrix path wiring.
+
+Gate evidence (fresh `gate129` run from the repository root on
+`686cb01` + this session's clippy fix):
+
+| gate | command | exit | wall s | result |
+| --- | --- | --- | --- | --- |
+| format | `cargo fmt --all --check` | 0 | 1.0 | clean |
+| lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 1.0 | clean |
+| test | `cargo test --workspace --all-features` | 0 | 345.0 | 996 passed, 0 failed, 1 ignored |
+| dependency direction | `./scripts/check-dependency-direction.sh` | 0 | 1.0 | `dependency direction OK` |
+| graph | `tangle check` | 0 | 1.0 | `graph check: passed (194 nodes)` |
+
+Gate 2 first ran red at 11 s with one `clippy::collapsible_match`
+(`-D warnings`) in the new `crates/hekate-sim/tests/inc2_passing_fixtures.rs`
+(`Event::Collision { .. } => { if *contacting { .. } }`); the fresh worker
+collapsed it to the `contacting: true` arm in the same in-scope test file and
+re-ran fmt (clean) and clippy (clean). No sibling seam, public schema, or event
+surface changed.

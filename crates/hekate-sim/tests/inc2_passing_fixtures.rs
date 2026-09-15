@@ -225,13 +225,11 @@ fn drive(sim: &mut Simulation, ticks: u64, plan: Plan) -> Trace {
                     agent,
                     other,
                     clearance_m,
-                    contacting,
+                    contacting: true,
                 } => {
-                    if *contacting {
-                        trace
-                            .contacts
-                            .push(format!("{agent:?}/{other:?} at {clearance_m:.4} m"));
-                    }
+                    trace
+                        .contacts
+                        .push(format!("{agent:?}/{other:?} at {clearance_m:.4} m"));
                 }
                 _ => {}
             }

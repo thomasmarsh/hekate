@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T04:55:53Z
 summary: Check in Increment 2 narrow passing, motor overtaking, and lane-transition fixtures.
-next: [[TAS-129-check-in-the-increment-2-passing-fixtures]]
+next: [[TAS-130-add-unsafe-passing-variants-and-wire-the-benchma]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
