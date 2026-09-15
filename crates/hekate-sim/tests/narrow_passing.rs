@@ -403,17 +403,7 @@ fn a_leader_with_no_route_benefit_rejects_the_pass_as_no_benefit() {
     );
 }
 
-/// The tactic is a pure function of the compiled components and the tick-start
-/// geometry: the same scenario and seed produce the same transitions and the
-/// same selection reasons, with no dependence on iteration order.
-#[test]
-fn the_pass_decision_is_stable_for_a_seed() {
-    let run = || {
-        let scenario = passing_scenario("scooter", 4.0, "bicycle", 7.0, 6.0, "left", None, false);
-        let mut sim = build(&scenario);
-        let trace = drive(&mut sim, TICKS);
-        let reasons = trace.all_reasons();
-        (trace.edges, reasons)
-    };
-    assert_eq!(run(), run(), "the same seed reproduces the decisions");
-}
+// Run-to-run determinism (a second drive of this scenario and seed) was removed:
+// the kernel's same-seed reproducibility is owned by the `sim.rs` unit
+// determinism tests (`same_seed_produces_identical_observations`) and the CLI
+// golden/hash suites.

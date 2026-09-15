@@ -6,14 +6,15 @@
 //! streams". This suite is that gate for the six checked-in fixtures under
 //! `scenarios/phase2/inc2/`:
 //!
-//! - one canary fixture repeats its canonical trace hash and bytes at its
-//!   declared bank seed at Standard 50 ms, one of the `CC-OVERTAKE`/`CC-OPPOSE`
-//!   cells' required presets; the per-fixture, per-preset reproduction, the Fine
-//!   preset (whose runs are kept at the same simulated horizon by
-//!   `converge::fidelity_ticks`), and the pinned bytes themselves belong to the
-//!   golden suite in `inc2_trace.rs`;
-//! - a seed outside the bank produces a different trace, so the stability above
-//!   is not a constant;
+//! - the in-process driver's same-seed reproduction — every fixture repeating
+//!   its canonical trace hash and bytes at its declared bank seed at both
+//!   required presets, Standard 50 ms and Fine 20 ms (the latter kept at the
+//!   same simulated horizon by `converge::fidelity_ticks`), and the pinned
+//!   bytes themselves — belongs to the golden suite in `inc2_trace.rs`, whose
+//!   `assert_matches_golden` runs the same driver at every fixture and preset
+//!   and pins it to the checked-in artifact;
+//! - a seed outside the bank produces a different trace, so that pinned
+//!   reproduction is not a constant;
 //! - the checked-in bank `scenarios/phase2/inc2/inc2_seed_bank.json` declares
 //!   exactly the pinned seeds; that each pinned seed admits its fixture's
 //!   intended maneuver at *both* presets — so a reproduction is of a maneuver
@@ -22,7 +23,9 @@
 //!   compares hashes;
 //! - a batch over the bank records every per-seed trace hash, cross-checks each
 //!   against the canonical trace hash of the same run, and pins each run
-//!   manifest's stream hash to that batch hash.
+//!   manifest's stream hash to that batch hash; the decompressed event streams'
+//!   byte-for-byte equality is owned by `apps/hekate-cli/tests/batch.rs` and
+//!   `run_directory.rs`.
 //!
 //! The batch runs through the same `run_batch`/`write_run_directory` path the
 //! `batch --seed-bank` command uses, and each per-seed hash is cross-checked
@@ -49,9 +52,7 @@ use hekate_cli::{
 };
 use hekate_model::{CompiledScenario, parse_scenario_source_v2};
 use hekate_sim::{AgentId, Event, RunConfig, Seconds, Simulation, SnapshotDetail, maneuver_draw};
-use inc2_support::{
-    FIXTURES, Fixture, PRESETS, SEED_BANK, STANDARD_STEP_S, canonical, repo_path, run,
-};
+use inc2_support::{FIXTURES, Fixture, SEED_BANK, STANDARD_STEP_S, canonical, repo_path, run};
 
 /// A seed that is not banked, used only to prove a trace hash is not constant.
 const OTHER_SEED: u64 = 1_000_000;
@@ -83,48 +84,17 @@ impl Drop for Scratch {
     }
 }
 
-// The in-process driver's reproducibility is the canary below: one fixture's
-// Standard run repeats its canonical trace bytes and hash at its pinned bank
-// seed. The per-fixture, per-preset reproduction, the pinned bytes themselves,
-// and the fact that the three autonomous fixtures' bytes are exactly the
-// `canonical_trace` bytes `hekate-cli run` writes all belong to the golden suite
-// in `inc2_trace.rs`, whose `assert_matches_golden` pins the checked-in artifact
-// and whose CLI run/replay test proves `hekate-cli run` writes it.
+// The in-process driver's same-seed reproducibility is owned by the golden
+// suite in `inc2_trace.rs`: `assert_matches_golden` runs the same driver at
+// every fixture and preset and pins it to the checked-in artifact (bytes and
+// hash), and its CLI run/replay test proves `hekate-cli run` writes those bytes.
 //
-// A seed outside the bank changes the trace, one `#[test]` per fixture, so the
-// Standard reproducibility is not a constant.
-
-/// The canary reproduction case: the same pinned seed and Standard step twice
-/// produce the same canonical trace bytes and hash.
-#[test]
-fn narrow_passing_v2_reproduces_its_trace_hash_at_standard() {
-    let (preset, step_s) = PRESETS[0];
-    let fixture = &FIXTURES[0];
-    let first = run(fixture, fixture.pinned_seed, step_s);
-    let second = run(fixture, fixture.pinned_seed, step_s);
-    assert_eq!(
-        first.trace.hash(),
-        second.trace.hash(),
-        "{} [{preset}]: the same seed and step produced two trace hashes",
-        fixture.id
-    );
-    assert_eq!(
-        first.trace.bytes(),
-        second.trace.bytes(),
-        "{} [{preset}]: the same seed and step produced two traces",
-        fixture.id
-    );
-    println!(
-        "{} [{preset}] seed {} {} bytes {}",
-        fixture.id,
-        fixture.pinned_seed,
-        first.trace.hash(),
-        first.trace.bytes().len()
-    );
-}
+// A seed outside the bank changes the trace, one `#[test]` per fixture, so that
+// pinned reproducibility is not a constant.
 
 /// One fixture's different-seed case: a seed outside the bank produces a
-/// different Standard trace, so the reproduction above is not a constant.
+/// different Standard trace, so the reproducible trace the golden suite pins is
+/// not a constant.
 fn assert_other_seed_changes_trace(fixture: &Fixture) {
     let standard = run(fixture, fixture.pinned_seed, STANDARD_STEP_S);
     let other = run(fixture, OTHER_SEED, STANDARD_STEP_S);
@@ -250,10 +220,11 @@ fn assert_batch_hash_is_canonical(manifest: &BatchManifest, fixture: &Fixture) {
 /// A batch over the declared seed bank records every per-seed trace hash, the
 /// manifest names the declared bank, each run manifest's stream hash equals the
 /// batch's trace hash, and every recorded hash is the canonical trace hash of
-/// the same run.
+/// the same run. The decompressed event streams' byte-for-byte equality is owned
+/// by `apps/hekate-cli/tests/batch.rs` and `run_directory.rs`.
 #[test]
 #[ignore = "slow: seed-bank batch over every fixture; run scripts/run-test-harness.sh"]
-fn the_inc2_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
+fn the_inc2_seed_bank_batch_reproduces_every_per_seed_hash() {
     let scratch = Scratch::new("seed-bank-batch");
     let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");
     let reference = SeedBankReference {
@@ -382,11 +353,15 @@ fn the_declared_seed_bank_runs_the_same_traces_as_an_explicit_seed_list() {
     assert_eq!(hashes, explicit_hashes, "the bank must not change the runs");
 }
 
-// The per-fixture "the banked seeds really run the fixtures" guard lives in
-// `inc2_trace.rs`: `assert_golden_covers_its_maneuvers` requires every fixture's
+// The per-fixture "the banked seeds really run the fixtures" guard is split:
+// `inc2_trace.rs`'s `assert_golden_covers_its_maneuvers` requires every fixture's
 // checked-in golden bytes to record a spawn event at both presets, and
 // `assert_matches_golden` pins those bytes to a live run, so a fixture that
-// stopped admitting agents fails there rather than here.
+// stopped admitting agents fails there rather than here. The removed
+// `the_inc2_seed_bank_batch_runs_every_fixture` additionally asserted that the
+// spawn count in the trace equals the observed spawn count; that
+// trace-vs-observation equality is not otherwise pinned, though its substance is
+// guarded by the byte-exact golden and the maneuver membership above.
 
 // ---------------------------------------------------------------------------
 // TAS-134: stream isolation of the Increment 2 maneuver draws

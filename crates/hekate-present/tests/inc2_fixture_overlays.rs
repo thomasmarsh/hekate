@@ -596,10 +596,12 @@ fn both_increment_2_fixtures_carry_the_five_route_relative_overlays() {
 
 // The same-fixture determinism this suite used to re-drive
 // (`replaying_a_fixture_projects_an_identical_overlay_stream`) is owned by
-// `the_fixture_overlays_match_the_checked_in_golden`: it pins every overlay
-// frame's exact text against
-// `tests/golden/present/inc2_tactical_fixtures.seed0.txt`, which is strictly
-// stronger than comparing two in-process projections of the same fixture.
+// `the_fixture_overlays_match_the_checked_in_golden`, which pins exact text
+// against `tests/golden/present/inc2_tactical_fixtures.seed0.txt`: the corridor
+// and maneuver landmark frames, the last maneuver frame, and the run-end frame
+// for the passing fixture, and the wrong-way landmark and run-end frames for the
+// occupied corridor. It does not pin every overlay frame, nor the
+// `target_offset` or `predicted_gap` streams.
 
 /// A Phase 1 run carries none of the five overlays, and an Increment 1 run
 /// carries none of the four a target offset, prediction, or open interval

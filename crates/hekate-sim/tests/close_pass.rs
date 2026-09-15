@@ -307,15 +307,10 @@ fn assert_a_car_overtaking_a_bicycle_accumulates_every_band(
     );
 }
 
-/// Two runs of the same scenario and seed report exactly the same overtaking
-/// intervals and band durations: detection is a pure function of the states the
-/// ticks produced.
-#[test]
-fn detection_is_deterministic_across_runs() {
-    let first = run(passing_scenario(9.0, 4.0), 7).overtakes;
-    let second = run(passing_scenario(9.0, 4.0), 7).overtakes;
-    assert_eq!(first, second);
-}
+// Run-to-run determinism (a second 900-tick run of this scenario and seed) was
+// removed: the kernel's same-seed reproducibility is owned by the `sim.rs` unit
+// determinism tests (`same_seed_produces_identical_observations`) and the CLI
+// golden/hash suites.
 
 /// Two modes held at the same speed never pass each other, so no overtaking
 /// interval is ever detected even though the bodies come alongside.

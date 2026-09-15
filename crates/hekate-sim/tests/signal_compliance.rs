@@ -3,8 +3,8 @@
 //! These tests author their own scenarios so a benchmark change cannot move the
 //! kernel contract. They cover the green/yellow/red boundaries at the
 //! simulation level, the recorded decision reason the inspector shows, stream
-//! isolation of the `compliance` draws from demand/profile, and same-seed
-//! reproducibility of the decision records.
+//! isolation of the `compliance` draws from demand/profile, and that the
+//! decision records depend on the seed.
 
 use hekate_model::{CompiledScenario, MovementId, SignalColor, parse_scenario_source};
 use hekate_sim::{ComplianceReason, Event, RunConfig, SignalAction, Simulation, SnapshotDetail};
@@ -210,8 +210,12 @@ fn the_compliance_stream_does_not_change_demand_or_profile_outcomes() {
     );
 }
 
+// The same-seed half of this check (a second run at seed 4) was removed: the
+// kernel's same-seed reproducibility is owned by the `sim.rs` unit determinism
+// tests and the CLI golden/hash suites. What remains is the seed-sensitivity
+// canary, which no cheaper owner covers for these decision records.
 #[test]
-fn decision_records_reproduce_for_a_seed() {
+fn decision_records_change_with_the_seed() {
     fn trace(seed: u64) -> Vec<String> {
         let mut sim = sim("red", 0.0, 1.0, seed);
         let mut log = Vec::new();
@@ -237,7 +241,6 @@ fn decision_records_reproduce_for_a_seed() {
 
     let first = trace(4);
     assert!(!first.is_empty());
-    assert_eq!(first, trace(4), "same seed must reproduce decision records");
     assert_ne!(
         first,
         trace(5),

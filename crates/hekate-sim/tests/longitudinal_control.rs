@@ -217,8 +217,12 @@ fn a_free_flowing_vehicle_reaches_and_exits_the_path_end() {
     assert!(exited > 0, "free-flowing vehicles must exit the path");
 }
 
+// The same-seed half of this check (a second run at seed 7) was removed: the
+// kernel's same-seed reproducibility is owned by the `sim.rs` unit determinism
+// tests and the CLI golden/hash suites. What remains is the seed-sensitivity
+// canary, which no cheaper owner covers for this scenario.
 #[test]
-fn control_and_signal_state_are_reproducible_for_a_seed() {
+fn control_and_signal_state_change_with_the_seed() {
     fn trace(seed: u64) -> Vec<(u64, Vec<String>, Option<SignalColor>)> {
         let mut sim = sim(SIGNALIZED, seed);
         let mut frames = Vec::new();
@@ -246,7 +250,6 @@ fn control_and_signal_state_are_reproducible_for_a_seed() {
         }
         frames
     }
-    assert_eq!(trace(7), trace(7));
     assert_ne!(trace(7), trace(8), "different seeds should diverge");
 }
 

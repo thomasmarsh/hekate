@@ -11,7 +11,9 @@
 //! - a batch over the checked-in seed bank
 //!   `scenarios/phase2/inc1/narrow_isolated_seed_bank.json` records every
 //!   per-seed trace hash, cross-checks each against the canonical trace hash of
-//!   the same run, and pins each run manifest's stream hash to that batch hash.
+//!   the same run, and pins each run manifest's stream hash to that batch hash;
+//!   the decompressed event streams' byte-for-byte equality is owned by
+//!   `apps/hekate-cli/tests/batch.rs` and `run_directory.rs`.
 //!
 //! The batch runs through the same `run_batch`/`write_run_directory` path the
 //! `batch` command uses, and each per-seed hash is cross-checked against
@@ -211,10 +213,12 @@ fn read_run_manifest(directory: &Path) -> RunManifest {
 
 /// A batch over the declared seed bank records every per-seed trace hash, pins
 /// each run manifest's stream hash to that hash, and cross-checks each against
-/// the canonical trace hash of the same run.
+/// the canonical trace hash of the same run. The decompressed event streams'
+/// byte-for-byte equality is owned by `apps/hekate-cli/tests/batch.rs` and
+/// `run_directory.rs`.
 #[test]
 #[ignore = "slow: seed-bank batch over every narrow fixture; run scripts/run-test-harness.sh"]
-fn the_narrow_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
+fn the_narrow_seed_bank_batch_reproduces_every_per_seed_hash() {
     let scratch = Scratch::new("seed-bank-batch");
     let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");
     let reference = SeedBankReference {
