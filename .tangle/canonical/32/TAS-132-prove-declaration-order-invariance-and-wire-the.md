@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T06:00:37Z
+updated: 2026-09-15T06:06:00Z
 summary: Prove declaration-order invariance and wire the matrix.
-next: Run the workspace and required-preset gate and resolve this node.
 ---
 
 Parent [[TAS-107-check-in-contextual-wrong-way-fixtures]].
@@ -80,3 +79,28 @@ Recorded as delegated and not claimed: the `# Done when` clause requiring
 this slice's brief scopes verification to the focused commands above. Per-preset
 reproduction is [[TAS-133-reproduce-every-increment-2-fixture-and-golden-i]]'s
 scope; no workspace or preset coverage is claimed.
+
+## Gate evidence
+
+Fresh `gate132` run from the repository root on `86b9d08`:
+
+| gate | command | exit | wall s | result |
+| --- | --- | --- | --- | --- |
+| format | `cargo fmt --all --check` | 0 | 1.0 | clean |
+| lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 1.0 | clean |
+| test | `cargo test --workspace --all-features` | 0 | 184.0 | 1005 passed, 0 failed, 1 ignored |
+| dependency direction | `./scripts/check-dependency-direction.sh` | 0 | 0.0 | `dependency direction OK` |
+| graph | `tangle check` | 0 | 0.0 | `graph check: passed (194 nodes)` |
+
+The gate's workspace run executes the new
+`reversing_facility_and_reference_declarations_preserves_the_wrong_way_outcome`
+and it passes (`tests/wrong_way.rs`, 20 passed). No fix was needed for any gate.
+
+Preset clause, recorded as delegated and not claimed: the required-preset half
+of the `# Done when` clause ("CLI validate and run plus cargo test --workspace
+pass at required presets") is still not executed here. The workspace half is
+covered by the gate's `cargo test --workspace --all-features` above; per-preset
+reproduction is delivered by
+[[TAS-133-reproduce-every-increment-2-fixture-and-golden-i]] (child of
+[[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]]), exactly as
+TAS-130's preset clause was delegated. No preset coverage is claimed here.

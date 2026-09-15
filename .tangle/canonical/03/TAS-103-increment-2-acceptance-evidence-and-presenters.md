@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T05:29:52Z
+updated: 2026-09-15T06:06:45Z
 summary: Close Increment 2 analytic, adversarial, reproducibility, performance, matrix, and viewer gates.
-next: [[TAS-107-check-in-contextual-wrong-way-fixtures]]
+next: [[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].
