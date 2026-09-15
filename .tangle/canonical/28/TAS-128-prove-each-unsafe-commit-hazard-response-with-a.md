@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T04:10:33Z
+updated: 2026-09-15T04:19:02Z
 summary: Prove each unsafe-commit hazard response with a falsification probe.
-next: Verify each hazard case and the falsification probe against the Done-when mapping, then resolve the node.
 ---
 
 Parent [[TAS-105-prove-deterministic-claims-and-unsafe-commit-policy]].
@@ -76,6 +75,30 @@ Verified: `cargo fmt --all --check` clean; `cargo clippy -p hekate-sim
 plus every suite, 0 failed; `cargo test -p hekate-sim --test maneuver_lifecycle`
 6 passed; `scripts/check-dependency-direction.sh` `dependency direction OK`. No
 seam defect was found, so no production line and no landed seam changed.
+
+## Resolution gate
+
+All five gates green on `78c0d4b` at 2026-09-15T04:19:02Z, run from the repo
+root with a warm `target/` and no `cargo clean`:
+
+| gate | command | exit | wall |
+| --- | --- | --- | --- |
+| 1 | `cargo fmt --all --check` | 0 | 1 s |
+| 2 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 6 s |
+| 3 | `cargo test --workspace --all-features` | 0 | 231 s |
+| 4 | `./scripts/check-dependency-direction.sh` | 0 | 1 s |
+| 5 | `tangle check` | 0 | 1 s |
+
+Full suite: 993 passed, 0 failed, 1 ignored across 81 test binaries and six
+doctest blocks (all six new hazard/probe tests present and passing);
+`dependency direction OK`; `graph check: passed (194 nodes)`. The `+557` added
+lines are all inside `sim.rs (mod tests)` and no line of `sim.rs` was deleted, so
+the slice is test-only. The probe was independently falsified: deleting the abort
+clause from `sim.rs (Simulation::committed_plan)` makes
+`a_committed_corridor_narrowed_by_a_side_body_brakes_and_holds_then_aborts` and
+the probe both fail on the recorded-response assertion (`left: Brake`, `right:
+Abort(ClearanceLost)`), and restoring the clause returns both to green. No gate
+was red, so no repair was needed and no seam or schema change was made.
 
 # Context
 

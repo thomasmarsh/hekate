@@ -1,10 +1,9 @@
 ---
-status: proposed
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T03:55:22Z
+updated: 2026-09-15T04:19:02Z
 summary: Prove deterministic simultaneous claims and every unsafe committed-maneuver response.
-next: [[TAS-128-prove-each-unsafe-commit-hazard-response-with-a]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -27,6 +26,29 @@ with the documented bounded brake, abort, hold, or return action.
   and demonstrates that the suite fails for the intended reason.
 - No case teleports, overlaps silently, exceeds a motion limit, or crosses a
   forbidden boundary without the TAS-100 event fact.
+
+# Result
+
+Both slices resolved and integrated, so this parent's Done-when is met.
+
+- [[TAS-127-prove-deterministic-simultaneous-claim-resolutio]] (resolved,
+  `a151b4a`) proves two- and three-agent claim determinism under reversed
+  declaration, candidate discovery, and insertion order, and fixed-seed
+  repetition identity: the parent's first two clauses.
+- [[TAS-128-prove-each-unsafe-commit-hazard-response-with-a]] (resolved,
+  `78c0d4b`) proves the front, rear, side-narrowing, lost-connector, and
+  blocked-return hazard responses and the response-removal falsification probe:
+  the parent's last three clauses (the probe clause is disjunctive, satisfied by
+  the removed hazard response).
+
+Verified by the TAS-128 resolution gate on `78c0d4b` from the repo root:
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features
+-- -D warnings`, `cargo test --workspace --all-features` (993 passed, 0 failed,
+1 ignored across 81 test binaries and six doctest blocks),
+`./scripts/check-dependency-direction.sh`, and `tangle check`
+(`graph check: passed (194 nodes)`) all green. No slice added a broad scenario
+fixture, metric, or presentation, and no seam defect was exposed, so no
+production line changed.
 
 # Context
 
