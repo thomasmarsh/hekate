@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 status: proposed
-updated: 2026-09-15T17:20:06Z
+updated: 2026-09-15T19:31:30Z
 summary: Make the expensive behavior tests fast and narrow.
-next: Replace the lane_transitions constraint family with a crate-internal two-band scripted fixture and fasten the other behavior tests.
+next: "[[tas-3nx77mbpv0fn9npfdz3at3vywj-fasten-or-harness-move-the-remaining-expensive]]"
 ---
 
 Parent [[tas-2hx2hbxy3gywdr5qcd2zfny0ff-keep-the-default-test-suite-fast-with-a]].

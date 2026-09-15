@@ -6358,6 +6358,109 @@ mod tests {
         Simulation::new(scenario, RunConfig::new(0)).expect("the simulation builds")
     }
 
+    /// The scripted two-band constraint fixture: the maneuver fixture's rider
+    /// mode on a 3.0 m source band, the parallel lane the rider passes, and a
+    /// 3.0 m destination band across the compiled shared boundary, joined by one
+    /// adjacency.
+    ///
+    /// The mode's horizon is the streamed constraint family's 6.0 s, so the
+    /// outbound corridor reaches the destination band inside every prediction,
+    /// and no demand spawns a body: a constraint test places the rider and its
+    /// companions itself, and every rule it asserts is read from the compiled
+    /// geometry rather than approached by a stream.
+    fn constraint_bands_v2() -> String {
+        r#"
+    {
+      schema_version: 2,
+      id: 'crossing_constraint_scripted_v2',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [
+        { id: 'guide_a', points: [ { x: 0.0, y: 0.0 }, { x: 400.0, y: 0.0 } ] },
+        { id: 'pass_lane', points: [ { x: 0.0, y: -2.0 }, { x: 400.0, y: -2.0 } ] },
+        { id: 'guide_b', points: [ { x: 0.0, y: 3.0 }, { x: 400.0, y: 3.0 } ] },
+      ],
+      portals: [
+        { id: 'entry', path: 'guide_a', end: 'start', width_m: 3.0 },
+        { id: 'exit', path: 'guide_a', end: 'end', width_m: 3.0 },
+      ],
+      boundaries: [
+        { id: 'world', points: [
+          { x: -10.0, y: -10.0 }, { x: 410.0, y: -10.0 },
+          { x: 410.0, y: 10.0 }, { x: -10.0, y: 10.0 },
+        ] },
+      ],
+      regions: [
+        { id: 'band_a', points: [
+          { x: 0.0, y: -1.5 }, { x: 400.0, y: -1.5 },
+          { x: 400.0, y: 1.5 }, { x: 0.0, y: 1.5 },
+        ] },
+        { id: 'band_b', points: [
+          { x: 0.0, y: 1.5 }, { x: 400.0, y: 1.5 },
+          { x: 400.0, y: 4.5 }, { x: 0.0, y: 4.5 },
+        ] },
+      ],
+      facilities: [
+        { id: 'a', region: 'band_a', reference_path: 'guide_a',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: { modes: [ 'rider' ] }, lateral_use: 'shared',
+          lateral_policy: { passing_side: 'left' },
+          speed_policy: { limit_mps: null } },
+        { id: 'b', region: 'band_b', reference_path: 'guide_b',
+          width_m: 3.0, nominal_direction: 'forward',
+          access: { modes: [ 'rider' ] }, lateral_use: 'shared',
+          lateral_policy: { passing_side: 'left' },
+          speed_policy: { limit_mps: null } },
+      ],
+      facility_adjacencies: [
+        { id: 'a_beside_b', first: 'a', second: 'b', side: 'left' },
+      ],
+      movements: [
+        { id: 'through', from: 'entry', to: 'exit', path: 'guide_a', priority: 0,
+          direction: 'forward' },
+      ],
+      mode_templates: [
+        {
+          id: 'rider',
+          body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+            radius_m: { min: 0.35, max: 0.35 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield', 'pass' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 6.0, max: 6.0 },
+            max_accel_mps2: { min: 1.2, max: 1.2 },
+            comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+            time_gap_s: { min: 1.0, max: 1.0 },
+            steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+            lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+            lateral_clearance_m: { min: 0.3, max: 0.3 },
+            compliance: { min: 1.0, max: 1.0 },
+          },
+          lateral: { target_clearance_m: 0.75, horizon_s: 6.0 },
+        },
+      ],
+      maneuver_policy: {
+        commit: { min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 },
+      },
+      demand: [
+        { id: 'none', mode: 'rider',
+          spawn: { population: { path: 'guide_a', count: 0, speed_mps: 6.0, spacing_m: 20.0 } } },
+      ],
+    }
+    "#
+        .to_string()
+    }
+
+    /// Build the scripted constraint fixture.
+    fn constraint_sim() -> Simulation {
+        let source =
+            parse_scenario_source_v2(&constraint_bands_v2()).expect("the document is version 2");
+        let scenario = CompiledScenario::compile_v2(source).expect("the scenario compiles");
+        Simulation::new(scenario, RunConfig::new(0)).expect("the simulation builds")
+    }
+
     /// The fixture's rider mode template. The fixture authors exactly one, so
     /// its dense identifier is the first index.
     fn rider_mode(sim: &Simulation) -> ModeTemplateId {
@@ -6383,39 +6486,55 @@ mod tests {
         }
     }
 
-    /// The rider body at `distance_m` and offset `d_m` on the guide path.
-    fn rider_body(sim: &Simulation, distance_m: f64, d_m: f64) -> (DVec2, f64) {
-        let path = sim
-            .scenario
-            .path(PathId::from_index(0))
-            .expect("the guide path");
+    /// The world pose of a body at `distance_m` along `path`, offset `d_m` to
+    /// the left of the path's own direction of travel.
+    fn body_pose(sim: &Simulation, path: PathId, distance_m: f64, d_m: f64) -> (DVec2, f64) {
+        let path = sim.scenario.path(path).expect("the body's path");
         let heading_rad = path.heading_at(distance_m);
         let normal = DVec2::from_angle(heading_rad + std::f64::consts::FRAC_PI_2);
         (path.position_at(distance_m) + normal * d_m, heading_rad)
     }
 
-    /// Place one rider at `distance_m` on the guide path, offset `d_m` to the
-    /// left, through the real spawn projection: its route state carries the
-    /// compiled facility's own corridor, target clearance, and horizon.
-    fn push_rider(sim: &mut Simulation, distance_m: f64, d_m: f64) -> AgentId {
-        let path_id = PathId::from_index(0);
-        let (position, heading_rad) = rider_body(sim, distance_m, d_m);
-        let narrow = rider_narrow();
+    /// Place one wheeled body at `distance_m` along `path`, offset `d_m` to the
+    /// left of its direction of travel, through the real spawn projection: its
+    /// route state is the compiled facility whose reference is `path`, so the
+    /// kernel reads it on that facility exactly as it reads a spawned rider.
+    ///
+    /// A `lateral` body carries the fixture mode's bounded-steering envelope and
+    /// is therefore a maneuver candidate; a body without it is longitudinal-only
+    /// and never maneuvers, which is the companion a scripted constraint rule
+    /// places. `speed_mps` is the body's own free-flow speed, so a companion can
+    /// be slower or faster than the rider while its route state is the same.
+    fn push_body(
+        sim: &mut Simulation,
+        path: PathId,
+        distance_m: f64,
+        d_m: f64,
+        speed_mps: f64,
+        lateral: bool,
+    ) -> AgentId {
+        let (position, heading_rad) = body_pose(sim, path, distance_m, d_m);
+        let mut narrow = rider_narrow();
+        narrow.desired_speed_mps = speed_mps;
         let route_state = sim
             .route_state_for(
                 rider_mode(sim),
-                path_id,
+                path,
                 position,
                 1.0,
                 narrow.body_width_m(),
-                narrow.lateral_limits(),
+                if lateral {
+                    narrow.lateral_limits()
+                } else {
+                    None
+                },
             )
-            .expect("the rider mode steers on the compiled facility");
+            .expect("the mode travels the compiled facility");
         sim.agents.push(AgentInit {
             mode: AgentMode::Vehicle,
-            path: path_id,
+            path,
             distance_m,
-            speed_mps: narrow.desired_speed_mps,
+            speed_mps,
             position,
             heading_rad,
             body_length_m: narrow.length_m,
@@ -6428,6 +6547,450 @@ mod tests {
             pedestrian_profile: None,
             route_state: Some(route_state),
         })
+    }
+
+    /// Place one rider at `distance_m` on the guide path, offset `d_m` to the
+    /// left, through the real spawn projection: its route state carries the
+    /// compiled facility's own corridor, target clearance, and horizon.
+    fn push_rider(sim: &mut Simulation, distance_m: f64, d_m: f64) -> AgentId {
+        push_body(
+            sim,
+            PathId::from_index(0),
+            distance_m,
+            d_m,
+            rider_narrow().desired_speed_mps,
+            true,
+        )
+    }
+
+    /// The constraint fixture's compiled paths: the source band's reference, the
+    /// parallel lane the rider passes, and the destination band's reference.
+    const CONSTRAINT_SOURCE: usize = 0;
+    const CONSTRAINT_PASSED_LANE: usize = 1;
+    const CONSTRAINT_DESTINATION: usize = 2;
+
+    /// The body length every body in the constraint fixture carries, so a
+    /// centre-to-centre separation of this many metres is a touching pair.
+    const CONSTRAINT_BODY_LENGTH_M: f64 = 1.8;
+
+    /// The distance along the source band every scripted constraint rule starts
+    /// the rider at.
+    const CONSTRAINT_RIDER_START_M: f64 = 60.0;
+
+    /// The rider's free-flow speed in the constraint fixture, and the speed the
+    /// no-companion control holds through its whole committed approach.
+    const CONSTRAINT_FREE_FLOW_MPS: f64 = 6.0;
+
+    /// The speed a companion's leader constraint must pull the rider's committed
+    /// approach below: a body ahead is a bound only if the rider slows for it.
+    const CONSTRAINT_BOUNDED_SPEED_MPS: f64 = 5.0;
+
+    /// The bumper gap between the rider and the scripted own-band companion: at
+    /// 1 m/s against the rider's 6 m/s free flow it bounds the committed
+    /// approach, and by the time the rider's 6.0 s predicted corridor reaches it
+    /// the crossing has carried the rider clear of that band's lane.
+    const CONSTRAINT_OWN_BAND_GAP_M: f64 = 14.2;
+
+    /// The rider-to-follower centre-to-centre separation in the follower rule:
+    /// 3.2 m of bumper gap, above the crossing's 0.75 m target clearance, so the
+    /// committed crossing never holds for the body behind it.
+    const CONSTRAINT_FOLLOWER_BEHIND_M: f64 = 5.0;
+
+    /// How far ahead of the rider the passed body rides: far enough that the
+    /// completion guard — which needs the rider's rear past the body's own front
+    /// by the target clearance — cannot end the maneuver before the crossing has
+    /// reached the shared boundary.
+    const CONSTRAINT_PASSED_AHEAD_M: f64 = 30.0;
+
+    /// How far behind the rider the closing companion starts so that its 12 m/s
+    /// against the rider's 6 m/s covers exactly that distance inside the rider's
+    /// 6.0 s horizon: it is predicted alongside the crossing at the horizon's end.
+    const CONSTRAINT_CLOSING_LEAD_M: f64 = 36.0;
+
+    /// The fastest body any scripted constraint rule places: the closing
+    /// companion. No driven step may move a live body further than this speed
+    /// allows, so a handoff that teleports a pose fails an assertion instead of
+    /// passing silently as a crossing.
+    const CONSTRAINT_MAX_BODY_SPEED_MPS: f64 = 12.0;
+
+    /// The bound a scripted constraint rule must be observed within: the 6.0 s
+    /// horizon's crossing completes well inside it at the fixture's speeds, so a
+    /// rule that needs more is a rule the placement, not the drive, has to fix.
+    const CONSTRAINT_CAP_TICKS: u64 = 120;
+
+    /// Request the fixture's cross-facility change of lane: the rider crosses the
+    /// compiled shared boundary into the destination band at that band's own
+    /// reference, passing `passed`.
+    fn request_crossing(sim: &mut Simulation, rider: AgentId, passed: AgentId) -> bool {
+        sim.request_lateral_maneuver(
+            rider,
+            LateralManeuverRequest {
+                target_offset_m: 0.0,
+                passed_body: passed,
+                target_facility: Some(FacilityId::from_index(1)),
+            },
+        )
+    }
+
+    /// Commit the fixture's crossing for `rider` and `passed`: `following`
+    /// enters `preparing` in the attempt, then `committed` at the next decision.
+    fn committed_crossing(sim: &mut Simulation, rider: AgentId, passed: AgentId) {
+        assert!(request_crossing(sim, rider, passed));
+        sim.step();
+        sim.step();
+        assert_eq!(rider_state(sim, rider).maneuver, ManeuverState::Committed);
+    }
+
+    /// What one scripted crossing approach did.
+    #[derive(Default)]
+    struct ScriptedApproach {
+        /// The lowest speed the rider held while it still rode the source band
+        /// with a committed maneuver in flight, or `None` when it never held one.
+        min_committed_speed_mps: Option<f64>,
+        /// Whether the rider crossed the shared boundary laterally.
+        crossed: bool,
+        /// Every `aborted` edge the rider took, with its reason.
+        aborts: Vec<Option<ManeuverAbortReason>>,
+        /// The largest per-step world displacement of any live body seen.
+        max_step_m: f64,
+    }
+
+    /// The largest per-step world displacement of any live body since `previous`,
+    /// with `previous` refreshed to the poses just read.
+    ///
+    /// The caller seeds `previous` with the poses the drive starts from, so every
+    /// driven step is measured in the world frame the handoff claims not to move
+    /// a pose in. A store that grew mid-drive re-seeds without reporting, because
+    /// the body just added has no earlier pose to be compared against.
+    fn step_displacement(sim: &Simulation, previous: &mut Vec<DVec2>) -> f64 {
+        let mut max_step_m: f64 = 0.0;
+        for (index, before) in previous.iter().enumerate().take(sim.agents.len()) {
+            if sim.agents.alive[index] {
+                max_step_m = max_step_m.max((sim.agents.position[index] - *before).length());
+            }
+        }
+        previous.clone_from(&sim.agents.position);
+        max_step_m
+    }
+
+    /// Step `sim` until the rider crosses, aborts, or `cap` ticks have run,
+    /// recording its committed approach on the way. A rule is observed as soon as
+    /// it happens; the cap only bounds a rule the placement failed to set up.
+    fn drive_scripted_crossing(sim: &mut Simulation, rider: AgentId, cap: u64) -> ScriptedApproach {
+        let source = PathId::from_index(CONSTRAINT_SOURCE);
+        let mut approach = ScriptedApproach::default();
+        let mut previous: Vec<DVec2> = sim.agents.position.clone();
+        for _ in 0..cap {
+            let output = sim.step();
+            approach.crossed |= output
+                .facility_transitions()
+                .iter()
+                .any(|record| record.agent == rider && record.via == TransitionKind::Lateral);
+            approach.aborts.extend(
+                output
+                    .transitions()
+                    .iter()
+                    .filter(|transition| {
+                        transition.agent == rider && transition.to == ManeuverState::Aborted
+                    })
+                    .map(|transition| transition.reason),
+            );
+            approach.max_step_m = approach
+                .max_step_m
+                .max(step_displacement(sim, &mut previous));
+            let committed = sim.agents.route_state[rider.index()]
+                .is_some_and(|state| state.maneuver == ManeuverState::Committed);
+            if sim.agents.path[rider.index()] == source && committed {
+                let speed_mps = sim.agents.speed_mps[rider.index()];
+                approach.min_committed_speed_mps = Some(
+                    approach
+                        .min_committed_speed_mps
+                        .map_or(speed_mps, |slowest: f64| slowest.min(speed_mps)),
+                );
+            }
+            if approach.crossed || !approach.aborts.is_empty() {
+                break;
+            }
+        }
+        approach
+    }
+
+    /// A body ahead on the rider's own band bounds the committed change of lane
+    /// without cancelling it.
+    ///
+    /// The rider commits a crossing from the source band's own reference, and a
+    /// body it does not pass then rides that same band 14.2 m ahead at 1 m/s: the
+    /// rider's own leader, read on the band it still owns. Placed at the start of
+    /// the committed leg, that leader bounds the approach — the rider decelerates
+    /// from its 6 m/s free flow — while the crossing still reaches the shared
+    /// boundary, so the constraint slows the approach rather than cancelling it.
+    #[test]
+    fn constraint_an_own_band_leader_bounds_the_committed_crossing() {
+        let mut sim = constraint_sim();
+        let rider = push_rider(&mut sim, CONSTRAINT_RIDER_START_M, 0.0);
+        let passed = push_obstacle(
+            &mut sim,
+            CONSTRAINT_PASSED_LANE,
+            CONSTRAINT_RIDER_START_M + CONSTRAINT_PASSED_AHEAD_M,
+            0.5,
+        );
+        committed_crossing(&mut sim, rider, passed);
+        // The own-band leader is placed once the crossing is committed: the
+        // scripted placement fixes the committed leg's leader directly rather
+        // than the corridor a preparing decision reads.
+        let lead_m = sim.agents.distance_m[rider.index()]
+            + CONSTRAINT_BODY_LENGTH_M
+            + CONSTRAINT_OWN_BAND_GAP_M;
+        let leader = push_body(
+            &mut sim,
+            PathId::from_index(CONSTRAINT_SOURCE),
+            lead_m,
+            0.0,
+            1.0,
+            false,
+        );
+        let (named, constraint) = sim
+            .nearest_leader(rider.index())
+            .expect("the slower body ahead on the rider's own band is its leader");
+        assert_eq!(named, leader);
+        assert!((constraint.speed_mps - 1.0).abs() < 1e-9);
+
+        let approach = drive_scripted_crossing(&mut sim, rider, CONSTRAINT_CAP_TICKS);
+        let slowest = approach
+            .min_committed_speed_mps
+            .expect("the rider holds a committed maneuver on the source band");
+        assert!(
+            slowest < CONSTRAINT_BOUNDED_SPEED_MPS,
+            "the body ahead on the rider's own band bounds the committed approach: {slowest} m/s"
+        );
+        assert!(
+            approach.crossed,
+            "the rider still crosses: an own-band leader slows the approach, it does not cancel it"
+        );
+        assert!(
+            approach.aborts.is_empty(),
+            "a bounded approach aborts nothing"
+        );
+        let dt = sim.config().step().as_secs();
+        assert!(
+            approach.max_step_m <= CONSTRAINT_MAX_BODY_SPEED_MPS * dt + SETTLE_TOLERANCE_M,
+            "no body moved further than the fixture's fastest scripted body allows: {} m",
+            approach.max_step_m
+        );
+        assert_eq!(sim.emergency_cap_steps(), 0);
+    }
+
+    /// A body ahead on the destination band bounds the committed change of lane
+    /// *before* the handoff, and the same crossing with no such body stays at
+    /// free flow.
+    ///
+    /// The rider still owns the source band for the whole run: the destination
+    /// body is read across the compiled shared boundary as the rider's far-side
+    /// leader, so its constraint is active from the moment the crossing commits
+    /// rather than only once ownership has moved there.
+    #[test]
+    fn constraint_a_destination_band_leader_bounds_the_committed_crossing() {
+        let mut sim = constraint_sim();
+        let rider = push_rider(&mut sim, CONSTRAINT_RIDER_START_M, 0.0);
+        let passed = push_obstacle(
+            &mut sim,
+            CONSTRAINT_PASSED_LANE,
+            CONSTRAINT_RIDER_START_M + CONSTRAINT_PASSED_AHEAD_M,
+            0.5,
+        );
+        let leader = push_body(
+            &mut sim,
+            PathId::from_index(CONSTRAINT_DESTINATION),
+            CONSTRAINT_RIDER_START_M + CONSTRAINT_BODY_LENGTH_M + CONSTRAINT_OWN_BAND_GAP_M,
+            0.0,
+            1.0,
+            false,
+        );
+        committed_crossing(&mut sim, rider, passed);
+        assert_eq!(
+            rider_state(&sim, rider).facility,
+            FacilityId::from_index(0),
+            "the rider still owns the source band while the destination leader binds"
+        );
+        let (named, constraint) = sim
+            .nearest_leader(rider.index())
+            .expect("the body ahead on the destination band is the rider's far-side leader");
+        assert_eq!(named, leader);
+        assert!((constraint.speed_mps - 1.0).abs() < 1e-9);
+
+        let approach = drive_scripted_crossing(&mut sim, rider, CONSTRAINT_CAP_TICKS);
+        let slowest = approach
+            .min_committed_speed_mps
+            .expect("the rider holds a committed maneuver on the source band");
+        assert!(
+            slowest < CONSTRAINT_BOUNDED_SPEED_MPS,
+            "the body ahead on the destination band bounds the committed approach: {slowest} m/s"
+        );
+        let dt = sim.config().step().as_secs();
+        assert!(
+            approach.max_step_m <= CONSTRAINT_MAX_BODY_SPEED_MPS * dt + SETTLE_TOLERANCE_M,
+            "no body moved further than the fixture's fastest scripted body allows: {} m",
+            approach.max_step_m
+        );
+        assert_eq!(sim.emergency_cap_steps(), 0);
+
+        // The control: the identical scripted crossing with no destination body.
+        let mut control = constraint_sim();
+        let control_rider = push_rider(&mut control, CONSTRAINT_RIDER_START_M, 0.0);
+        let control_passed = push_obstacle(
+            &mut control,
+            CONSTRAINT_PASSED_LANE,
+            CONSTRAINT_RIDER_START_M + CONSTRAINT_PASSED_AHEAD_M,
+            0.5,
+        );
+        committed_crossing(&mut control, control_rider, control_passed);
+        let control_approach =
+            drive_scripted_crossing(&mut control, control_rider, CONSTRAINT_CAP_TICKS);
+        let control_slowest = control_approach
+            .min_committed_speed_mps
+            .expect("the control rider holds a committed maneuver on the source band");
+        assert!(
+            control_slowest >= CONSTRAINT_FREE_FLOW_MPS - 0.1,
+            "nothing bounds the control rider's committed approach: {control_slowest} m/s"
+        );
+        assert!(
+            control_approach.crossed,
+            "the control rider with no destination body crosses"
+        );
+        assert!(
+            control_approach.max_step_m <= CONSTRAINT_MAX_BODY_SPEED_MPS * dt + SETTLE_TOLERANCE_M,
+            "no body moved further than the fixture's fastest scripted body allows: {} m",
+            control_approach.max_step_m
+        );
+        assert_eq!(control.emergency_cap_steps(), 0);
+    }
+
+    /// A body closing on the crossing from behind on the destination band holds
+    /// it: the committed outbound leg aborts on its predicted clearance and the
+    /// handoff never fires.
+    ///
+    /// The rider commits first, with nothing on the destination band in reach.
+    /// The body is then placed 36 m behind it there at 12 m/s: the 6 m/s
+    /// difference covers that distance inside the rider's 6.0 s horizon, so the
+    /// body is predicted to sweep alongside the crossing exactly as the outbound
+    /// corridor reaches the destination band and the two footprints nearly touch.
+    /// That predicted clearance is below the commit policy's minimum, so the
+    /// ordered response aborts the maneuver rather than crossing in front of it.
+    #[test]
+    fn constraint_a_body_closing_from_behind_on_the_destination_band_holds_the_crossing() {
+        let mut sim = constraint_sim();
+        let rider = push_rider(&mut sim, CONSTRAINT_RIDER_START_M, 0.0);
+        let passed = push_obstacle(
+            &mut sim,
+            CONSTRAINT_PASSED_LANE,
+            CONSTRAINT_RIDER_START_M + CONSTRAINT_PASSED_AHEAD_M,
+            0.5,
+        );
+        committed_crossing(&mut sim, rider, passed);
+        let closing_m = sim.agents.distance_m[rider.index()] - CONSTRAINT_CLOSING_LEAD_M;
+        push_body(
+            &mut sim,
+            PathId::from_index(CONSTRAINT_DESTINATION),
+            closing_m,
+            0.0,
+            12.0,
+            false,
+        );
+
+        let approach = drive_scripted_crossing(&mut sim, rider, CONSTRAINT_CAP_TICKS);
+        assert!(
+            !approach.crossed,
+            "a body closing from behind on the destination band holds the crossing back: {:?}",
+            approach.aborts
+        );
+        assert_eq!(
+            approach.aborts,
+            vec![Some(ManeuverAbortReason::ClearanceLost)],
+            "the outbound leg aborts on its predicted clearance"
+        );
+        let dt = sim.config().step().as_secs();
+        assert!(
+            approach.max_step_m <= CONSTRAINT_MAX_BODY_SPEED_MPS * dt + SETTLE_TOLERANCE_M,
+            "no body moved further than the fixture's fastest scripted body allows: {} m",
+            approach.max_step_m
+        );
+        assert_eq!(sim.emergency_cap_steps(), 0);
+    }
+
+    /// A body behind the rider on the rider's own band stays its follower through
+    /// the crossing, and the crossing is not held for it.
+    ///
+    /// The two bodies script one queue on the source band 5 m apart at the same
+    /// free-flow speed, so the body behind selects the rider as its leader for as
+    /// long as they share the band: it never passes the rider and never overlaps
+    /// it, and its 3.2 m clearance stays above the crossing's 0.75 m target, so
+    /// the committed crossing stays feasible and the handoff fires.
+    #[test]
+    fn constraint_an_own_band_follower_stays_behind_and_does_not_hold_the_crossing() {
+        let mut sim = constraint_sim();
+        let rider = push_rider(&mut sim, CONSTRAINT_RIDER_START_M, 0.0);
+        let passed = push_obstacle(
+            &mut sim,
+            CONSTRAINT_PASSED_LANE,
+            CONSTRAINT_RIDER_START_M + CONSTRAINT_PASSED_AHEAD_M,
+            0.5,
+        );
+        let follower = push_body(
+            &mut sim,
+            PathId::from_index(CONSTRAINT_SOURCE),
+            CONSTRAINT_RIDER_START_M - CONSTRAINT_FOLLOWER_BEHIND_M,
+            0.0,
+            CONSTRAINT_FREE_FLOW_MPS,
+            false,
+        );
+        assert!(request_crossing(&mut sim, rider, passed));
+
+        let source = PathId::from_index(CONSTRAINT_SOURCE);
+        let mut crossed = false;
+        let mut closest_m = f64::INFINITY;
+        let mut max_step_m: f64 = 0.0;
+        let mut previous: Vec<DVec2> = sim.agents.position.clone();
+        for _ in 0..CONSTRAINT_CAP_TICKS {
+            let output = sim.step();
+            crossed |= output
+                .facility_transitions()
+                .iter()
+                .any(|record| record.agent == rider && record.via == TransitionKind::Lateral);
+            max_step_m = max_step_m.max(step_displacement(&sim, &mut previous));
+            if sim.agents.path[rider.index()] != source
+                || sim.agents.path[follower.index()] != source
+            {
+                break;
+            }
+            let (named, _) = sim
+                .nearest_leader(follower.index())
+                .expect("the rider ahead of the body behind stays its leader");
+            assert_eq!(
+                named, rider,
+                "the body behind reads the rider as its leader while they share the band"
+            );
+            let separation_m =
+                sim.agents.distance_m[rider.index()] - sim.agents.distance_m[follower.index()];
+            closest_m = closest_m.min(separation_m);
+            assert!(
+                separation_m > CONSTRAINT_BODY_LENGTH_M,
+                "the body behind the rider never passes it or overlaps it while they share the band: {separation_m} m"
+            );
+        }
+        assert!(
+            crossed,
+            "a well-formed follower behind on the rider's own band does not hold the crossing"
+        );
+        assert!(
+            closest_m < f64::INFINITY,
+            "the fixture observed the pair on the rider's own band"
+        );
+        let dt = sim.config().step().as_secs();
+        assert!(
+            max_step_m <= CONSTRAINT_MAX_BODY_SPEED_MPS * dt + SETTLE_TOLERANCE_M,
+            "no body moved further than the fixture's fastest scripted body allows: {max_step_m} m"
+        );
+        assert_eq!(sim.emergency_cap_steps(), 0);
     }
 
     /// Place a stationary circular body of radius `radius_m` at `distance_m` on
