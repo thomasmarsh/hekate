@@ -20,8 +20,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use flate2::read::GzDecoder;
-use serde_json::Value;
-use sha2::{Digest, Sha256};
 use hekate_cli::{
     EVENT_STREAM_FILE, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
     MetricValue, OperationalValues, RunDirectoryRequest, RunMetrics, RunMetricsArtifact,
@@ -33,6 +31,8 @@ use hekate_sim::{
     AgentId, AgentMode, Event, ManeuverEdge, ManeuverState, MetricMinimum, ModePair, MovementKey,
     OperationValues, OvertakeObservation, PostEncroachment, RunConfig, Simulation,
 };
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");

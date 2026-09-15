@@ -14,7 +14,6 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use sha2::{Digest, Sha256};
 use hekate_cli::{
     BATCH_MANIFEST_FILE, BatchManifest, CONTINUOUS_CLASS, CONVERGENCE_EVIDENCE_FILE,
     CONVERGENCE_EVIDENCE_VERSION, CONVERGENCE_RUN_DIR, CONVERGENCE_SUMMARY_FILE, COUNT_CLASS,
@@ -24,6 +23,7 @@ use hekate_cli::{
     SamplingPolicy, SliceKind, TOLERANCE_RULE, fidelity_ticks, render_convergence_summary,
     run_experiment, run_experiment_convergence,
 };
+use sha2::{Digest, Sha256};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");

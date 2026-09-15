@@ -29,9 +29,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
 use hekate_model::{CompiledScenario, MODEL_VERSION};
 use hekate_sim::{EVENT_VERSION, InitError, RunConfig, Seconds};
+use serde::{Deserialize, Serialize};
 
 use crate::baseline::ScenarioProvenance;
 use crate::run_dir::{

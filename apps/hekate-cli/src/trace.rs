@@ -15,13 +15,13 @@
 
 use std::fmt::Write as _;
 
-use serde::Serialize;
-use sha2::{Digest, Sha256};
 use hekate_model::CompiledScenario;
 use hekate_sim::{
     ClosePassBand, DespawnReason, EVENT_VERSION, Event, InitError, RegionKey, RunConfig,
     RunSummary, Simulation, StepOutput,
 };
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::run_dir::TrajectorySampling;
 use crate::run_metrics::{RunMetrics, RunMetricsRecorder};

@@ -18,7 +18,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use sha2::{Digest, Sha256};
 use hekate_cli::{
     BATCH_MANIFEST_FILE, BatchManifest, BatchRun, BatchSpec, COMPARISON_FILE, COMPARISON_VERSION,
     CONFIDENCE_LEVEL, ClosePassMetrics, ClosePassMinimum, ClosePassValues, CompareError,
@@ -28,6 +27,7 @@ use hekate_cli::{
     SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, Side, T_CRITICAL_975,
     compare_batches, read_seed_bank,
 };
+use sha2::{Digest, Sha256};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");

@@ -8,8 +8,8 @@
 //! stream and its crossing-compliance propensity from the `compliance` stream,
 //! both under its own stable agent id.
 
-use rand_chacha::ChaCha20Rng;
 use hekate_model::{CompiledModeTemplate, CompiledPedestrianProfile, CompiledProfile};
+use rand_chacha::ChaCha20Rng;
 
 use crate::rng::uniform01;
 

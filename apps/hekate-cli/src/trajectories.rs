@@ -27,14 +27,14 @@ use arrow_array::{
 };
 use arrow_schema::{ArrowError, DataType, Field, Fields, Schema, SchemaRef};
 use glam::DVec2;
+use hekate_model::{BodyKind, MovementDirection, PermissionEffect};
+use hekate_sim::{BodySegmentSample, ManeuverState, Simulation, SnapshotDetail};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Compression;
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
-use hekate_model::{BodyKind, MovementDirection, PermissionEffect};
-use hekate_sim::{BodySegmentSample, ManeuverState, Simulation, SnapshotDetail};
 
 use crate::run_dir::TrajectorySampling;
 use crate::trace::sha256_hex;

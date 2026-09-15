@@ -17,9 +17,9 @@ use std::process::{Command, Output};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use sha2::{Digest, Sha256};
 use hekate_cli::{EVENT_STREAM_FILE, MANIFEST_FILE, RunManifest, read_trajectories};
 use hekate_model::{MovementDirection, PermissionEffect};
+use sha2::{Digest, Sha256};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");

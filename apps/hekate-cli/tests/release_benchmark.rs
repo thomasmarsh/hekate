@@ -25,12 +25,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
 use hekate_cli::{
     RunDirectoryRequest, SamplingPolicy, canonical_run_captured, load_scenario_provenance,
     write_run_directory,
 };
 use hekate_sim::{RunConfig, Simulation};
+use serde::Serialize;
 
 /// Version of the release benchmark artifact format.
 const ARTIFACT_VERSION: u32 = 1;

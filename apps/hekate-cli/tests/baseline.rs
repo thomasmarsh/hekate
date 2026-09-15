@@ -16,8 +16,8 @@
 
 use std::path::PathBuf;
 
-use sha2::{Digest, Sha256};
 use hekate_cli::{CaptureRequest, capture, load_scenario_provenance, migrate_scenario};
+use sha2::{Digest, Sha256};
 
 const BASELINE_SEED: u64 = 0;
 const BASELINE_DURATION_S: f64 = 12.5;

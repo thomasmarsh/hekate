@@ -323,8 +323,8 @@
 //! preset that disables the kernel's position caps or that requires lateral or
 //! steering state, which it does not express.
 
-use rand_chacha::ChaCha20Rng;
 use hekate_model::{AgentBody, CompiledModeTemplate, PassingSide};
+use rand_chacha::ChaCha20Rng;
 
 use crate::control::{self, Constraint};
 use crate::profile::{VehicleProfile, WheeledLateralLimits};

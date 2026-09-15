@@ -10,8 +10,8 @@
 
 use std::collections::VecDeque;
 
-use rand_chacha::ChaCha20Rng;
 use hekate_model::{CompiledDemand, CompiledPedestrianDemand, MovementId, PedestrianRouteId};
+use rand_chacha::ChaCha20Rng;
 
 use crate::rng::uniform01;
 

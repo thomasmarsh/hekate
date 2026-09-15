@@ -17,13 +17,13 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use serde::Deserialize;
 use hekate_cli::{
     METRIC_DEFINITION_VERSION, PRESETS, SEED_BANK_VERSION, SamplingPolicy, load_scenario,
     read_seed_bank,
 };
 use hekate_model::{ScenarioSource, parse_scenario_source};
 use hekate_sim::{Event, RunConfig, Simulation};
+use serde::Deserialize;
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");

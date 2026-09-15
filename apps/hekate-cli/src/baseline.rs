@@ -12,9 +12,9 @@
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
 use hekate_model::{CompiledScenario, MODEL_VERSION};
 use hekate_sim::{EVENT_VERSION, InitError, RunConfig, Seconds, Simulation};
+use serde::{Deserialize, Serialize};
 
 use crate::trace::TraceRecorder;
 

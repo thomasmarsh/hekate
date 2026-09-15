@@ -32,8 +32,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use sha2::{Digest, Sha256};
 use hekate_cli::{MANIFEST_FILE, RunManifest};
+use sha2::{Digest, Sha256};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");

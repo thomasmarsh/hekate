@@ -60,13 +60,13 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
 use hekate_cli::{Trace, canonical_trace, load_scenario};
 use hekate_model::{
     CompiledScenario, SUPPORTED_SCHEMA_VERSION, ScenarioDocument, ScenarioSource, migrate_v1_to_v2,
     parse_scenario_document, validate_v2,
 };
 use hekate_sim::RunConfig;
+use serde_json::Value;
 
 /// A scenario with a frozen golden trace and the declared run that reproduces
 /// it. `golden` is the id the checked-in `tests/golden/<id>.trace.*` files and

@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use flate2::read::GzDecoder;
-use sha2::{Digest, Sha256};
 use hekate_cli::{
     BATCH_MANIFEST_FILE, BATCH_MANIFEST_VERSION, BatchError, BatchManifest, BatchRequest,
     EVENT_STREAM_FILE, MANIFEST_FILE, MANIFEST_TEMP_FILE, METRICS_FILE, RunManifest, SUMMARY_FILE,
@@ -27,6 +26,7 @@ use hekate_cli::{
 };
 use hekate_model::CompiledScenario;
 use hekate_sim::{EVENT_VERSION, RunConfig};
+use sha2::{Digest, Sha256};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");

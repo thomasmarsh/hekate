@@ -42,9 +42,9 @@ use std::path::{Path, PathBuf};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use serde::{Deserialize, Serialize};
 use hekate_model::MODEL_VERSION;
 use hekate_sim::{EVENT_VERSION, RunSummary as KernelRunSummary};
+use serde::{Deserialize, Serialize};
 
 use crate::baseline::{PRESETS, ScenarioProvenance};
 use crate::run_metrics::{METRIC_DEFINITION_VERSION, METRICS_FILE, RunMetrics, RunMetricsArtifact};

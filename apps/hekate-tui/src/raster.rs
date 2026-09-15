@@ -7,9 +7,9 @@
 //! world therefore covers twice as many columns as rows.
 
 use glam::DVec2;
-use std::collections::BTreeMap;
 use hekate_present::{BodyEmphasis, BodyShape, SceneFrame, Viewport};
 use hekate_sim::EventKind;
+use std::collections::BTreeMap;
 
 use crate::grid::{Cell, CellGrid};
 use crate::palette::Rgb;

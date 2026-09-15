@@ -92,7 +92,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
 use hekate_model::{
     AgentFamily, CompiledClearanceBand, FacilityId, LateralUse, TacticKind, TacticalCapability,
 };
@@ -101,6 +100,7 @@ use hekate_sim::{
     ModePair, MovementKey, OperationValues as ObservedValues, OvertakeObservation, Simulation,
     StepOutput,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::trace::sha256_hex;
 

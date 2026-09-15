@@ -15,7 +15,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sha2::{Digest, Sha256};
 use hekate_cli::{
     DEFAULT_MAX_TRAJECTORY_SAMPLES, DEFAULT_TRAJECTORY_STRIDE_TICKS, EVENT_STREAM_FILE,
     MANIFEST_FILE, METRICS_FILE, RunDirectoryError, RunDirectoryRequest, RunManifest, RunMetrics,
@@ -26,6 +25,7 @@ use hekate_cli::{
 };
 use hekate_model::{BodyKind, CompiledScenario, MovementDirection, PermissionEffect};
 use hekate_sim::{RunConfig, Simulation, SnapshotDetail};
+use sha2::{Digest, Sha256};
 
 /// The binary under test, built by Cargo for this integration test.
 const CLI: &str = env!("CARGO_BIN_EXE_hekate-cli");
