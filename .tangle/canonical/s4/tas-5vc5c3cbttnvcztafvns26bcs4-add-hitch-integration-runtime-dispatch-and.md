@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 status: proposed
-updated: 2026-09-15T22:02:18Z
+updated: 2026-09-15T22:15:46Z
 summary: Add hitch integration, runtime dispatch, and swept collision for articulated-wheeled.
-next: Add deterministic hitch/trailer pose integration for AgentFamily::ArticulatedWheeled.
+next: "[[tas-12mx01cfsxskm0pjzq13hvcm2g-deterministic-hitch-trailer-pose-integration]]"
 ---
 
 Parent [[TAS-021-phase-2-increment-3-heavy-articulated-vehicles]].
