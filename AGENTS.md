@@ -108,6 +108,15 @@ later meta-analysis:
   under the same hub; the notes are evidence, not the fix. Collect friction
   already recorded in other vaults with `tangle feedback scan <vault>`.
 
+## Orchestrated sessions
+
+When asked to run an orchestrated, resumable, multi-slice, or subagent-driven
+session, read `docs/orchestrated-sessions.md` first. It records the roles
+(scout, implementer, build/test, reviewer, commit), the consistent hand-off
+protocol, the build-warmup trade-off, and the known pitfalls (the `git diff`
+untracked-file blind spot, cargo-lock serialization, noisy wall time). Keep this
+file free of that detail.
+
 ## Commits
 
 Always use [Conventional Commits](https://www.conventionalcommits.org/):
