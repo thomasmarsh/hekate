@@ -1,5 +1,10 @@
 # AGENTS.md
 
+Rules:
+
+- Don't use em-dash
+- Don't add Co-Authored-By to commits
+
 ## Tangle is the work ledger (mandatory)
 
 Work whose conclusion or executable state must outlive the session is tracked
