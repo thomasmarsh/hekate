@@ -688,10 +688,19 @@ fn box_box_clearance_detects_an_overlap() {
     assert!(box_box_clearance(&first, &turned) < 0.0);
 }
 
-#[test]
-fn the_mixed_benchmark_completes_without_nan_overlap_or_deadlock() {
-    for seed in 0..SEEDS {
-        let report = run_report(BENCHMARK, seed, GATE_TICKS);
+/// One sweep of the benchmark's declared seed range, shared by every gate
+/// assertion below so the expensive 24 x 4000-tick run is paid once rather than
+/// once per assertion family.
+fn sweep_reports() -> Vec<RunReport> {
+    (0..SEEDS)
+        .map(|seed| run_report(BENCHMARK, seed, GATE_TICKS))
+        .collect()
+}
+
+/// Every seed's run completes under nominal demand without non-finite state,
+/// unresolved overlaps, or route deadlock.
+fn assert_completion_without_nan_overlap_or_deadlock(reports: &[RunReport]) {
+    for (seed, report) in reports.iter().enumerate() {
         assert_eq!(
             report.non_finite, 0,
             "seed {seed}: non-finite agent state was observed"
@@ -756,14 +765,15 @@ fn the_mixed_benchmark_completes_without_nan_overlap_or_deadlock() {
     }
 }
 
-#[test]
-fn the_mixed_benchmark_holds_a_positive_minimum_separation() {
+/// The minimum surface separation between bodies of every pair kind stays
+/// positive (or non-negative for vehicle pairs) across the whole sweep, and no
+/// vehicle ever moves onto a pedestrian.
+fn assert_positive_minimum_separation(reports: &[RunReport]) {
     let mut cross_mode = Minimum::unset();
     let mut pedestrian_pair = Minimum::unset();
     let mut vehicle_pair = Minimum::unset();
     let mut vehicle_initiated = 0;
-    for seed in 0..SEEDS {
-        let report = run_report(BENCHMARK, seed, GATE_TICKS);
+    for (seed, report) in reports.iter().enumerate() {
         assert!(
             report.cross_mode.set && report.pedestrian_pair.set && report.vehicle_pair.set,
             "seed {seed}: a body pair of every kind must be observed"
@@ -915,11 +925,9 @@ fn the_mixed_benchmark_reproduces_for_the_same_seed() {
 /// modes, in the documented within-tick order, deterministically. These are the
 /// slice-E observables of every seed in the sweep, so the gate covers the whole
 /// benchmark rather than one run.
-#[test]
-fn the_mixed_benchmark_emits_one_ordered_safety_stream_for_both_modes() {
+fn assert_one_ordered_safety_stream_for_both_modes(reports: &[RunReport]) {
     let mut all_kinds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for seed in 0..SEEDS {
-        let report = run_report(BENCHMARK, seed, GATE_TICKS);
+    for (seed, report) in reports.iter().enumerate() {
         assert_eq!(
             report.out_of_order_ticks, 0,
             "seed {seed}: a tick's records left the documented order"
@@ -957,4 +965,16 @@ fn the_mixed_benchmark_emits_one_ordered_safety_stream_for_both_modes() {
             "the sweep never produced a {kind} record; saw {all_kinds:?}"
         );
     }
+}
+
+/// The mixed benchmark's slice-E gate over every seed of the declared sweep.
+///
+/// The sweep is the expensive part of this gate, so the three assertion
+/// families above read one sweep rather than each running its own.
+#[test]
+fn the_mixed_benchmark_gate_holds_over_every_declared_seed() {
+    let reports = sweep_reports();
+    assert_completion_without_nan_overlap_or_deadlock(&reports);
+    assert_positive_minimum_separation(&reports);
+    assert_one_ordered_safety_stream_for_both_modes(&reports);
 }

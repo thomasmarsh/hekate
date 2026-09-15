@@ -57,7 +57,7 @@ fn drive(sim: &mut Simulation, ticks: u64) -> Trace {
             output.facility_transitions().to_vec()
         };
         trace.transitions.extend(handoffs);
-        let frame = sim.snapshot(SnapshotDetail::Full);
+        let frame = sim.snapshot(SnapshotDetail::Position);
         for sample in frame.agents() {
             if let Some(before) = previous.get(&sample.id) {
                 trace.max_step_m = trace.max_step_m.max((sample.position - *before).length());
@@ -758,10 +758,10 @@ struct Placement {
     x_m: f64,
 }
 
-/// The placed agents with a compiled guide path, in spawn order.
-fn placements(sim: &Simulation) -> Vec<Placement> {
-    sim.snapshot(SnapshotDetail::Full)
-        .agents()
+/// The placed agents with a compiled guide path, in spawn order, read from one
+/// already-taken full snapshot.
+fn placements(agents: &[AgentSample]) -> Vec<Placement> {
+    agents
         .iter()
         .filter_map(|sample| {
             let motion = sample.motion.as_ref()?;
@@ -787,8 +787,8 @@ const ONCOMING_ZONE_M: std::ops::RangeInclusive<f64> = 100.0..=160.0;
 fn rider_before_a_slow_body(sim: &mut Simulation) -> Option<(AgentId, AgentId)> {
     for _ in 0..900 {
         sim.step();
-        let placed = placements(sim);
         let frame = sim.snapshot(SnapshotDetail::Full);
+        let placed = placements(frame.agents());
         for rider in placed.iter().filter(|agent| agent.path == 0) {
             if route_state(frame.agents(), rider.id)
                 .and_then(|route| route.target_clearance_m)
@@ -848,7 +848,7 @@ fn a_returning_riders_obstructed_target_holds() {
                 .map(|transition| (transition.from, transition.to, transition.edge)),
         );
         let frame = sim.snapshot(SnapshotDetail::Full);
-        let placed = placements(&sim);
+        let placed = placements(frame.agents());
         let Some(sample) = frame.agents().iter().find(|sample| sample.id == rider) else {
             break;
         };
@@ -1627,6 +1627,7 @@ fn a_cross_facility_returns_obstructed_corridor_holds_and_re_decides() {
                 && record.from_facility == FacilityId::from_index(1)
         });
         let frame = sim.snapshot(SnapshotDetail::Full);
+        let placed = placements(frame.agents());
         let Some(sample) = frame.agents().iter().find(|sample| sample.id == rider) else {
             break;
         };
@@ -1642,7 +1643,7 @@ fn a_cross_facility_returns_obstructed_corridor_holds_and_re_decides() {
         };
         // The obstruction the return leg reads: a body on the stream's stretch
         // inside the crossing corridor's own longitudinal reach.
-        let obstructing = placements(&sim).iter().any(|body| {
+        let obstructing = placed.iter().any(|body| {
             body.path == BLOCK_LANE_PATH
                 && RETURN_CORRIDOR_REACH_M.contains(&(body.x_m - sample.position.x))
         });
@@ -1941,8 +1942,8 @@ fn rider_before_constraints(
 ) -> ConstraintBodies {
     for _ in 0..6000 {
         sim.step();
-        let placed = placements(sim);
         let frame = sim.snapshot(SnapshotDetail::Full);
+        let placed = placements(frame.agents());
         for rider in placed
             .iter()
             .filter(|agent| agent.path == CONSTRAINT_SOURCE_PATH)
@@ -1995,8 +1996,8 @@ fn rider_between_same_band_bodies(
 ) -> ConstraintBodies {
     for _ in 0..6000 {
         sim.step();
-        let placed = placements(sim);
         let frame = sim.snapshot(SnapshotDetail::Full);
+        let placed = placements(frame.agents());
         for rider in placed
             .iter()
             .filter(|agent| agent.path == CONSTRAINT_SOURCE_PATH)

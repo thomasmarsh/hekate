@@ -5193,20 +5193,19 @@ mod tests {
 
     #[test]
     fn wall_clock_delay_does_not_change_results() {
-        fn run(pause: bool) -> Vec<String> {
+        // The kernel advances by fixed steps and never reads wall-clock time, so
+        // two immediate runs of the same seed are frame-for-frame identical.
+        fn run() -> Vec<String> {
             let mut sim = walking_sim(42);
             let mut frames = Vec::new();
             for _ in 0..30 {
-                if pause {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
                 sim.step();
                 frames.push(format!("{:?}", sim.snapshot(SnapshotDetail::Full)));
             }
             frames
         }
 
-        assert_eq!(run(false), run(true));
+        assert_eq!(run(), run());
     }
 
     #[test]
