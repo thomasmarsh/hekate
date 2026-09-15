@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T11:30:39Z
 summary: Coordinate Phase 2 mixed traffic through eight gated increments to a released mixed-mode comparison.
-next: [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]]
+next: [[TAS-021-phase-2-increment-3-heavy-articulated-vehicles]]
 ---
 
 # Context

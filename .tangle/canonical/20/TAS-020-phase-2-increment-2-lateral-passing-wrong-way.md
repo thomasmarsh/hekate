@@ -1,10 +1,9 @@
 ---
-status: proposed
+status: resolved
 context_rev: 2
 priority: P1
-updated: 2026-09-15T03:08:00Z
+updated: 2026-09-15T11:30:39Z
 summary: Add continuous lateral motion, passing evidence, and contextual wrong-way travel.
-next: [[TAS-103-increment-2-acceptance-evidence-and-presenters]]
 ---
 
 # Outcome
@@ -76,3 +75,23 @@ assigned that coordination write set.
   detailed visibility-error model, or mode-specific crate is in Increment 2.
 - Every new scenario or model-card artifact names the repository-wide suite
   that enumerates its directory before the path is introduced.
+
+# Result
+
+All six workstreams resolved: [[TAS-082-increment-2-authored-and-compiled-contract]],
+[[TAS-087-continuous-lateral-motion-and-gap-machinery]],
+[[TAS-092-passing-and-lane-transition-behavior]],
+[[TAS-096-contextual-wrong-way-travel]],
+[[TAS-099-increment-2-events-metrics-and-output]], and
+[[TAS-103-increment-2-acceptance-evidence-and-presenters]]. Their children carry the
+Increment 2 acceptance evidence: no maneuver teleports or crosses a forbidden boundary
+without an event ([[TAS-092-passing-and-lane-transition-behavior]],
+[[TAS-104-bound-predicted-versus-executed-clearance]]); analytic and fine-step fixtures
+bound predicted versus observed clearance (TAS-104); simultaneous gap claims resolve
+deterministically under the documented braking/abort policy
+([[TAS-105-prove-deterministic-claims-and-unsafe-commit-policy]]); wrong-way agents use
+ordinary routing, collision, and metric paths and cannot bypass an occupied opposing
+corridor ([[TAS-107-check-in-contextual-wrong-way-fixtures]]); and the viewer renders all
+five overlays with backend parity ([[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]]).
+Five gates green at `083d6f8`: fmt, clippy `-D warnings`, workspace tests (1049 passed, 0
+failed, 3 ignored), dependency direction, and `tangle check` (195 nodes).

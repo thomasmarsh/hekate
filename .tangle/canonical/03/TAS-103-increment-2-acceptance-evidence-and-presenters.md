@@ -1,10 +1,9 @@
 ---
-status: proposed
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T10:44:19Z
+updated: 2026-09-15T11:30:39Z
 summary: Close Increment 2 analytic, adversarial, reproducibility, performance, matrix, and viewer gates.
-next: [[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].
@@ -42,3 +41,19 @@ a representative mixed-mode profile establishes the later performance budget.
 Gated on [[TAS-099-increment-2-events-metrics-and-output]]. This coordinating
 node owns final evidence mapping and TAS-020 roll-up preparation, not child
 implementation.
+
+# Result
+
+All eight children resolved: [[TAS-104-bound-predicted-versus-executed-clearance]],
+[[TAS-105-prove-deterministic-claims-and-unsafe-commit-policy]],
+[[TAS-106-check-in-increment-2-passing-fixtures]],
+[[TAS-107-check-in-contextual-wrong-way-fixtures]],
+[[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]],
+[[TAS-109-document-increment-2-evidence-and-model-limits]],
+[[TAS-110-record-the-increment-2-representative-performance-profile]], and
+[[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]]. Five gates green at
+`083d6f8`: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets
+--all-features -- -D warnings`; `cargo test --workspace --all-features` (1049 passed, 0
+failed, 3 ignored, including the checked-in `schema::tests` v1/v2 schema-drift tests and
+the presenter/TUI/viewer suites); `./scripts/check-dependency-direction.sh`; and
+`tangle check` (195 nodes).

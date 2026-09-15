@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T11:20:45Z
+updated: 2026-09-15T11:30:39Z
 summary: Check in presenter fixtures and the negative source guard.
-next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]].
@@ -90,3 +89,22 @@ compiled band, so its usable corridor is projected and drawn. That is the corrid
 primitive's own contract (TAS-135 documented it as present wherever route state and
 a band exist), and the test asserts it explicitly instead of claiming an absence the
 code does not have.
+
+Five-gate validation (resolver, `083d6f8`):
+
+| gate | command | exit | wall | result |
+| --- | --- | --- | --- | --- |
+| 1 | `cargo fmt --all --check` | 0 | 1s | clean |
+| 2 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 1s | clean |
+| 3 | `cargo test --workspace --all-features` | 0 | 349s | 1049 passed; 0 failed; 3 ignored; 97 suites |
+| 4 | `./scripts/check-dependency-direction.sh` | 0 | 1s | `dependency direction OK` |
+| 5 | `tangle check` | 0 | <1s | `graph check: passed (195 nodes)` |
+
+Done when met: both fixtures open through `load_version_2` (asserting
+`schema_version() == 2`) and carry all five overlays with golden parity in
+`crates/hekate-present/tests/inc2_fixture_overlays.rs`, plus terminal
+(`apps/hekate-tui/tests/inc2_fixture_sessions.rs`) and Bevy
+(`apps/hekate-viewer/tests/inc2_fixture_frames.rs`) parity; the source-text
+negative guard and its falsification probe in
+`crates/hekate-present/tests/tactical_no_special_case.rs` reject scenario and
+mode names in shared modules; all five gates are green.

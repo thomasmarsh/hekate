@@ -1,10 +1,9 @@
 ---
-status: proposed
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T11:13:30Z
+updated: 2026-09-15T11:30:39Z
 summary: Present usable corridor, target offset, predicted gap, maneuver, and wrong-way overlays.
-next: [[TAS-136-check-in-presenter-fixtures-and-the-negative-sou]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -43,3 +42,18 @@ affected scene goldens. Do not alter simulation decisions or metric semantics.
 
 - [[TAS-135-map-increment-2-state-into-presenter-overlays-wi]] Overlay mapping and backend parity.
 - [[TAS-136-check-in-presenter-fixtures-and-the-negative-sou]] Presenter fixtures and negative guard.
+
+# Result
+
+Both slice children resolved: [[TAS-135-map-increment-2-state-into-presenter-overlays-wi]]
+maps the versioned route state and typed edge records into backend-neutral corridor,
+target-offset, predicted-gap, maneuver, and wrong-way primitives with agent, partner,
+facility/movement, clearance, state, and reason identifiers and the shared inspector
+summaries, and [[TAS-136-check-in-presenter-fixtures-and-the-negative-sou]] opens one
+passing and one occupied-opposing fixture through the version-2 loader with golden and
+both-backend parity plus the source-text negative guard and its falsification probe.
+Five gates green at `083d6f8`: fmt, clippy `-D warnings`, workspace tests (1049 passed,
+0 failed, 3 ignored), dependency direction, and `tangle check` (195 nodes). The
+documented nuance that an Increment 1 version-2 body carries route state on a compiled
+band — so its corridor is projected and drawn — is the corridor primitive's own
+contract, asserted explicitly rather than papered over.
