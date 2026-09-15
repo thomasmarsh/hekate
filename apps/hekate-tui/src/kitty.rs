@@ -10,10 +10,14 @@
 //! - a stable placement `a=p,i=<id>,p=<placement>` with `C=1`, so the placement
 //!   replaces rather than stacks and cursor advance cannot push it into
 //!   scrollback;
-//! - an explicit `a=d,d=i,i=<id>` whenever the image is dropped or the raw
-//!   transmit budget is reset, and again on [`KittyBackend::shutdown`];
-//! - a bounded raw transmit budget, so at most one image is ever live and the
-//!   backend never buffers frames without limit.
+//! - two alternating image ids: each frame transmits and places the next id
+//!   and only then deletes the previous one, in the same write, so a placed
+//!   image is always on screen before its replacement arrives and the scene
+//!   never blanks between frames;
+//! - an explicit `a=d,d=i,i=<id>` for the previous id after each placement and
+//!   again on [`KittyBackend::shutdown`] and [`KittyBackend::resize_terminal`];
+//! - at most two images live at once, bounding outstanding transmit data to
+//!   roughly one previous frame rather than a raw-byte quota.
 //!
 //! The backend renders the same geometry and colors as
 //! [`crate::backend::CellBackend`] through [`crate::pixel::PixelRasterizer`],
@@ -32,9 +36,9 @@ use crate::pixel::{PixelRasterizer, RgbaImage};
 
 /// Maximum base64 payload bytes per escape sequence.
 pub const MAX_CHUNK: usize = 4096;
-/// Raw frame bytes transmitted before the live image is deleted and the
-/// accounting restarts, bounding how much image data can be outstanding.
-pub const MAX_RAW_BYTES: u64 = 32 * 1024 * 1024;
+/// The two image ids the backend alternates between, so the newly placed image
+/// is on screen before the previous one is deleted.
+const IMAGE_IDS: [u32; 2] = [1, 2];
 /// GNU screen's DCS passthrough string limit, conservatively; a graphics
 /// sequence larger than this causes the backend to decline rather than emit a
 /// string the multiplexer would truncate.
@@ -208,12 +212,13 @@ pub struct KittyBackend<W: Write> {
     scene_rows: u32,
     hud: Hud,
     pending: Option<RgbaImage>,
-    image_id: u32,
+    /// The image id currently placed on the terminal, or `None` when nothing is
+    /// live.
+    live_image_id: Option<u32>,
     placement_id: u32,
     raw_bytes_sent: u64,
     wire_bytes_sent: u64,
     frames_transmitted: u64,
-    image_live: bool,
     declined: Option<String>,
 }
 
@@ -234,12 +239,11 @@ impl<W: Write> KittyBackend<W> {
             scene_rows: 21,
             hud: Hud::new(scenario),
             pending: None,
-            image_id: 1,
+            live_image_id: None,
             placement_id: 1,
             raw_bytes_sent: 0,
             wire_bytes_sent: 0,
             frames_transmitted: 0,
-            image_live: false,
             declined: None,
         }
     }
@@ -274,7 +278,7 @@ impl<W: Write> KittyBackend<W> {
         PixelRasterizer::new(self.columns, self.scene_rows).image_size()
     }
 
-    /// Raw image bytes transmitted since the last image delete.
+    /// Raw image bytes transmitted since the backend was created.
     pub const fn raw_bytes_sent(&self) -> u64 {
         self.raw_bytes_sent
     }
@@ -331,17 +335,30 @@ impl<W: Write> KittyBackend<W> {
     }
 
     fn delete_live_image(&mut self) -> BackendResult {
-        if !self.image_live {
+        let Some(id) = self.live_image_id else {
             return Ok(());
-        }
-        let sequence = delete_image(self.image_id);
-        let wrapped = self.mux.wrap(&sequence);
-        self.wire_bytes_sent += wrapped.len() as u64;
-        self.writer.write_all(&wrapped)?;
+        };
+        let mut out = Vec::new();
+        self.push_delete(id, &mut out);
+        self.writer.write_all(&out)?;
         self.writer.flush()?;
-        self.raw_bytes_sent = 0;
-        self.image_live = false;
+        self.wire_bytes_sent += out.len() as u64;
+        self.live_image_id = None;
         Ok(())
+    }
+
+    /// Append the multiplexer-wrapped delete for `id` to `out`.
+    fn push_delete(&self, id: u32, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.mux.wrap(&delete_image(id)));
+    }
+
+    /// The image id to transmit next: the one not currently live, so the live
+    /// placement stays on screen until the replacement lands.
+    fn next_image_id(&self) -> u32 {
+        match self.live_image_id {
+            Some(id) if id == IMAGE_IDS[0] => IMAGE_IDS[1],
+            _ => IMAGE_IDS[0],
+        }
     }
 
     /// The tail of a present: the status lines and footer under the image.
@@ -414,18 +431,14 @@ impl<W: Write> RendererBackend for KittyBackend<W> {
             return Ok(());
         };
         let frame_bytes = image.rgba().len() as u64;
-
-        // Bound outstanding image data: if this frame would exceed the raw
-        // budget, drop the live image and its accounting before transmitting.
-        if self.image_live && self.raw_bytes_sent.saturating_add(frame_bytes) > MAX_RAW_BYTES {
-            self.delete_live_image()?;
-        }
+        let new_id = self.next_image_id();
+        let previous_id = self.live_image_id;
 
         let control = format!(
             "{TRANSMIT_ACTION},f=32,s={width},v={height},i={id},q=2",
             width = image.width(),
             height = image.height(),
-            id = self.image_id,
+            id = new_id,
         );
         let encoded = encode(&control, image.rgba());
         let mut sequences = encoded.sequences;
@@ -434,7 +447,7 @@ impl<W: Write> RendererBackend for KittyBackend<W> {
         sequences.push(apc(
             &format!(
                 "a=p,i={id},p={placement},C=1,c={columns},r={scene_rows},q=2",
-                id = self.image_id,
+                id = new_id,
                 placement = self.placement_id,
                 columns = self.columns,
                 scene_rows = self.scene_rows,
@@ -465,6 +478,11 @@ impl<W: Write> RendererBackend for KittyBackend<W> {
         for sequence in &sequences {
             out.extend_from_slice(&self.mux.wrap(sequence));
         }
+        // Delete the previous image only after the replacement is placed, and in
+        // the same write, so a present never leaves the scene with no live image.
+        if let Some(previous) = previous_id {
+            self.push_delete(previous, &mut out);
+        }
         self.write_hud(&mut out)?;
         out.extend_from_slice(b"\x1b[0m");
         self.writer.write_all(&out)?;
@@ -473,7 +491,7 @@ impl<W: Write> RendererBackend for KittyBackend<W> {
         self.wire_bytes_sent += out.len() as u64;
         self.raw_bytes_sent += frame_bytes;
         self.frames_transmitted += 1;
-        self.image_live = true;
+        self.live_image_id = Some(new_id);
         Ok(())
     }
 }
@@ -539,6 +557,13 @@ mod tests {
     /// The concatenated output as a lossy string, for substring assertions.
     fn output(backend: KittyBackend<Vec<u8>>) -> String {
         String::from_utf8_lossy(&backend.into_writer()).into_owned()
+    }
+
+    /// Split backend output into one entry per present. Each present begins with
+    /// the cursor-home marker; standalone deletes (resize/shutdown) do not and
+    /// are not interleaved by the tests that use this helper.
+    fn present_frames(text: &str) -> Vec<&str> {
+        text.split("\x1b[H").skip(1).collect()
     }
 
     #[test]
@@ -609,20 +634,70 @@ mod tests {
     }
 
     #[test]
-    fn the_raw_transmit_budget_deletes_and_restarts_the_image() {
-        let mut backend = KittyBackend::with_mux(Vec::new(), scenario(), Multiplexer::None);
-        backend.resize_terminal(40, 12).expect("resize");
+    fn a_present_places_the_new_id_before_deleting_the_previous_one() {
+        let mut backend = backend();
         backend.draw(&frame(None)).expect("draw");
         backend.present().expect("present");
-        // Pretend most of the budget is already spent, then transmit again.
-        backend.raw_bytes_sent = MAX_RAW_BYTES;
         backend.draw(&frame(None)).expect("draw");
         backend.present().expect("present");
         let text = output(backend);
+        let frames = present_frames(&text);
+        assert_eq!(frames.len(), 2, "two presents produce two frames");
+
+        // The first frame has no previous image, so it places without deleting.
+        assert!(frames[0].contains("a=p,i=1,p=1,C=1"));
+        assert!(!frames[0].contains("a=d,"), "nothing to delete yet");
+
+        // The second frame transmits and places the new id 2 first, then deletes
+        // the previous id 1, so the scene is never without a live image.
+        let place = frames[1]
+            .find("a=p,i=2,p=1,C=1")
+            .expect("the second frame places id 2");
+        let delete = frames[1]
+            .find("a=d,d=i,i=1")
+            .expect("the second frame deletes the previous id 1");
         assert!(
-            text.contains("a=d,d=i,i=1"),
-            "exceeding the raw budget must delete the live image"
+            place < delete,
+            "the replacement placement must precede the previous image's delete"
         );
+    }
+
+    #[test]
+    fn no_present_deletes_a_live_id_without_first_placing_its_replacement() {
+        let mut backend = backend();
+        for _ in 0..3 {
+            backend.draw(&frame(None)).expect("draw");
+            backend.present().expect("present");
+        }
+        let text = output(backend);
+        let frames = present_frames(&text);
+        assert_eq!(frames.len(), 3, "three presents produce three frames");
+
+        // Ids alternate 1, 2, 1; every frame after the first deletes exactly the
+        // id it did not just place, and only after placing the new one.
+        let expected: [(u32, Option<u32>); 3] = [(1, None), (2, Some(1)), (1, Some(2))];
+        for (index, (id, previous)) in expected.iter().enumerate() {
+            let frame = frames[index];
+            assert!(frame.contains("f=32,s="), "frame {index} transmits");
+            let place = frame
+                .find(&format!("a=p,i={id},p=1,C=1"))
+                .unwrap_or_else(|| panic!("frame {index} places id {id}"));
+            match previous {
+                None => assert!(
+                    !frame.contains("a=d,"),
+                    "frame {index} has nothing to delete"
+                ),
+                Some(old) => {
+                    let delete = frame
+                        .find(&format!("a=d,d=i,i={old}"))
+                        .unwrap_or_else(|| panic!("frame {index} deletes id {old}"));
+                    assert!(
+                        place < delete,
+                        "frame {index} must place id {id} before deleting id {old}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

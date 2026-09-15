@@ -35,8 +35,8 @@ pub use capability::{
 pub use fallback::{BackendFallback, BackendPair};
 pub use grid::{Cell, CellGrid};
 pub use kitty::{
-    EncodedFrame, KittyBackend, MAX_CHUNK, MAX_RAW_BYTES, Multiplexer, SCREEN_MAX_SEQUENCE, apc,
-    base64_encode, delete_image, double_esc, encode, screen_wrap, tmux_wrap,
+    EncodedFrame, KittyBackend, MAX_CHUNK, Multiplexer, SCREEN_MAX_SEQUENCE, apc, base64_encode,
+    delete_image, double_esc, encode, screen_wrap, tmux_wrap,
 };
 pub use palette::{ColorDepth, Rgb, ansi256_color, to_ansi16, to_ansi256};
 pub use pixel::{PixelRasterizer, RgbaImage};
