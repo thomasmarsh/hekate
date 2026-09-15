@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T10:34:41Z
+updated: 2026-09-15T10:44:19Z
 summary: Record the representative mixed-mode profile and Increment 2 performance budget.
-next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -57,8 +56,7 @@ checked benchmark-artifact manifest test, and cargo test --workspace.
 # Result
 
 Recorded the Increment 2 representative profile on the same host as the Phase 1
-capture. All Done-when clauses are now met; the five-gate validation is the only
-remaining step.
+capture. All Done-when clauses are met and the five-gate validation below passed.
 
 - **Release profile row.** `scenarios/phase2/inc2/mixed_mode_profile_v2.json5`
   (480 arrivals/hour on the corridor, ~9 live bodies) is now the seventh row of
@@ -104,5 +102,21 @@ remaining step.
   ≤ 28 µs/tick disabled floor, ≤ 0.81 µs/frame presenter. The existing Inc2
   fixture tests pass, the twin validates, and the counters change no trace byte.
 
-All Done-when clauses are met. Remaining: run the five-gate validation and
-resolve the node.
+### Five-gate validation
+
+All five gates ran from the repository root at `e541e46`, in order, before
+resolution:
+
+| gate | command | exit | wall | result |
+|---|---|---|---|---|
+| format | `cargo fmt --all --check` | 0 | 1 s | clean |
+| lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 12 s | clean |
+| tests | `cargo test --workspace --all-features` | 0 | 406 s | 1022 passed, 0 failed, 3 ignored |
+| dependency direction | `./scripts/check-dependency-direction.sh` | 0 | 1 s | `dependency direction OK` |
+| graph | `tangle check` | 0 | 1 s | `passed (195 nodes)` |
+
+The three ignored tests are the release-mode wall-clock measurements
+(`release_benchmark_writes_the_checked_in_artifact`,
+`increment_2_profile_counters`, `increment_2_profile_frame_time`); their numbers
+are the measurements recorded above and in `perf/README.md`, and the gate run
+does not re-execute them.
