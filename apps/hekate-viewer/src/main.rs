@@ -412,7 +412,8 @@ fn advance_simulation(time: Res<Time>, mut state: ResMut<ViewerState>) {
                     | Event::Maneuver { .. }
                     | Event::FacilityTransition { .. }
                     | Event::OpposingTraversal { .. }
-                    | Event::ClosePass { .. } => {}
+                    | Event::ClosePass { .. }
+                    | Event::ArticulationLimitExceeded { .. } => {}
                 }
             }
         }
@@ -1030,6 +1031,7 @@ fn marker_color(marker: &SafetyMarker) -> Color {
         EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => {
             Color::WHITE
         }
+        EventKind::ArticulationLimitExceeded => Color::srgb(1.0, 0.27, 0.16),
     }
 }
 

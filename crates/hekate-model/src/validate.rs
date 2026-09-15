@@ -2413,7 +2413,7 @@ fn validate_demand_v2(source: &ScenarioSourceV2, diagnostics: &mut Vec<Diagnosti
                 match (&rate.choice, template.map(|template| template.motion)) {
                     (
                         DemandChoiceSource::Movements(shares),
-                        Some(MotionKind::SingleBodyWheeled),
+                        Some(MotionKind::SingleBodyWheeled | MotionKind::ArticulatedWheeled),
                     ) => validate_demand_movements(
                         &entry.id,
                         &rate.portal,

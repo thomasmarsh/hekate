@@ -1,0 +1,89 @@
+// Increment 3: the tractor-semitrailer straight-path runtime fixture.
+//
+// `tractor_semitrailer_v2.json5` (tas-4ep58y0syjtnwny4bgcg5q41j7) authors the
+// same two-segment `articulated_chain` body and 0.9 rad articulation limit but
+// deliberately carries no path/portal/facility/demand: it is a compile-only
+// geometry fixture. This file is the first *runtime-reachable*
+// `tractor_semitrailer` scenario, added by the child that wires
+// `Simulation::try_admit` to spawn an `ArticulatedWheeled` agent and drive its
+// trailing segment's pose (tas-12mx01cfsxskm0pjzq13hvcm2g): one straight 400 m
+// guide path, one facility, and one demand source, with the tractor_semitrailer
+// as the only vehicle on its path (no collision partner needed to prove pose
+// correctness).
+//
+// On a straight path the trailer's steady-state heading equals the tractor's
+// heading and its position trails it by a constant offset — see
+// `crates/hekate-sim/tests/inc3_articulated.rs` for the exact analytic check
+// this fixture's run is held to.
+{
+  schema_version: 2,
+  id: 'tractor_semitrailer_straight_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'straight_guide', points: [ { x: 0.0, y: 0.0 }, { x: 400.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'straight_entry', path: 'straight_guide', end: 'start', width_m: 5.0 },
+    { id: 'straight_exit', path: 'straight_guide', end: 'end', width_m: 5.0 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 420.0, y: -20.0 },
+      { x: 420.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'straight_band', points: [
+      { x: 0.0, y: -2.5 }, { x: 400.0, y: -2.5 },
+      { x: 400.0, y: 2.5 }, { x: 0.0, y: 2.5 },
+    ] },
+  ],
+  facilities: [
+    { id: 'straight_lane', region: 'straight_band', reference_path: 'straight_guide',
+      width_m: 5.0, nominal_direction: 'forward',
+      access: { modes: [ 'tractor_semitrailer' ] },
+      lateral_use: 'shared', speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'straight_through', from: 'straight_entry', to: 'straight_exit',
+      path: 'straight_guide', priority: 0, direction: 'forward' },
+  ],
+  mode_templates: [
+    {
+      id: 'tractor_semitrailer',
+      body: {
+        kind: 'articulated_chain',
+        segments: [
+          // The tractor: the lead segment hitches nothing ahead of it.
+          { length_m: { min: 6.0, max: 6.0 }, width_m: { min: 2.5, max: 2.5 } },
+          // The semitrailer: 1.2 m kingpin setback.
+          { length_m: { min: 13.6, max: 13.6 }, width_m: { min: 2.55, max: 2.55 },
+            hitch_offset_m: { min: 1.2, max: 1.2 } },
+        ],
+        articulation_limit_rad: { min: 0.9, max: 0.9 },
+      },
+      motion: 'articulated_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 8.0, max: 8.0 },
+        max_accel_mps2: { min: 0.7, max: 0.7 },
+        comfortable_brake_mps2: { min: 1.4, max: 1.4 },
+        time_gap_s: { min: 2.0, max: 2.0 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [],
+  demand: [
+    { id: 'tractor_semitrailer_inflow', mode: 'tractor_semitrailer',
+      spawn: { rate: {
+        portal: 'straight_entry',
+        rate_per_hour: 3600.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'straight_through', weight: 1.0 } ] },
+      } } },
+  ],
+}

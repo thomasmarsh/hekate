@@ -34,6 +34,7 @@
 //! ```
 
 mod agent;
+mod articulated;
 mod close_pass;
 mod compliance;
 mod config;

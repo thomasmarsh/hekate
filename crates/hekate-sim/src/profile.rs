@@ -14,6 +14,7 @@ use hekate_model::{
 };
 use rand_chacha::ChaCha20Rng;
 
+use crate::articulated::ArticulatedSegmentGeometry;
 use crate::rng::uniform01;
 
 /// A stable physical and behavior profile for one vehicle.
@@ -198,6 +199,99 @@ pub(crate) fn sample_mode_template_profile(
             .unwrap_or_else(|| v1_range(v1_view.comfortable_brake_mps2))
             .sample(uniform01(profile_rng)),
         compliance: profile.compliance().sample(uniform01(compliance_rng)),
+    }
+}
+
+/// A sampled `ArticulatedWheeled` chain: the lead segment's own longitudinal
+/// [`VehicleProfile`] (so every existing longitudinal, entry-admission, and
+/// collision code path that reads an agent's `profile`/`body_length_m`/
+/// `body_width_m` treats it exactly like a `WheeledBox`) plus every segment's
+/// own drawn geometry and the chain's articulation limit.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ArticulatedChainProfile {
+    pub(crate) vehicle: VehicleProfile,
+    pub(crate) segments: Vec<ArticulatedSegmentGeometry>,
+    pub(crate) articulation_limit_rad: f64,
+}
+
+/// Draw one articulated chain's body and dynamics from its own compiled
+/// template.
+///
+/// The draw order, all from `profile_rng` except the final compliance draw:
+/// desired speed; then, for each segment in chain order, its length, its
+/// width, and (for every trailing segment only) its hitch/kingpin setback;
+/// then the chain's articulation limit; then the shared wheeled longitudinal
+/// set (time gap, maximum acceleration, comfortable braking) [`sample_profile`]
+/// draws in the same relative order. Compliance is the one draw from
+/// `compliance_rng`, last, exactly as every other sampler in this module. This
+/// order has no legacy view to match — `ArticulatedWheeled` is a new family —
+/// so it only needs to be internally consistent and is fixed here for
+/// determinism: reordering these calls changes every sampled chain for the
+/// same seed.
+///
+/// A validated articulated chain declares at least two segments and every
+/// trailing segment's hitch offset, so the empty-chain fallback below is
+/// unreachable for a compiled scenario.
+pub(crate) fn sample_articulated_chain_profile(
+    template: &CompiledModeTemplate,
+    profile_rng: &mut ChaCha20Rng,
+    compliance_rng: &mut ChaCha20Rng,
+) -> ArticulatedChainProfile {
+    let profile = template.profile();
+    let (segment_sources, limit_range): (&[hekate_model::BodySegment], ProfileRange) =
+        match template.body() {
+            AgentBody::ArticulatedChain {
+                segments,
+                articulation_limit_rad,
+            } => (segments.as_slice(), *articulation_limit_rad),
+            _ => (&[], ProfileRange::new(0.0, 0.0)),
+        };
+
+    let desired_speed_mps = profile.desired_speed_mps().sample(uniform01(profile_rng));
+    let segments: Vec<ArticulatedSegmentGeometry> = segment_sources
+        .iter()
+        .map(|segment| ArticulatedSegmentGeometry {
+            length_m: segment.length_m().sample(uniform01(profile_rng)),
+            width_m: segment.width_m().sample(uniform01(profile_rng)),
+            hitch_offset_m: segment
+                .hitch_offset_m()
+                .map(|range| range.sample(uniform01(profile_rng))),
+        })
+        .collect();
+    let articulation_limit_rad = limit_range.sample(uniform01(profile_rng));
+
+    let v1_view = ProfileSource::default();
+    let v1_range = |range: ProfileRangeSource| ProfileRange::new(range.min, range.max);
+    let time_gap_s = profile
+        .time_gap_s()
+        .unwrap_or_else(|| v1_range(v1_view.time_gap_s))
+        .sample(uniform01(profile_rng));
+    let max_accel_mps2 = profile
+        .max_accel_mps2()
+        .unwrap_or_else(|| v1_range(v1_view.max_accel_mps2))
+        .sample(uniform01(profile_rng));
+    let comfortable_brake_mps2 = profile
+        .comfortable_brake_mps2()
+        .unwrap_or_else(|| v1_range(v1_view.comfortable_brake_mps2))
+        .sample(uniform01(profile_rng));
+    let compliance = profile.compliance().sample(uniform01(compliance_rng));
+
+    let (lead_length_m, lead_width_m) = segments
+        .first()
+        .map_or((0.0, 0.0), |segment| (segment.length_m, segment.width_m));
+
+    ArticulatedChainProfile {
+        vehicle: VehicleProfile {
+            desired_speed_mps,
+            length_m: lead_length_m,
+            width_m: lead_width_m,
+            time_gap_s,
+            max_accel_mps2,
+            comfortable_brake_mps2,
+            compliance,
+        },
+        segments,
+        articulation_limit_rad,
     }
 }
 

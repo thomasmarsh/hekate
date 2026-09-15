@@ -323,7 +323,8 @@ impl<B: SessionBackend> TuiSession<B> {
                 | Event::Maneuver { .. }
                 | Event::FacilityTransition { .. }
                 | Event::OpposingTraversal { .. }
-                | Event::ClosePass { .. } => {}
+                | Event::ClosePass { .. }
+                | Event::ArticulationLimitExceeded { .. } => {}
             }
         }
         self.curr = self.sim.snapshot(SnapshotDetail::Full);

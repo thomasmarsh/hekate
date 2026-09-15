@@ -39,15 +39,16 @@ use std::cell::Cell;
 
 use glam::DVec2;
 use hekate_model::{
-    AdjacencySide, AgentFamily, CommitPolicySource, CompiledFacilityAdjacency, CompiledMovement,
-    CompiledPath, CompiledPedestrianRoute, CompiledReferencePath, CompiledScenario, CrossingId,
-    DemandId, FacilityId, FacilityTraversal, LateralTransition, ModeTemplateId, MovementDirection,
-    MovementId, NominalDirection, PassingSide, PathEnd, PathId, PedestrianDemandId,
-    PedestrianRouteId, PermissionEffect, PortalId, RuleKind, SignalColor, SignalId, TacticKind,
-    TacticalCapability, TraversalTransitions,
+    AdjacencySide, AgentFamily, BodyKind, CommitPolicySource, CompiledFacilityAdjacency,
+    CompiledMovement, CompiledPath, CompiledPedestrianRoute, CompiledReferencePath,
+    CompiledScenario, CrossingId, DemandId, FacilityId, FacilityTraversal, LateralTransition,
+    ModeTemplateId, MovementDirection, MovementId, NominalDirection, PassingSide, PathEnd, PathId,
+    PedestrianDemandId, PedestrianRouteId, PermissionEffect, PortalId, RuleKind, SignalColor,
+    SignalId, TacticKind, TacticalCapability, TraversalTransitions,
 };
 
 use crate::agent::{AgentId, AgentInit, AgentMode, AgentStore, RouteState};
+use crate::articulated::ArticulatedState;
 use crate::close_pass::{ClosePassTracker, OvertakeObservation};
 use crate::compliance::{self, ComplianceDecision, ComplianceReason, SignalAction};
 use crate::config::RunConfig;
@@ -65,8 +66,9 @@ use crate::prediction::{
     predict_crossing_corridor, predict_maneuver_corridor,
 };
 use crate::profile::{
-    PedestrianProfile, VehicleProfile, WheeledLateralLimits, sample_mode_template_profile,
-    sample_pedestrian_profile, sample_profile, sample_wheeled_lateral_limits,
+    PedestrianProfile, VehicleProfile, WheeledLateralLimits, sample_articulated_chain_profile,
+    sample_mode_template_profile, sample_pedestrian_profile, sample_profile,
+    sample_wheeled_lateral_limits,
 };
 use crate::query;
 use crate::rng::{
@@ -75,7 +77,9 @@ use crate::rng::{
 };
 use crate::safety::SafetyMonitor;
 use crate::signal::{self, PedestrianSignalColor, SignalRuntime};
-use crate::snapshot::{AgentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail};
+use crate::snapshot::{
+    AgentSample, BodySegmentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail,
+};
 use crate::stage::{
     AbortCondition, CorridorClaim, FacilityTransitionRecord, LateralManeuverRequest,
     ManeuverAbortReason, ManeuverCorridor, ManeuverEdge, ManeuverReason, ManeuverState,
@@ -547,9 +551,24 @@ impl Simulation {
                     SnapshotDetail::Position => None,
                     SnapshotDetail::Full => Some(MotionSample {
                         body_kind: self.agents.body_kind[index],
-                        // A Phase 1 body is a single box or circle envelope, so
-                        // it carries no ordered segments yet.
-                        segments: Vec::new(),
+                        // Empty for a single-envelope body; an articulated
+                        // chain reports the lead segment (this agent's own
+                        // `position`/`heading_rad`) first, then every trailing
+                        // segment's deterministic pose in chain order.
+                        segments: self.agents.articulated[index].as_ref().map_or(
+                            Vec::new(),
+                            |state| {
+                                std::iter::once(BodySegmentSample {
+                                    position: self.agents.position[index],
+                                    heading_rad: self.agents.heading_rad[index],
+                                })
+                                .chain(state.trailers().iter().map(|pose| BodySegmentSample {
+                                    position: pose.position,
+                                    heading_rad: pose.heading_rad,
+                                }))
+                                .collect()
+                            },
+                        ),
                         mode: self.agents.mode[index],
                         speed_mps: self.agents.speed_mps[index],
                         path: self.agents.path[index],
@@ -1161,6 +1180,41 @@ impl Simulation {
         let tactic = self.choose_tactic(index, &observation);
         let command = self.command_motion(index, &observation, &tactic, dt);
         self.advance_physics(index, observation, &command, dt);
+        // Additive: drives only an `ArticulatedWheeled` agent's trailing
+        // segments from the lead segment's pose just written above. Every
+        // other agent's `advance_physics` output is untouched.
+        self.advance_articulated(index, dt);
+    }
+
+    /// Drive one agent's trailing segments from its lead segment's
+    /// just-integrated pose, and raise a typed event for each hitch whose
+    /// articulation angle crosses its compiled limit.
+    ///
+    /// A no-op for every agent that is not `ArticulatedWheeled`: see
+    /// [`crate::articulated`] for the deterministic kinematic model.
+    fn advance_articulated(&mut self, index: usize, dt: f64) {
+        let position = self.agents.position[index];
+        let heading_rad = self.agents.heading_rad[index];
+        let Some(state) = self.agents.articulated[index].as_mut() else {
+            return;
+        };
+        let transitions = state.advance(position, heading_rad, dt);
+        if transitions.is_empty() {
+            return;
+        }
+        let agent = AgentId::from_index(index);
+        self.events
+            .extend(
+                transitions
+                    .into_iter()
+                    .map(|transition| Event::ArticulationLimitExceeded {
+                        agent,
+                        hitch_index: transition.hitch_index,
+                        angle_rad: transition.angle_rad,
+                        limit_rad: transition.limit_rad,
+                        exceeding: transition.exceeding,
+                    }),
+            );
     }
 
     /// Record one agent's lateral intent for the following decisions.
@@ -3447,20 +3501,34 @@ impl Simulation {
             ),
             _ => None,
         };
-        let profile = match (narrow_profile, mode_template) {
+        // An articulated chain samples its own chain profile: the lead
+        // segment's longitudinal body/dynamics (read below exactly like a
+        // `WheeledBox`'s) plus every segment's own geometry, used after
+        // admission to seed the trailing segments' deterministic pose state.
+        let articulated_chain = match mode_template {
+            Some(template) if template.family() == Some(AgentFamily::ArticulatedWheeled) => Some(
+                sample_articulated_chain_profile(template, &mut profile_rng, &mut compliance_rng),
+            ),
+            _ => None,
+        };
+        let profile = match (narrow_profile, &articulated_chain, mode_template) {
             // A capsule projects its narrow profile onto the shared longitudinal
             // profile, so the shared stages stay one code path.
-            (Some(narrow), _) => narrow.vehicle_profile(),
+            (Some(narrow), _, _) => narrow.vehicle_profile(),
+            // An articulated chain's lead segment is the shared longitudinal
+            // profile: entry admission, collision, and the longitudinal
+            // controller all read it exactly as a `WheeledBox`'s.
+            (None, Some(chain), _) => chain.vehicle,
             // A wheeled box samples its own authored body and dynamics. The
             // template the version-1 view is derived from is one such box, and
             // this draws exactly the values the version-1 view would, so its
             // spawn is unchanged.
-            (None, Some(template)) if template.family() == Some(AgentFamily::WheeledBox) => {
+            (None, None, Some(template)) if template.family() == Some(AgentFamily::WheeledBox) => {
                 sample_mode_template_profile(template, &mut profile_rng, &mut compliance_rng)
             }
             // A version-1 source carries no mode template, so it samples the
             // version-1 passenger-car profile view.
-            (None, _) => sample_profile(
+            (None, None, _) => sample_profile(
                 self.scenario.profiles(),
                 &mut profile_rng,
                 &mut compliance_rng,
@@ -3514,6 +3582,24 @@ impl Simulation {
             pedestrian_profile: None,
             route_state,
         });
+        if let Some(chain) = articulated_chain {
+            // Additive per-agent state, set right after admission exactly like
+            // `AgentStore::decision`/`yield_crossing`: `push` above already put
+            // `None` in this slot for every agent, including this one. The lead
+            // segment's own `position`/`heading_rad` stay the columns just
+            // written; only the trailing segments' poses live here.
+            self.agents.articulated[agent_id.index()] = Some(ArticulatedState::spawn(
+                chain.segments,
+                chain.articulation_limit_rad,
+                position,
+                heading_rad,
+            ));
+            // The envelope kind a snapshot reports: an articulated chain, not
+            // the lead segment's own box. `body_length_m`/`body_width_m` stay
+            // the lead segment's, exactly as every other column here does —
+            // the full chain's swept envelope is a sibling node's concern.
+            self.agents.body_kind[agent_id.index()] = BodyKind::ArticulatedChain;
+        }
         self.spawned_total += 1;
         self.events.push(Event::Spawned {
             agent: agent_id,

@@ -67,6 +67,8 @@ pub const CONTROL_COLOR: Rgb = Rgb::new(140, 217, 140);
 pub const OCCUPIED_COLOR: Rgb = Rgb::new(250, 158, 46);
 /// Close-pass marker color.
 pub const CLOSE_PASS_COLOR: Rgb = Rgb::new(255, 105, 180);
+/// Articulation-limit marker color.
+pub const ARTICULATION_COLOR: Rgb = Rgb::new(255, 70, 40);
 /// Usable-corridor segment color.
 pub const CORRIDOR_COLOR: Rgb = Rgb::new(89, 219, 171);
 /// Target-offset segment color.
@@ -119,6 +121,8 @@ pub const fn marker_glyph(kind: EventKind) -> Option<char> {
         // The increment-2 maneuver and rule records are not markers
         // ([`is_safety_record`] does not carry them), so they draw none.
         EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => None,
+        // A jackknife is a body-level safety fact, so it draws its own marker.
+        EventKind::ArticulationLimitExceeded => Some('J'),
     }
 }
 
@@ -136,6 +140,7 @@ pub const fn marker_color(kind: EventKind) -> Rgb {
         EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => {
             BODY_COLOR
         }
+        EventKind::ArticulationLimitExceeded => ARTICULATION_COLOR,
     }
 }
 

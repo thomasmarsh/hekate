@@ -41,6 +41,7 @@ pub const fn is_safety_record(kind: EventKind) -> bool {
             | EventKind::Queue
             | EventKind::ControlTransition
             | EventKind::ClosePass
+            | EventKind::ArticulationLimitExceeded
     )
 }
 
@@ -114,7 +115,8 @@ impl EventParticipants {
             | Event::ControlTransition { agent, .. }
             | Event::Maneuver { agent, .. }
             | Event::FacilityTransition { agent, .. }
-            | Event::OpposingTraversal { agent, .. } => vec![agent.get() as usize],
+            | Event::OpposingTraversal { agent, .. }
+            | Event::ArticulationLimitExceeded { agent, .. } => vec![agent.get() as usize],
         };
         let region = match event {
             Event::Entry { region, .. } | Event::Exit { region, .. } => Some(*region),
@@ -350,6 +352,17 @@ pub fn event_summary(record: &FrameEvent) -> String {
             body(partner.get() as usize),
             facility.get()
         ),
+        Event::ArticulationLimitExceeded {
+            agent,
+            hitch_index,
+            angle_rad,
+            limit_rad,
+            exceeding,
+        } => format!(
+            "{ticket} articulation {}  {}  hitch {hitch_index}  {angle_rad:.3} rad > {limit_rad:.3} rad",
+            if *exceeding { "began" } else { "ended" },
+            body(agent.get() as usize)
+        ),
     }
 }
 
@@ -490,7 +503,8 @@ impl SafetyOverlay {
                 | Event::Maneuver { .. }
                 | Event::FacilityTransition { .. }
                 | Event::OpposingTraversal { .. }
-                | Event::ClosePass { .. } => {}
+                | Event::ClosePass { .. }
+                | Event::ArticulationLimitExceeded { .. } => {}
             }
         }
         self.prune(tick);

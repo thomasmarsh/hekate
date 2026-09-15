@@ -344,6 +344,16 @@ struct EventRecord {
     crossed_boundary: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     entered_opposing: Option<bool>,
+    // The articulation-limit record appends its own fields last, for the same
+    // reason: no earlier variant's line changes byte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hitch_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    angle_rad: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit_rad: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exceeding: Option<bool>,
 }
 
 /// One clearance band of a `ClosePass` record: its stable id and the seconds
@@ -418,6 +428,10 @@ impl EventRecord {
             violating_bands: None,
             crossed_boundary: None,
             entered_opposing: None,
+            hitch_index: None,
+            angle_rad: None,
+            limit_rad: None,
+            exceeding: None,
         }
     }
 
@@ -597,6 +611,19 @@ impl EventRecord {
                 entered_opposing: Some(entered_opposing),
                 ..Self::empty(tick, "close_pass", agent.get())
             },
+            Event::ArticulationLimitExceeded {
+                agent,
+                hitch_index,
+                angle_rad,
+                limit_rad,
+                exceeding,
+            } => Self {
+                hitch_index: Some(hitch_index),
+                angle_rad: Some(angle_rad),
+                limit_rad: Some(limit_rad),
+                exceeding: Some(exceeding),
+                ..Self::empty(tick, "articulation_limit_exceeded", agent.get())
+            },
         }
     }
 }
@@ -746,7 +773,7 @@ mod tests {
 
         let agent = AgentId::from_index(3);
         let partner = AgentId::from_index(7);
-        let cases: [(&str, Event); 14] = [
+        let cases: [(&str, Event); 15] = [
             (
                 "spawned",
                 Event::Spawned {
@@ -890,6 +917,16 @@ mod tests {
                     entered_opposing: true,
                 },
             ),
+            (
+                "articulation_limit_exceeded",
+                Event::ArticulationLimitExceeded {
+                    agent,
+                    hitch_index: 1,
+                    angle_rad: 0.95,
+                    limit_rad: 0.9,
+                    exceeding: true,
+                },
+            ),
         ];
 
         for (name, event) in cases {
@@ -928,6 +965,9 @@ mod tests {
                 "close_pass" => Some(
                     r#""partner":7,"side":"left","facility":5,"min_clearance_m":0.3,"min_clearance_time_s":1.5,"relative_speed_mps":1.25,"bands":[{"band":0,"duration_s":0.4}],"violating_bands":[0],"crossed_boundary":false,"entered_opposing":true"#,
                 ),
+                "articulation_limit_exceeded" => {
+                    Some(r#""hitch_index":1,"angle_rad":0.95,"limit_rad":0.9,"exceeding":true"#)
+                }
                 _ => None,
             };
             let expected = expected.expect("every variant has a case");

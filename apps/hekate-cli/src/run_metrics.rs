@@ -1894,10 +1894,13 @@ fn counted_family(event: &Event) -> Option<(EventFamily, Option<&'static str>)> 
         // v1 family: the overtaking counts are read by [`overtaking_record`],
         // the close-pass families off the tracker's closed observations, and the
         // wrong-way families by their own leaf.
+        // The articulation-limit record is Increment 3's own jackknife
+        // diagnostic, likewise outside metric definition v1's family set.
         Event::Maneuver { .. }
         | Event::FacilityTransition { .. }
         | Event::OpposingTraversal { .. }
-        | Event::ClosePass { .. } => None,
+        | Event::ClosePass { .. }
+        | Event::ArticulationLimitExceeded { .. } => None,
     }
 }
 
@@ -1917,7 +1920,8 @@ const fn event_agent(event: &Event) -> AgentId {
         | Event::Maneuver { agent, .. }
         | Event::FacilityTransition { agent, .. }
         | Event::OpposingTraversal { agent, .. }
-        | Event::ClosePass { agent, .. } => *agent,
+        | Event::ClosePass { agent, .. }
+        | Event::ArticulationLimitExceeded { agent, .. } => *agent,
     }
 }
 

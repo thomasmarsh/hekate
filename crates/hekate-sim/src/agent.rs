@@ -11,6 +11,7 @@ use hekate_model::{
     PedestrianRouteId,
 };
 
+use crate::articulated::ArticulatedState;
 use crate::compliance::ComplianceDecision;
 use crate::narrow::NarrowProfile;
 use crate::pedestrian_compliance::PedestrianComplianceDecision;
@@ -368,6 +369,13 @@ pub(crate) struct AgentStore {
     /// facility, in slot order. `None` for a pedestrian and for a legacy
     /// version-1 path-following agent, so absent state stays absent.
     pub(crate) route_state: Vec<Option<RouteState>>,
+    /// Deterministic hitch/trailer-pose state of each `ArticulatedWheeled`
+    /// agent, in slot order. `None` for every other agent. Never populated by
+    /// [`Self::push`] itself — like [`Self::decision`] and
+    /// [`Self::yield_crossing`], it starts `None` for every slot and is set
+    /// once, right after admission, by the caller that knows the agent's
+    /// compiled family; see `crate::sim::Simulation::try_admit`.
+    pub(crate) articulated: Vec<Option<ArticulatedState>>,
 }
 
 impl AgentStore {
@@ -399,6 +407,7 @@ impl AgentStore {
         self.pedestrian_decision.push(None);
         self.yield_crossing.push(None);
         self.route_state.push(init.route_state);
+        self.articulated.push(None);
         id
     }
 

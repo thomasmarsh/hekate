@@ -165,7 +165,8 @@ impl TacticalOverlay {
                 | Event::Queue { .. }
                 | Event::ControlTransition { .. }
                 | Event::FacilityTransition { .. }
-                | Event::ClosePass { .. } => {}
+                | Event::ClosePass { .. }
+                | Event::ArticulationLimitExceeded { .. } => {}
             }
         }
     }
