@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T03:20:00Z
+updated: 2026-09-15T03:24:10Z
 summary: Build analytic and high-resolution clearance reference cases.
-next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-104-bound-predicted-versus-executed-clearance]].
@@ -59,3 +58,19 @@ Verification: `cargo test -p hekate-sim --test prediction_reference` (5 passed),
 Remaining scope: production prediction versus the executed minimum at each
 fidelity preset, and the coarse-endpoint falsification probe, are
 [[TAS-126-compare-production-prediction-to-executed-cleara]]'s slice.
+
+## Gate validation (fresh gate worker)
+
+Five gates run from the repo root on `8eef3c2` (`test(sim): add analytic
+clearance reference cases`), in order:
+
+| gate | command | exit | wall | result |
+| --- | --- | --- | --- | --- |
+| fmt | `cargo fmt --all --check` | 0 | 1.1s | clean |
+| clippy | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 1.4s | clean |
+| test | `cargo test --workspace --all-features` | 0 | 177.4s | 979 passed, 0 failed, 1 ignored, 86 suites |
+| dependency direction | `./scripts/check-dependency-direction.sh` | 0 | 0.7s | `dependency direction OK` |
+| graph | `tangle check` | 0 | 0.5s | `graph check: passed (194 nodes)` |
+
+No production file changed, so no mechanical fix was needed; the artifact is
+test-only and `crates/hekate-sim/src/` is untouched.

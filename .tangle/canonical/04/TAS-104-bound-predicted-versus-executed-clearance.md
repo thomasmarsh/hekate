@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T03:24:10Z
 summary: Bound maneuver-prediction error against analytic and fine-step executed clearance.
-next: [[TAS-125-build-analytic-and-high-resolution-clearance-ref]]
+next: [[TAS-126-compare-production-prediction-to-executed-cleara]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
