@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T02:53:52Z
+updated: 2026-09-15T03:08:00Z
 summary: Add disaggregated wrong-way metrics and version bumps.
-next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-102-record-wrong-way-intervals-and-disaggregated-metrics]].
@@ -63,3 +62,14 @@ run-end-open intervals, the permitted rule dimension, the inapplicable no-policy
 and `either` cases, and collision plus near-miss linkage, and
 `tests/aggregate.rs` / `tests/compare.rs` / `tests/converge.rs` carry the new run
 keys and dimensions. Phase 1 goldens and `migration_regression` are unchanged.
+
+Five-gate validation (this resolution), run from the repo root:
+
+- `cargo fmt --all --check` — exit 0, 3s.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` — exit
+  0, 44s.
+- `cargo test --workspace --all-features` — exit 0, 256s; full-suite 974
+  passed, 0 failed, 1 ignored.
+- `./scripts/check-dependency-direction.sh` — exit 0, 1s (`dependency
+  direction OK`).
+- `tangle check` — exit 0, 0s (graph check passed, 194 nodes).

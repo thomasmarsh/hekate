@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 2
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T03:08:00Z
 summary: Add continuous lateral motion, passing evidence, and contextual wrong-way travel.
-next: [[TAS-099-increment-2-events-metrics-and-output]]
+next: [[TAS-103-increment-2-acceptance-evidence-and-presenters]]
 ---
 
 # Outcome

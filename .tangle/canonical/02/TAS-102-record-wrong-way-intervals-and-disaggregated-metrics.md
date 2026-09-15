@@ -1,10 +1,9 @@
 ---
-status: proposed
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T03:08:00Z
 summary: Record wrong-way rule intervals, state, exposure, encounters, and conflicts.
-next: [[TAS-124-add-disaggregated-wrong-way-metrics-and-version]]
 ---
 
 Parent [[TAS-099-increment-2-events-metrics-and-output]].
@@ -42,3 +41,15 @@ overlays or acceptance scenarios.
 
 - [[TAS-123-record-the-wrong-way-interval-and-rule-state-tra]] Wrong-way interval and rule-state trajectory.
 - [[TAS-124-add-disaggregated-wrong-way-metrics-and-version]] Disaggregated wrong-way metrics and version bumps.
+
+# Result
+
+Both slices resolved. [[TAS-123-record-the-wrong-way-interval-and-rule-state-tra]]
+records the rule-state trajectory and the interval at the geometric/rule
+boundaries with perceived rule, decision reason, facility, and movement IDs, and
+[[TAS-124-add-disaggregated-wrong-way-metrics-and-version]] lands the five
+families across aggregate and compare under metric definition v3 (`DEF-006`
+rationale for the unchanged `TRAJECTORY_FORMAT_VERSION`). Focused tests cover
+clear interval, abort-before-entry, facility handoff, collision/near-miss
+linkage, route exit, replay, and inapplicable modes; the required Done-when
+evidence is recorded on each slice.
