@@ -20,9 +20,11 @@ use hekate_model::CompiledScenario;
 use hekate_present::{
     Applied, BodyEmphasis, EventParticipants, Overlay, PresentationController, RendererBackend,
     RestartMode, SafetyMarker, SceneBody, SceneFrame, SceneGeometry, Speed, ViewCommand, Viewport,
-    decision_summary, event_summary, intent_summary, load_scenario, profile_summary,
+    corridor_summary, decision_summary, event_summary, intent_summary, load_scenario,
+    maneuver_summary, predicted_gap_summary, profile_summary, target_offset_summary,
+    wrong_way_summary,
 };
-use hekate_sim::{Event, RunConfig, Simulation, Snapshot, SnapshotDetail};
+use hekate_sim::{Event, ManeuverState, RunConfig, Simulation, Snapshot, SnapshotDetail};
 use hekate_viewer::{BodyMesh, CurrentFrame, body_visuals};
 
 /// Scenario used when no path is passed on the command line.
@@ -99,6 +101,7 @@ fn main() {
                 draw_geometry,
                 draw_agent_overlays,
                 draw_safety_overlays,
+                draw_tactical_overlays,
                 update_status_text,
                 update_inspector_text,
             )
@@ -251,7 +254,8 @@ fn draw_help_text(mut commands: Commands) {
         Text::new(
             "space pause/resume    . single tick    1/2/3 speed 1x/4x/max\n\
              WASD pan    mouse wheel zoom    R restart    N next seed\n\
-             G geometry    V vectors    B safety    click a body to inspect    esc clear",
+             G geometry    V vectors    B safety    C corridor    T target    P gap    \
+             M maneuver    O wrong-way    click a body to inspect    esc clear",
         ),
         TextFont::from_font_size(12.0),
         TextColor(Color::srgb(0.62, 0.68, 0.78)),
@@ -305,6 +309,21 @@ fn controls(
     }
     if keys.just_pressed(KeyCode::KeyB) {
         commands.push(ViewCommand::ToggleOverlay(Overlay::Safety));
+    }
+    if keys.just_pressed(KeyCode::KeyC) {
+        commands.push(ViewCommand::ToggleOverlay(Overlay::Corridor));
+    }
+    if keys.just_pressed(KeyCode::KeyT) {
+        commands.push(ViewCommand::ToggleOverlay(Overlay::TargetOffset));
+    }
+    if keys.just_pressed(KeyCode::KeyP) {
+        commands.push(ViewCommand::ToggleOverlay(Overlay::PredictedGap));
+    }
+    if keys.just_pressed(KeyCode::KeyM) {
+        commands.push(ViewCommand::ToggleOverlay(Overlay::Maneuver));
+    }
+    if keys.just_pressed(KeyCode::KeyO) {
+        commands.push(ViewCommand::ToggleOverlay(Overlay::WrongWay));
     }
     if keys.just_pressed(KeyCode::Escape) {
         commands.push(ViewCommand::ClearSelection);
@@ -658,20 +677,50 @@ const LINK_RING_MARGIN_M: f64 = 1.2;
 const OCCUPIED_REGION_COLOR: Color = Color::srgb(0.98, 0.62, 0.18);
 /// Color of the inspector's link ring on a record's other participants.
 const LINK_COLOR: Color = Color::srgb(1.0, 1.0, 1.0);
+/// Color of a body's usable-corridor segment.
+const CORRIDOR_COLOR: Color = Color::srgb(0.35, 0.86, 0.67);
+/// Color of a body's target-offset segment.
+const TARGET_OFFSET_COLOR: Color = Color::srgb(1.0, 0.84, 0.4);
+/// Color of a predicted gap whose target clearance is met.
+const PREDICTED_GAP_MARGIN_COLOR: Color = Color::srgb(0.55, 0.85, 0.55);
+/// Color of a predicted gap that falls short of its target clearance.
+const PREDICTED_GAP_SHORTFALL_COLOR: Color = Color::srgb(0.95, 0.25, 0.25);
+/// Color of a predicted gap with no target clearance to compare against.
+const PREDICTED_GAP_NEUTRAL_COLOR: Color = Color::srgb(0.62, 0.68, 0.78);
+/// Color of a maneuver ring while the body is not maneuvering.
+const MANEUVER_IDLE_COLOR: Color = Color::srgb(0.85, 0.87, 0.92);
+/// Color of a maneuver ring while the body prepares an edge.
+const MANEUVER_PREPARING_COLOR: Color = Color::srgb(0.98, 0.73, 0.15);
+/// Color of a maneuver ring while the body is committed to an edge.
+const MANEUVER_COMMITTED_COLOR: Color = Color::srgb(0.35, 0.7, 1.0);
+/// Color of a maneuver ring while the body returns from an edge.
+const MANEUVER_RETURNING_COLOR: Color = Color::srgb(0.55, 0.85, 0.55);
+/// Color of a maneuver ring after the body aborts an edge.
+const MANEUVER_ABORTED_COLOR: Color = Color::srgb(0.95, 0.25, 0.25);
+/// Color of a wrong-way ring whose traversal violates the rule.
+const WRONG_WAY_VIOLATION_COLOR: Color = Color::srgb(0.85, 0.35, 0.95);
+/// Color of a wrong-way ring whose traversal the rule permits.
+const WRONG_WAY_PERMITTED_COLOR: Color = Color::srgb(0.67, 0.66, 0.94);
 
-/// One shape the safety overlay draws, in world metres.
+/// One shape an overlay draws, in world metres.
 ///
-/// The draw system turns these into `Gizmos` calls. Keeping the derivation a
-/// pure function of the frame is what lets the overlay be tested without a Bevy
+/// The draw systems turn these into `Gizmos` calls. Keeping the derivation a
+/// pure function of the frame is what lets an overlay be tested without a Bevy
 /// context and keeps every backend on the same shapes.
 #[derive(Debug, Clone, PartialEq)]
-enum SafetyOverlayShape {
+enum OverlayShape {
     /// A closed ring: consecutive points joined, the last back to the first.
     Ring { points: Vec<DVec2>, color: Color },
     /// A circle at `centre` of `radius_m` world metres.
     Circle {
         centre: DVec2,
         radius_m: f32,
+        color: Color,
+    },
+    /// A straight segment from `from` to `to`.
+    Segment {
+        from: DVec2,
+        to: DVec2,
         color: Color,
     },
 }
@@ -682,7 +731,7 @@ enum SafetyOverlayShape {
 /// record participants, and markers last so a conflict sits above the bodies
 /// that caused it. Empty when the safety overlay is off, and a record or body
 /// the frame does not carry contributes nothing.
-fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
+fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<OverlayShape> {
     let mut shapes = Vec::new();
     if !frame.overlays.safety {
         return shapes;
@@ -693,7 +742,7 @@ fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
         let Some(points) = frame.region_points(region.region()) else {
             continue;
         };
-        shapes.push(SafetyOverlayShape::Ring {
+        shapes.push(OverlayShape::Ring {
             points: points.to_vec(),
             color: OCCUPIED_REGION_COLOR,
         });
@@ -704,7 +753,7 @@ fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
         let Some(body) = frame.body(agent) else {
             continue;
         };
-        shapes.push(SafetyOverlayShape::Circle {
+        shapes.push(OverlayShape::Circle {
             centre: body.position,
             radius_m: emphasis_ring_radius(body.length_m.max(body.width_m)),
             color: emphasis_color(emphasis),
@@ -717,7 +766,7 @@ fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
         for record in frame.events_involving(selected.id) {
             for other in EventParticipants::of(record.event()).others(selected.id) {
                 if let Some(body) = frame.body(other) {
-                    shapes.push(SafetyOverlayShape::Circle {
+                    shapes.push(OverlayShape::Circle {
                         centre: body.position,
                         radius_m: link_ring_radius(body.length_m.max(body.width_m)),
                         color: LINK_COLOR,
@@ -729,7 +778,7 @@ fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
 
     // Markers last, so a conflict sits above the bodies that caused it.
     for marker in frame.safety_markers() {
-        shapes.push(SafetyOverlayShape::Circle {
+        shapes.push(OverlayShape::Circle {
             centre: marker.position(),
             radius_m: marker_radius(&marker),
             color: marker_color(&marker),
@@ -737,6 +786,139 @@ fn safety_overlay_shapes(frame: &SceneFrame) -> Vec<SafetyOverlayShape> {
     }
 
     shapes
+}
+
+/// The shapes the frame's usable-corridor overlay draws, ascending by agent.
+///
+/// Each corridor is the segment of the facility band the body plus its
+/// clearance may occupy, so a viewer sees the room the run steers within. The
+/// interval is absolute in the body's travel frame, so the anchor at the body's
+/// own offset is displaced by that offset before the interval is laid out.
+fn corridor_shapes(frame: &SceneFrame) -> Vec<OverlayShape> {
+    if !frame.overlays.corridor {
+        return Vec::new();
+    }
+    frame
+        .corridors()
+        .into_iter()
+        .map(|corridor| OverlayShape::Segment {
+            from: corridor.anchor() + corridor.left() * (corridor.d_min_m() - corridor.offset_m()),
+            to: corridor.anchor() + corridor.left() * (corridor.d_max_m() - corridor.offset_m()),
+            color: CORRIDOR_COLOR,
+        })
+        .collect()
+}
+
+/// The shapes the frame's target-offset overlay draws, ascending by agent.
+///
+/// The segment runs from the body's own offset to the fixed offset its
+/// maneuver displaces toward.
+fn target_offset_shapes(frame: &SceneFrame) -> Vec<OverlayShape> {
+    if !frame.overlays.target_offset {
+        return Vec::new();
+    }
+    frame
+        .target_offsets()
+        .into_iter()
+        .map(|target| OverlayShape::Segment {
+            from: target.anchor(),
+            to: target.target(),
+            color: TARGET_OFFSET_COLOR,
+        })
+        .collect()
+}
+
+/// The shapes the frame's predicted-gap overlay draws, ascending by agent.
+///
+/// The circle at the body is the clearance the run predicts over its horizon,
+/// colored by whether that clearance meets the mode's target.
+fn predicted_gap_shapes(frame: &SceneFrame) -> Vec<OverlayShape> {
+    if !frame.overlays.predicted_gap {
+        return Vec::new();
+    }
+    frame
+        .predicted_gaps()
+        .into_iter()
+        .map(|gap| OverlayShape::Circle {
+            centre: gap.anchor(),
+            radius_m: gap.predicted_min_clearance_m().max(0.0) as f32,
+            color: predicted_gap_color(gap.margin_m()),
+        })
+        .collect()
+}
+
+/// The shapes the frame's maneuver overlay draws, ascending by agent.
+///
+/// A ring around each maneuvering body, colored by its lifecycle state; a body
+/// the frame does not carry contributes nothing.
+fn maneuver_shapes(frame: &SceneFrame) -> Vec<OverlayShape> {
+    if !frame.overlays.maneuver {
+        return Vec::new();
+    }
+    frame
+        .maneuver_overlays()
+        .into_iter()
+        .filter_map(|maneuver| {
+            let body = frame.body(maneuver.agent())?;
+            Some(OverlayShape::Circle {
+                centre: body.position,
+                radius_m: emphasis_ring_radius(body.length_m.max(body.width_m)),
+                color: maneuver_color(maneuver.state()),
+            })
+        })
+        .collect()
+}
+
+/// The shapes the frame's wrong-way overlay draws, ascending by agent.
+///
+/// A ring around each body with an open opposing traversal, in the wider link
+/// ring so it stays distinct from a maneuver ring, colored by whether the
+/// traversal violates the rule.
+fn wrong_way_shapes(frame: &SceneFrame) -> Vec<OverlayShape> {
+    if !frame.overlays.wrong_way {
+        return Vec::new();
+    }
+    frame
+        .wrong_way_overlays()
+        .into_iter()
+        .filter_map(|wrong_way| {
+            let body = frame.body(wrong_way.agent())?;
+            Some(OverlayShape::Circle {
+                centre: body.position,
+                radius_m: link_ring_radius(body.length_m.max(body.width_m)),
+                color: wrong_way_color(wrong_way.violating()),
+            })
+        })
+        .collect()
+}
+
+/// Color of a predicted gap from its margin over the target clearance.
+fn predicted_gap_color(margin_m: Option<f64>) -> Color {
+    match margin_m {
+        Some(margin) if margin < 0.0 => PREDICTED_GAP_SHORTFALL_COLOR,
+        Some(_) => PREDICTED_GAP_MARGIN_COLOR,
+        None => PREDICTED_GAP_NEUTRAL_COLOR,
+    }
+}
+
+/// Color of one maneuver lifecycle state.
+fn maneuver_color(state: ManeuverState) -> Color {
+    match state {
+        ManeuverState::Following => MANEUVER_IDLE_COLOR,
+        ManeuverState::Preparing => MANEUVER_PREPARING_COLOR,
+        ManeuverState::Committed => MANEUVER_COMMITTED_COLOR,
+        ManeuverState::Returning => MANEUVER_RETURNING_COLOR,
+        ManeuverState::Aborted => MANEUVER_ABORTED_COLOR,
+    }
+}
+
+/// Color of one wrong-way ring from whether the traversal violates the rule.
+fn wrong_way_color(violating: bool) -> Color {
+    if violating {
+        WRONG_WAY_VIOLATION_COLOR
+    } else {
+        WRONG_WAY_PERMITTED_COLOR
+    }
 }
 
 /// World radius of the emphasis ring around a body of longest extent
@@ -766,9 +948,38 @@ fn draw_safety_overlays(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
         return;
     };
 
-    for shape in safety_overlay_shapes(frame) {
+    draw_shapes(&mut gizmos, safety_overlay_shapes(frame));
+}
+
+/// Draw the frame's route-relative tactical overlays: usable corridors, target
+/// offsets, predicted gaps, maneuver rings, and wrong-way rings.
+///
+/// Each overlay's shapes come from its own pure derivation, so the picture is a
+/// pure function of the frame and one overlay flag never changes another
+/// overlay's shapes.
+fn draw_tactical_overlays(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
+    let Some(frame) = frame.get() else {
+        return;
+    };
+
+    // Corridors, then target offsets, gaps, maneuver rings, and wrong-way
+    // rings, matching the declaration order of `Overlay`.
+    draw_shapes(
+        &mut gizmos,
+        corridor_shapes(frame)
+            .into_iter()
+            .chain(target_offset_shapes(frame))
+            .chain(predicted_gap_shapes(frame))
+            .chain(maneuver_shapes(frame))
+            .chain(wrong_way_shapes(frame)),
+    );
+}
+
+/// Draw each shape in `shapes` into `gizmos`, in iteration order.
+fn draw_shapes(gizmos: &mut Gizmos, shapes: impl IntoIterator<Item = OverlayShape>) {
+    for shape in shapes {
         match shape {
-            SafetyOverlayShape::Ring { points, color } => {
+            OverlayShape::Ring { points, color } => {
                 for index in 0..points.len() {
                     gizmos.line_2d(
                         to_vec(points[index]),
@@ -777,12 +988,15 @@ fn draw_safety_overlays(frame: Res<CurrentFrame>, mut gizmos: Gizmos) {
                     );
                 }
             }
-            SafetyOverlayShape::Circle {
+            OverlayShape::Circle {
                 centre,
                 radius_m,
                 color,
             } => {
                 gizmos.circle_2d(to_vec(centre), radius_m, color);
+            }
+            OverlayShape::Segment { from, to, color } => {
+                gizmos.line_2d(to_vec(from), to_vec(to), color);
             }
         }
     }
@@ -924,6 +1138,44 @@ fn describe_agent(scenario: &CompiledScenario, body: &SceneBody, frame: &SceneFr
 
     out.push_str(&format!("decision  {}", decision_summary(body.decision)));
 
+    // The route-relative overlays the frame derives for this body: the same
+    // shared summaries every backend shows. A body with no route state (Phase
+    // 1, Increment 1) carries none, so its inspector is unchanged.
+    if body.route_state.is_some() {
+        let corridor = frame
+            .corridors()
+            .into_iter()
+            .find(|overlay| overlay.agent() == body.id);
+        let target = frame
+            .target_offsets()
+            .into_iter()
+            .find(|overlay| overlay.agent() == body.id);
+        let gap = frame
+            .predicted_gaps()
+            .into_iter()
+            .find(|overlay| overlay.agent() == body.id);
+        let maneuver = frame
+            .maneuver_overlays()
+            .into_iter()
+            .find(|overlay| overlay.agent() == body.id);
+        let wrong_way = frame
+            .wrong_way_overlays()
+            .into_iter()
+            .find(|overlay| overlay.agent() == body.id);
+        out.push_str(&format!(
+            "\ncorridor  {corridor}\n\
+             target    {target}\n\
+             gap       {gap}\n\
+             maneuver  {maneuver}\n\
+             rule      {rule}",
+            corridor = corridor_summary(corridor.as_ref()),
+            target = target_offset_summary(target.as_ref()),
+            gap = predicted_gap_summary(gap.as_ref()),
+            maneuver = maneuver_summary(maneuver.as_ref()),
+            rule = wrong_way_summary(wrong_way.as_ref()),
+        ));
+    }
+
     // The event links: what the body was recently part of, and who else was in
     // it. A reader follows an id to the other body's inspector.
     let links = frame.events_involving(body.id);
@@ -948,9 +1200,17 @@ mod tests {
 
     use std::sync::Arc;
 
-    use hekate_model::{CrossingId, parse_scenario_source};
-    use hekate_present::{FrameStatus, Overlays, SafetyOverlay, Viewport, load_scenario};
-    use hekate_sim::{AgentId, RegionKey};
+    use hekate_model::{
+        BodyKind, CrossingId, FacilityId, MovementDirection, MovementId, NominalDirection, PathId,
+        PermissionEffect, TacticKind, parse_scenario_source, parse_scenario_source_v2,
+    };
+    use hekate_present::{
+        FrameStatus, Overlays, SafetyOverlay, TacticalOverlay, Viewport, load_scenario,
+    };
+    use hekate_sim::{
+        AgentId, ManeuverEdge, ManeuverReasonCode, PassSide, RegionKey, RouteStateSample,
+        WrongWayReason,
+    };
 
     /// Two vehicles on one path through one crossing region, so a pair record
     /// and a region record both have live participants to anchor on.
@@ -1028,6 +1288,7 @@ mod tests {
                 .collect(),
             overlays: Overlays::default(),
             safety,
+            tactical: TacticalOverlay::default(),
         }
     }
 
@@ -1037,8 +1298,8 @@ mod tests {
     }
 
     /// A circle shape, for a readable expectation.
-    fn circle(centre: DVec2, radius_m: f32, color: Color) -> SafetyOverlayShape {
-        SafetyOverlayShape::Circle {
+    fn circle(centre: DVec2, radius_m: f32, color: Color) -> OverlayShape {
+        OverlayShape::Circle {
             centre,
             radius_m,
             color,
@@ -1064,7 +1325,7 @@ mod tests {
         // the standstill of body 1), then one link ring per record the selected
         // body took part in, and markers last in record order.
         let expected = vec![
-            SafetyOverlayShape::Ring {
+            OverlayShape::Ring {
                 points: ring,
                 color: Color::srgb(0.98, 0.62, 0.18),
             },
@@ -1097,7 +1358,7 @@ mod tests {
             safety_overlay_shapes(frame)
                 .into_iter()
                 .filter(|shape| {
-                    matches!(shape, SafetyOverlayShape::Circle { color, .. } if *color == LINK_COLOR)
+                    matches!(shape, OverlayShape::Circle { color, .. } if *color == LINK_COLOR)
                 })
                 .collect::<Vec<_>>()
         };
@@ -1149,5 +1410,457 @@ mod tests {
                 facility.name()
             );
         }
+    }
+
+    /// A version-2 scenario with one 3 m facility whose reference path is the
+    /// band's centreline, so a body's signed offset is its world `y`.
+    fn band_scenario() -> CompiledScenario {
+        const DOCUMENT: &str = "
+        {
+          schema_version: 2,
+          id: 'bands',
+          coordinate_system: { x: 'east_m', y: 'north_m' },
+          paths: [
+            { id: 'centerline', points: [ { x: 0.0, y: 0.0 }, { x: 100.0, y: 0.0 } ] },
+          ],
+          portals: [],
+          regions: [
+            { id: 'band', points: [ { x: 0.0, y: -1.5 }, { x: 100.0, y: -1.5 },
+              { x: 100.0, y: 1.5 }, { x: 0.0, y: 1.5 } ] },
+          ],
+          mode_templates: [
+            {
+              id: 'mover',
+              body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+                width_m: { min: 1.8, max: 1.8 } },
+              motion: 'single_body_wheeled',
+              tactics: [ 'follow', 'stop', 'yield' ],
+              access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+                speed_policy: { limit_mps: null } },
+              occupancy: 'operator_only',
+              profiles: {
+                speed_mps: { min: 12.0, max: 12.0 },
+                max_accel_mps2: { min: 2.0, max: 2.0 },
+                comfortable_brake_mps2: { min: 3.0, max: 3.0 },
+                time_gap_s: { min: 1.0, max: 1.0 },
+                compliance: { min: 1.0, max: 1.0 },
+              },
+            },
+          ],
+          facilities: [
+            { id: 'lane', region: 'band', reference_path: 'centerline',
+              width_m: 3.0, nominal_direction: 'forward',
+              access: { modes: [ 'mover' ] }, lateral_use: 'shared',
+              speed_policy: { limit_mps: null } },
+          ],
+        }
+        ";
+        let source = parse_scenario_source_v2(DOCUMENT).expect("band document parses");
+        CompiledScenario::compile_v2(source).expect("band document compiles")
+    }
+
+    /// A route-relative sample at offset `d_m`, with the mode's resolved
+    /// clearance and horizon and every sparse field absent.
+    fn route_state(d_m: f64) -> RouteStateSample {
+        RouteStateSample {
+            s_m: 50.0,
+            d_m,
+            maneuver_state: ManeuverState::Following,
+            target_offset_m: None,
+            target_facility: None,
+            predicted_min_clearance_m: None,
+            target_clearance_m: Some(0.3),
+            horizon_s: Some(2.0),
+            perceived_rule: None,
+            opposing_direction: None,
+        }
+    }
+
+    /// A body on the band's reference path, at `position`, carrying `state`.
+    fn route_body(id: usize, position: DVec2, state: Option<RouteStateSample>) -> SceneBody {
+        SceneBody {
+            id,
+            position,
+            heading_rad: 0.0,
+            length_m: 4.5,
+            width_m: 1.8,
+            mode: hekate_sim::AgentMode::Vehicle,
+            body_kind: BodyKind::Box,
+            segments: Vec::new(),
+            speed_mps: Some(12.0),
+            path: Some(PathId::from_index(0)),
+            path_distance_m: Some(position.x),
+            route: None,
+            profile: None,
+            decision: None,
+            route_state: state,
+        }
+    }
+
+    /// A frame over [`band_scenario`] carrying `bodies` and `tactical`.
+    fn band_frame(bodies: Vec<SceneBody>, tactical: TacticalOverlay) -> SceneFrame {
+        let scenario = band_scenario();
+        SceneFrame {
+            scenario_id: scenario.id().to_owned(),
+            time_seconds: 0.0,
+            tick: 0,
+            status: FrameStatus {
+                agents: bodies.len(),
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport: Viewport::new(DVec2::ZERO, 1.0),
+            geometry: Arc::new(SceneGeometry::from_scenario(&scenario)),
+            bodies,
+            overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
+            tactical,
+        }
+    }
+
+    /// A maneuver edge for `agent` at offset 0.8 m, attempted with one partner.
+    fn maneuver_edge(agent: usize, to: ManeuverState, edge: ManeuverEdge) -> Event {
+        Event::Maneuver {
+            agent: AgentId::from_index(agent),
+            kind: TacticKind::Overtake,
+            from: ManeuverState::Preparing,
+            to,
+            edge,
+            partner: Some(AgentId::from_index(1)),
+            source_facility: FacilityId::from_index(0),
+            target_facility: None,
+            target_offset_m: 0.8,
+            side: PassSide::Left,
+            reason: ManeuverReasonCode::SlowerLeader,
+        }
+    }
+
+    /// An entering or leaving opposing traversal for `agent` on facility 0.
+    fn opposing_edge(agent: usize, entering: bool) -> Event {
+        Event::OpposingTraversal {
+            agent: AgentId::from_index(agent),
+            facility: FacilityId::from_index(0),
+            movement: Some(MovementId::from_index(0)),
+            direction: MovementDirection::Reverse,
+            nominal_direction: NominalDirection::Forward,
+            perceived_rule: Some(PermissionEffect::Prohibit),
+            reason: WrongWayReason::NoncompliantChoice,
+            violating: true,
+            entering,
+        }
+    }
+
+    /// Assert two shape plans match to a micrometre, so a derivation on
+    /// world metres is compared for geometry rather than for its last bit.
+    fn assert_shapes(actual: &[OverlayShape], expected: &[OverlayShape]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?} != {expected:?}");
+        for (actual, expected) in actual.iter().zip(expected) {
+            match (actual, expected) {
+                (
+                    OverlayShape::Ring {
+                        points: ours,
+                        color: our_color,
+                    },
+                    OverlayShape::Ring {
+                        points: theirs,
+                        color: their_color,
+                    },
+                ) => {
+                    assert_eq!((our_color, ours.len()), (their_color, theirs.len()));
+                    for (ours, theirs) in ours.iter().zip(theirs) {
+                        assert!((*ours - *theirs).length() < 1e-9, "{ours:?} != {theirs:?}");
+                    }
+                }
+                (
+                    OverlayShape::Circle {
+                        centre: our_centre,
+                        radius_m: our_radius,
+                        color: our_color,
+                    },
+                    OverlayShape::Circle {
+                        centre: their_centre,
+                        radius_m: their_radius,
+                        color: their_color,
+                    },
+                ) => {
+                    assert!(
+                        (*our_centre - *their_centre).length() < 1e-9
+                            && (our_radius - their_radius).abs() < 1e-6
+                            && our_color == their_color,
+                        "{actual:?} != {expected:?}"
+                    );
+                }
+                (
+                    OverlayShape::Segment {
+                        from: our_from,
+                        to: our_to,
+                        color: our_color,
+                    },
+                    OverlayShape::Segment {
+                        from: their_from,
+                        to: their_to,
+                        color: their_color,
+                    },
+                ) => {
+                    assert!(
+                        (*our_from - *their_from).length() < 1e-9
+                            && (*our_to - *their_to).length() < 1e-9
+                            && our_color == their_color,
+                        "{actual:?} != {expected:?}"
+                    );
+                }
+                _ => panic!("{actual:?} != {expected:?}"),
+            }
+        }
+    }
+
+    /// Every route-relative overlay the frame derives draws its own shapes, in
+    /// ascending agent order, from the frame's projected data alone.
+    #[test]
+    fn each_route_relative_overlay_derives_its_shapes_from_the_frame() {
+        let mut tactical = TacticalOverlay::default();
+        tactical.observe(
+            7,
+            &[
+                maneuver_edge(0, ManeuverState::Committed, ManeuverEdge::Committed),
+                opposing_edge(1, true),
+            ],
+        );
+        let mut first = route_state(0.0);
+        first.maneuver_state = ManeuverState::Committed;
+        first.target_offset_m = Some(0.8);
+        first.predicted_min_clearance_m = Some(0.9);
+        first.target_clearance_m = Some(0.5);
+        let mut second = route_state(0.2);
+        second.predicted_min_clearance_m = Some(0.4);
+        second.target_clearance_m = Some(0.5);
+        let frame = band_frame(
+            vec![
+                route_body(0, DVec2::new(50.0, 0.0), Some(first)),
+                route_body(1, DVec2::new(60.0, 0.2), Some(second)),
+            ],
+            tactical,
+        );
+
+        // The corridor is the band inset by the body and its clearance: an
+        // absolute interval both bodies share, drawn from the body's own
+        // offset. Both bodies sit inside the same 3 m band, so both draw the
+        // same +/-0.1 m interval, each at its own position.
+        assert_shapes(
+            &corridor_shapes(&frame),
+            &[
+                OverlayShape::Segment {
+                    from: DVec2::new(50.0, -0.1),
+                    to: DVec2::new(50.0, 0.1),
+                    color: CORRIDOR_COLOR,
+                },
+                OverlayShape::Segment {
+                    from: DVec2::new(60.0, -0.1),
+                    to: DVec2::new(60.0, 0.1),
+                    color: CORRIDOR_COLOR,
+                },
+            ],
+        );
+        assert_eq!(
+            target_offset_shapes(&frame),
+            vec![OverlayShape::Segment {
+                from: DVec2::new(50.0, 0.0),
+                to: DVec2::new(50.0, 0.8),
+                color: TARGET_OFFSET_COLOR,
+            }]
+        );
+        // A met target is sage and a shortfall red, so both margins show.
+        assert_eq!(
+            predicted_gap_shapes(&frame),
+            vec![
+                circle(DVec2::new(50.0, 0.0), 0.9, PREDICTED_GAP_MARGIN_COLOR),
+                circle(DVec2::new(60.0, 0.2), 0.4, PREDICTED_GAP_SHORTFALL_COLOR),
+            ]
+        );
+        // The maneuver ring uses the live sample's state, and the wrong-way
+        // ring the interval's violation, each around its own body.
+        assert_eq!(
+            maneuver_shapes(&frame),
+            vec![circle(
+                DVec2::new(50.0, 0.0),
+                2.85,
+                MANEUVER_COMMITTED_COLOR
+            )]
+        );
+        assert_eq!(
+            wrong_way_shapes(&frame),
+            vec![circle(
+                DVec2::new(60.0, 0.2),
+                3.45,
+                WRONG_WAY_VIOLATION_COLOR
+            )]
+        );
+    }
+
+    /// Every overlay flag turns off only its own shapes, and a frame whose
+    /// bodies carry no route state and no open interval draws none of them.
+    #[test]
+    fn every_route_relative_overlay_is_flag_gated_and_absent_for_phase_1() {
+        let mut tactical = TacticalOverlay::default();
+        tactical.observe(
+            7,
+            &[
+                maneuver_edge(0, ManeuverState::Committed, ManeuverEdge::Committed),
+                opposing_edge(0, true),
+            ],
+        );
+        let mut state = route_state(0.0);
+        state.maneuver_state = ManeuverState::Committed;
+        state.target_offset_m = Some(0.8);
+        state.predicted_min_clearance_m = Some(0.9);
+        let mut frame = band_frame(vec![route_body(0, DVec2::ZERO, Some(state))], tactical);
+        assert!(!corridor_shapes(&frame).is_empty());
+
+        for (flag, shapes) in [
+            (
+                "corridor",
+                corridor_shapes as fn(&SceneFrame) -> Vec<OverlayShape>,
+            ),
+            ("target_offset", target_offset_shapes),
+            ("predicted_gap", predicted_gap_shapes),
+            ("maneuver", maneuver_shapes),
+            ("wrong_way", wrong_way_shapes),
+        ] {
+            let before = shapes(&frame);
+            assert!(!before.is_empty(), "{flag} draws nothing to gate");
+            let others = |frame: &SceneFrame| {
+                [
+                    corridor_shapes(frame),
+                    target_offset_shapes(frame),
+                    predicted_gap_shapes(frame),
+                    maneuver_shapes(frame),
+                    wrong_way_shapes(frame),
+                ]
+            };
+            let untouched = others(&frame);
+
+            match flag {
+                "corridor" => frame.overlays.corridor = false,
+                "target_offset" => frame.overlays.target_offset = false,
+                "predicted_gap" => frame.overlays.predicted_gap = false,
+                "maneuver" => frame.overlays.maneuver = false,
+                _ => frame.overlays.wrong_way = false,
+            }
+            assert!(shapes(&frame).is_empty(), "{flag} stayed on");
+            let after = others(&frame);
+            for (index, (before, after)) in untouched.iter().zip(after.iter()).enumerate() {
+                let mine = match flag {
+                    "corridor" => 0,
+                    "target_offset" => 1,
+                    "predicted_gap" => 2,
+                    "maneuver" => 3,
+                    _ => 4,
+                };
+                if index != mine {
+                    assert_eq!(before, after, "{flag} changed overlay {index}");
+                }
+            }
+            match flag {
+                "corridor" => frame.overlays.corridor = true,
+                "target_offset" => frame.overlays.target_offset = true,
+                "predicted_gap" => frame.overlays.predicted_gap = true,
+                "maneuver" => frame.overlays.maneuver = true,
+                _ => frame.overlays.wrong_way = true,
+            }
+        }
+
+        // A Phase 1 body carries no route state and no interval, so a frame
+        // with the overlays on draws nothing at all.
+        let phase_one = band_frame(vec![route_body(0, DVec2::ZERO, None)], {
+            let mut tactical = TacticalOverlay::default();
+            tactical.observe(
+                7,
+                &[maneuver_edge(
+                    0,
+                    ManeuverState::Committed,
+                    ManeuverEdge::Committed,
+                )],
+            );
+            tactical
+        });
+        assert!(corridor_shapes(&phase_one).is_empty());
+        assert!(target_offset_shapes(&phase_one).is_empty());
+        assert!(predicted_gap_shapes(&phase_one).is_empty());
+        assert!(wrong_way_shapes(&phase_one).is_empty());
+        // The interval's own edge names the state when the body carries no
+        // sample, so the maneuver ring still draws.
+        assert_eq!(
+            maneuver_shapes(&phase_one),
+            vec![circle(DVec2::ZERO, 2.85, MANEUVER_COMMITTED_COLOR)]
+        );
+    }
+
+    /// The inspector names the route-relative identifiers the shared summaries
+    /// carry: the corridor's clearance, the maneuver's partner and facility,
+    /// and the rule's reason and state.
+    #[test]
+    fn the_inspector_names_the_route_relative_identifiers() {
+        let mut tactical = TacticalOverlay::default();
+        tactical.observe(
+            7,
+            &[
+                maneuver_edge(0, ManeuverState::Committed, ManeuverEdge::Committed),
+                opposing_edge(0, true),
+            ],
+        );
+        let mut state = route_state(0.0);
+        state.maneuver_state = ManeuverState::Committed;
+        state.target_offset_m = Some(0.8);
+        state.predicted_min_clearance_m = Some(0.9);
+        state.target_clearance_m = Some(0.5);
+        state.perceived_rule = Some(PermissionEffect::Prohibit);
+        state.opposing_direction = Some(MovementDirection::Reverse);
+        let scenario = band_scenario();
+        let frame = band_frame(vec![route_body(0, DVec2::ZERO, Some(state))], tactical);
+        let body = frame.body(0).expect("body is alive");
+
+        let text = describe_agent(&scenario, body, &frame);
+        assert!(
+            text.contains("corridor  #0  facility 0  usable corridor"),
+            "{text}"
+        );
+        assert!(text.contains("clearance 0.50 m"), "{text}");
+        assert!(
+            text.contains("target    #0  target offset 0.80 m (left)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gap       #0  predicted min clearance 0.90 m"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "maneuver  #0  maneuver committed  tactic overtake  edge committed  \
+                 reason slower_leader  partner #1  target 0.80 m (left)  facility 0 -> none"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("rule      #0  opposing facility 0  movement 0"),
+            "{text}"
+        );
+        assert!(text.contains("violating true"), "{text}");
+
+        // A body with no route state gains no new lines.
+        let bare = band_frame(vec![route_body(0, DVec2::ZERO, None)], {
+            let mut tactical = TacticalOverlay::default();
+            tactical.observe(
+                7,
+                &[maneuver_edge(
+                    0,
+                    ManeuverState::Committed,
+                    ManeuverEdge::Committed,
+                )],
+            );
+            tactical
+        });
+        let bare_text = describe_agent(&scenario, bare.body(0).expect("alive"), &bare);
+        assert!(!bare_text.contains("corridor  "), "{bare_text}");
     }
 }

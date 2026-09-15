@@ -484,7 +484,9 @@ mod tests {
 
     use glam::DVec2;
     use hekate_model::parse_scenario_source;
-    use hekate_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport};
+    use hekate_present::{
+        FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, TacticalOverlay, Viewport,
+    };
     use hekate_sim::{RunConfig, Simulation, SnapshotDetail};
 
     fn scenario() -> Arc<CompiledScenario> {
@@ -524,6 +526,7 @@ mod tests {
                 .collect(),
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
         }
     }
 

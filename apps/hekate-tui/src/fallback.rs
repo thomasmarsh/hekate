@@ -181,7 +181,8 @@ mod tests {
     use glam::DVec2;
     use hekate_model::{CompiledScenario, parse_scenario_source};
     use hekate_present::{
-        BackendCapabilities, FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport,
+        BackendCapabilities, FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed,
+        TacticalOverlay, Viewport,
     };
     use hekate_sim::{RunConfig, Simulation, SnapshotDetail};
 
@@ -317,6 +318,7 @@ mod tests {
             bodies: Vec::new(),
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
         }
     }
 

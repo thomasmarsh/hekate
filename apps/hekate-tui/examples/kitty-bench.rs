@@ -27,7 +27,7 @@ use glam::DVec2;
 use hekate_model::CompiledScenario;
 use hekate_present::{
     FrameStatus, Overlays, RendererBackend, SafetyOverlay, SceneBody, SceneFrame, SceneGeometry,
-    Speed, Viewport, load_scenario,
+    Speed, TacticalOverlay, Viewport, load_scenario,
 };
 use hekate_sim::AgentMode;
 use hekate_tui::{KittyBackend, Multiplexer, TuiSession};
@@ -137,6 +137,7 @@ fn measure_dense<W: Write>(
                 route: None,
                 profile: None,
                 decision: None,
+                route_state: None,
             }
         })
         .collect();
@@ -156,6 +157,7 @@ fn measure_dense<W: Write>(
         bodies,
         overlays: Overlays::default(),
         safety: SafetyOverlay::default(),
+        tactical: TacticalOverlay::default(),
     };
 
     for _ in 0..10 {

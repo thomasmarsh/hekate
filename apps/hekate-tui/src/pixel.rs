@@ -625,7 +625,7 @@ mod tests {
 
     use hekate_model::{BodyKind, CompiledScenario, CrossingId, parse_scenario_source};
     use hekate_present::{
-        FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, load_scenario,
+        FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, TacticalOverlay, load_scenario,
     };
     use hekate_sim::{
         AgentId, AgentMode, BodySegmentSample, Event, RegionKey, RunConfig, Simulation,
@@ -671,6 +671,7 @@ mod tests {
                 .collect(),
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
         }
     }
 
@@ -723,6 +724,7 @@ mod tests {
             bodies: Vec::new(),
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
         }
     }
 
@@ -744,6 +746,7 @@ mod tests {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         }
     }
 
@@ -848,6 +851,7 @@ mod tests {
             bodies: Vec::new(),
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
         }
     }
 
@@ -953,6 +957,7 @@ mod tests {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         }
     }
 
@@ -975,8 +980,14 @@ mod tests {
                 geometry: false,
                 vectors: false,
                 safety: false,
+                corridor: false,
+                target_offset: false,
+                predicted_gap: false,
+                maneuver: false,
+                wrong_way: false,
             },
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
         }
     }
 

@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use hekate_model::CompiledScenario;
 use hekate_present::{
-    SceneBody, SceneFrame, decision_summary, event_summary, intent_summary, profile_summary,
+    SceneBody, SceneFrame, corridor_summary, decision_summary, event_summary, intent_summary,
+    maneuver_summary, predicted_gap_summary, profile_summary, target_offset_summary,
+    wrong_way_summary,
 };
 
 use crate::backend::RunInfo;
@@ -107,7 +109,7 @@ impl Hud {
             None => "\
 space pause   . step   1/2/3 speed   r restart   n next seed   \
 WASD/arrows pan   +/- zoom   tab select   g geometry   v vectors   b safety   \
-esc clear   q quit"
+c corridor   t target   p gap   m maneuver   o wrong-way   esc clear   q quit"
                 .to_owned(),
         }
     }
@@ -151,6 +153,41 @@ esc clear   q quit"
 
         out.push_str(&format!("   decision {}", decision_summary(body.decision)));
 
+        // The route-relative overlays the frame derives for this body: the same
+        // shared summaries the Bevy inspector shows. A body with no route state
+        // (Phase 1, Increment 1) carries none, so its inspector is unchanged.
+        if body.route_state.is_some() {
+            let corridor = frame
+                .corridors()
+                .into_iter()
+                .find(|overlay| overlay.agent() == body.id);
+            let target = frame
+                .target_offsets()
+                .into_iter()
+                .find(|overlay| overlay.agent() == body.id);
+            let gap = frame
+                .predicted_gaps()
+                .into_iter()
+                .find(|overlay| overlay.agent() == body.id);
+            let maneuver = frame
+                .maneuver_overlays()
+                .into_iter()
+                .find(|overlay| overlay.agent() == body.id);
+            let wrong_way = frame
+                .wrong_way_overlays()
+                .into_iter()
+                .find(|overlay| overlay.agent() == body.id);
+            out.push_str(&format!(
+                "   corridor {corridor}   target {target}   gap {gap}   \
+                 maneuver {maneuver}   rule {rule}",
+                corridor = corridor_summary(corridor.as_ref()),
+                target = target_offset_summary(target.as_ref()),
+                gap = predicted_gap_summary(gap.as_ref()),
+                maneuver = maneuver_summary(maneuver.as_ref()),
+                rule = wrong_way_summary(wrong_way.as_ref()),
+            ));
+        }
+
         // The event links: what the body was recently part of. The footer is
         // one line, so only the most recent records are named.
         let links = frame.events_involving(body.id);
@@ -169,8 +206,17 @@ mod tests {
 
     use glam::DVec2;
     use hekate_model::parse_scenario_source;
-    use hekate_present::{FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, Viewport};
-    use hekate_sim::{AgentId, Event, RunConfig, Simulation, SnapshotDetail, ViolationKind};
+    use hekate_model::{
+        FacilityId, MovementDirection, NominalDirection, PermissionEffect, TacticKind,
+    };
+    use hekate_present::{
+        FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, TacticalOverlay, Viewport,
+        load_scenario,
+    };
+    use hekate_sim::{
+        AgentId, Event, ManeuverEdge, ManeuverReasonCode, ManeuverState, PassSide, RunConfig,
+        Simulation, SnapshotDetail, ViolationKind, WrongWayReason,
+    };
 
     fn scenario() -> Arc<CompiledScenario> {
         let source = parse_scenario_source(
@@ -211,6 +257,137 @@ mod tests {
                 .collect(),
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
+        }
+    }
+
+    /// A frame over a checked-in version-2 fixture held long enough for both
+    /// narrow modes to spawn, carrying one body's route state and an open
+    /// maneuver and opposing-traversal interval.
+    fn tactical_frame() -> (std::sync::Arc<CompiledScenario>, SceneFrame) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenarios/phase2/inc1/narrow_isolated_straight_v2.json5");
+        let compiled = load_scenario(&path).expect("fixture loads");
+        let mut sim = Simulation::new(compiled.clone(), RunConfig::new(0)).expect("builds");
+        for _ in 0..400 {
+            sim.step();
+        }
+        let snapshot = sim.snapshot(SnapshotDetail::Full);
+        let mut body = SceneBody::project(&[], &snapshot.agents()[0], 0.0);
+        let state = body
+            .route_state
+            .as_mut()
+            .expect("the fixture run carries route state");
+        state.maneuver_state = ManeuverState::Committed;
+        state.target_offset_m = Some(0.8);
+        state.predicted_min_clearance_m = Some(0.9);
+        state.target_clearance_m = Some(0.5);
+        state.perceived_rule = Some(PermissionEffect::Prohibit);
+        state.opposing_direction = Some(MovementDirection::Reverse);
+
+        let mut tactical = TacticalOverlay::default();
+        tactical.observe(
+            snapshot.time().tick(),
+            &[
+                Event::Maneuver {
+                    agent: AgentId::from_index(0),
+                    kind: TacticKind::Overtake,
+                    from: ManeuverState::Preparing,
+                    to: ManeuverState::Committed,
+                    edge: ManeuverEdge::Committed,
+                    partner: Some(AgentId::from_index(1)),
+                    source_facility: FacilityId::from_index(1),
+                    target_facility: None,
+                    target_offset_m: 0.8,
+                    side: PassSide::Left,
+                    reason: ManeuverReasonCode::SlowerLeader,
+                },
+                Event::OpposingTraversal {
+                    agent: AgentId::from_index(0),
+                    facility: FacilityId::from_index(1),
+                    movement: None,
+                    direction: MovementDirection::Reverse,
+                    nominal_direction: NominalDirection::Forward,
+                    perceived_rule: Some(PermissionEffect::Prohibit),
+                    reason: WrongWayReason::NoncompliantChoice,
+                    violating: true,
+                    entering: true,
+                },
+            ],
+        );
+
+        let frame = SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: snapshot.time().seconds(),
+            tick: snapshot.time().tick(),
+            status: FrameStatus {
+                agents: 1,
+                speed: Speed::Real,
+                paused: true,
+                selection: Some(body.id),
+            },
+            viewport: Viewport::new(body.position, 0.5),
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies: vec![body],
+            overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
+            tactical,
+        };
+        (Arc::new(compiled), frame)
+    }
+
+    /// The inspector names the same route-relative identifiers the Bevy
+    /// inspector does, from the same shared summaries.
+    #[test]
+    fn the_inspector_reports_the_same_route_relative_fields_as_the_bevy_viewer() {
+        let (compiled, frame) = tactical_frame();
+        let hud = Hud::new(compiled);
+        let text = hud.describe(frame.body(0).expect("body is alive"), &frame);
+
+        assert!(
+            text.contains("corridor #0  facility 1  usable corridor"),
+            "{text}"
+        );
+        assert!(text.contains("clearance 0.50 m"), "{text}");
+        assert!(
+            text.contains("target #0  target offset 0.80 m (left)  from 0.00 m"),
+            "{text}"
+        );
+        assert!(
+            text.contains("gap #0  predicted min clearance 0.90 m  target 0.50 m  margin 0.40 m"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "maneuver #0  maneuver committed  tactic overtake  edge committed  \
+             reason slower_leader  partner #1  target 0.80 m (left)  facility 1 -> none"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("rule #0  opposing facility 1  movement none  direction reverse"),
+            "{text}"
+        );
+        assert!(text.contains("violating true"), "{text}");
+    }
+
+    /// The footer legend names every overlay toggle.
+    #[test]
+    fn the_footer_legend_names_every_overlay_toggle() {
+        let mut hud = Hud::new(scenario());
+        hud.update(&frame(None));
+        let legend = hud.footer_line();
+        for key in [
+            "g geometry",
+            "v vectors",
+            "b safety",
+            "c corridor",
+            "t target",
+            "p gap",
+            "m maneuver",
+            "o wrong-way",
+        ] {
+            assert!(legend.contains(key), "the legend omits '{key}': {legend}");
         }
     }
 
@@ -307,6 +484,7 @@ mod tests {
                 stop_line_gap_m: 2.0,
                 required_decel_mps2: 0.0,
             }),
+            route_state: None,
         };
         let events = [
             Event::NearMiss {

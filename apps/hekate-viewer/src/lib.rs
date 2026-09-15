@@ -176,6 +176,7 @@ mod tests {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         }
     }
 
