@@ -1,0 +1,11 @@
+{"kind":"run","scenario_id":"motor_lane_change_boundary_v2","schema_version":2,"event_version":3,"seed":102,"step_s":0.05,"ticks":2500}
+{"kind":"event","tick":175,"event":"spawned","agent":0,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":350,"event":"spawned","agent":1,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":833,"event":"spawned","agent":2,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":1205,"event":"spawned","agent":3,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":1731,"event":"despawned","agent":0,"path":0,"reason":"exited_path"}
+{"kind":"event","tick":1769,"event":"despawned","agent":1,"path":0,"reason":"exited_path"}
+{"kind":"event","tick":1808,"event":"despawned","agent":2,"path":0,"reason":"exited_path"}
+{"kind":"event","tick":1919,"event":"despawned","agent":3,"path":0,"reason":"exited_path"}
+{"kind":"event","tick":1983,"event":"spawned","agent":4,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"summary","ticks":2500,"spawned":5,"despawned":4,"remaining":1}

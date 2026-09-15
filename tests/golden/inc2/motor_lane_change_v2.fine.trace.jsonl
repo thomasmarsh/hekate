@@ -1,0 +1,17 @@
+{"kind":"run","scenario_id":"motor_lane_change_v2","schema_version":2,"event_version":3,"seed":48,"step_s":0.02,"ticks":6250}
+{"kind":"event","tick":678,"event":"spawned","agent":0,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":2119,"event":"spawned","agent":1,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":2155,"event":"spawned","agent":2,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":3209,"event":"maneuver","agent":1,"reason":"slower_leader","maneuver_kind":"change_lane","from":"following","to":"preparing","edge":"attempted","partner":0,"source_facility":0,"target_facility":1,"target_offset_m":0.0,"side":"left"}
+{"kind":"event","tick":3210,"event":"maneuver","agent":1,"reason":"slower_leader","maneuver_kind":"change_lane","from":"preparing","to":"committed","edge":"committed","partner":0,"source_facility":0,"target_facility":1,"target_offset_m":0.0,"side":"left"}
+{"kind":"event","tick":3418,"event":"queue","agent":0,"joined":true}
+{"kind":"event","tick":3451,"event":"facility_transition","agent":1,"from_facility":0,"to_facility":1,"from_direction":"forward","to_direction":"forward","via":"lateral","side":"left","s_m":182.40055214117757,"d_m":5.006957115072786,"permitted":true}
+{"kind":"event","tick":3452,"event":"queue","agent":0,"joined":false}
+{"kind":"event","tick":3454,"event":"maneuver","agent":1,"reason":"settled","maneuver_kind":"change_lane","from":"committed","to":"returning","edge":"completed","partner":0,"source_facility":0,"target_offset_m":0.0,"side":"left"}
+{"kind":"event","tick":3463,"event":"facility_transition","agent":1,"from_facility":1,"to_facility":0,"from_direction":"forward","to_direction":"forward","via":"lateral","side":"right","s_m":184.18346210475585,"d_m":-0.5007275088301526,"permitted":true}
+{"kind":"event","tick":4173,"event":"spawned","agent":3,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":4388,"event":"maneuver","agent":1,"reason":"settled","maneuver_kind":"overtake","from":"returning","to":"following","edge":"completed","partner":0,"source_facility":0,"target_offset_m":0.0,"side":"left"}
+{"kind":"event","tick":4539,"event":"despawned","agent":1,"path":0,"reason":"exited_path"}
+{"kind":"event","tick":5037,"event":"spawned","agent":4,"path":0,"distance_m":0.0,"mode":"vehicle"}
+{"kind":"event","tick":6202,"event":"despawned","agent":0,"path":0,"reason":"exited_path"}
+{"kind":"summary","ticks":6250,"spawned":5,"despawned":2,"remaining":3}
