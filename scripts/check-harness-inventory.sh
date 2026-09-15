@@ -60,6 +60,7 @@ slow_targets=(
     "apps/hekate-cli/tests/migration_regression.rs every_scenario_migrates_or_is_a_valid_version_2_document"
     "apps/hekate-cli/tests/migration_regression.rs migrated_frozen_runs_reproduce_their_golden_bodies_and_pinned_hashes"
     "apps/hekate-cli/tests/scenarios.rs car_following_benchmark_obeys_controller_bounds_without_overlap"
+    "apps/hekate-cli/tests/emergency_cap.rs red_queue_close_up_stays_below_the_accepted_emergency_cap_step"
     "apps/hekate-cli/tests/experiment_spec.rs the_checked_in_experiment_runs_paired_from_the_seed_bank"
     "apps/hekate-cli/tests/increment6_trace.rs the_increment6_variant_goldens_match_and_replay_verifies_them"
 )

@@ -80,8 +80,7 @@ statement is a checked-in artifact or a named source location.
 - **Control.** Signals are fixed-time: authored phases in cycle order, advanced
   by the simulation clock. There is no actuation, no coordination between
   junctions, no adaptive or demand-responsive control, and no emergency
-  preemption (`[[TAS-029-bound-red-queue-emergency-cap]]` is proposed and
-  unbuilt). Pedestrian signals are the same kind of fixed-time phase.
+  preemption. Pedestrian signals are the same kind of fixed-time phase.
 - **Motion.** Vehicles follow their guide path under the documented IDM
   controller with its bounds and three hard safety caps — the nearest leader's
   rear, a stop line whose control requires a stop, and an occupied crossing the
@@ -91,8 +90,19 @@ statement is a checked-in artifact or a named source location.
   counter of steps where a cap overrode the comfortable profile
   (`Simulation::emergency_cap_steps`) is **not reported in any run artifact**, so
   the comparison cannot show how often the backstop, rather than the profile,
-  shaped a trajectory. There is no lane changing, no lateral passing, no
-  wrong-way movement, and no narrow-facility behavior.
+  shaped a trajectory. The anti-overlap cap is a position clamp
+  (`new_speed = min(new_speed, gap / dt)`) with no explicit acceleration limit, so
+  a centimetre-scale gap implies an unbounded single-step deceleration: during
+  low-speed red-queue close-up behind a stopped leader, `four_leg_signal_v1`
+  seed 0 commands a worst step of −28.2549 m/s² (tick 1221, agent 24, 11 cap
+  steps) against a 2.256 m/s² comfortable brake. **The accepted 32 m/s² ceiling
+  is a regression tripwire for this fixture and seed, not a property of the
+  kernel**: `apps/hekate-cli/tests/emergency_cap.rs` fails if the measured
+  `four_leg_signal_v1` seed-0 worst step exceeds it, while the position clamp
+  itself remains unbounded in principle; the controlled `car_following_v1`
+  benchmark engages no cap step, so the residual is scoped to signalized queue
+  formation. There is no lane changing, no lateral passing, no wrong-way
+  movement, and no narrow-facility behavior.
 - **Interaction metrics are bounded readings.** A pair is observed only inside
   the 20 m interaction range, time to collision has a 5 s horizon, a near miss
   is a separation at or below 1 m, and the reported resolutions are 1 µs and
