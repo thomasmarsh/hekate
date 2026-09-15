@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T03:36:12Z
+updated: 2026-09-15T03:41:36Z
 summary: Compare production prediction to executed clearance with an endpoint probe.
-next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-104-bound-predicted-versus-executed-clearance]].
@@ -64,5 +63,19 @@ would exceed `T-O1` because `tick_minimum_clearance_m` reports the overlap
 boundary rather than the penetration depth; that case is outside the matrix's
 overtaking cadences and no production change was needed or made.
 
-Remaining scope: the five-gate validation and resolution belong to the gate
-worker.
+## Gate validation (fresh gate worker)
+
+Five gates run from the repo root on `e2e0079` (`test(sim): bound predicted
+versus executed clearance`), in order:
+
+| gate | command | exit | wall | result |
+| --- | --- | --- | --- | --- |
+| fmt | `cargo fmt --all --check` | 0 | 1.0s | clean |
+| clippy | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 1.0s | clean |
+| test | `cargo test --workspace --all-features` | 0 | 201.0s | 982 passed, 0 failed, 1 ignored, 86 suites |
+| dependency direction | `./scripts/check-dependency-direction.sh` | 0 | 1.0s | `dependency direction OK` |
+| graph | `tangle check` | 0 | 0.0s | `graph check: passed (194 nodes)` |
+
+No production file changed, so no mechanical fix was needed; the artifact is
+test-only (`crates/hekate-sim/src/` untouched) and `tests/prediction.rs` holds
+15 tests.

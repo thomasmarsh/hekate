@@ -1,10 +1,9 @@
 ---
-status: proposed
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T03:24:10Z
+updated: 2026-09-15T03:41:36Z
 summary: Bound maneuver-prediction error against analytic and fine-step executed clearance.
-next: [[TAS-126-compare-production-prediction-to-executed-cleara]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -44,3 +43,15 @@ the workspace warnings-as-errors test gate.
 
 - [[TAS-125-build-analytic-and-high-resolution-clearance-ref]] Analytic and high-resolution reference cases.
 - [[TAS-126-compare-production-prediction-to-executed-cleara]] Production-vs-executed comparison and endpoint probe.
+
+# Result
+
+Both slices resolved: [[TAS-125-build-analytic-and-high-resolution-clearance-ref]]
+provides the hand-computable and `1/4096 s` fine-step reference minima and
+[[TAS-126-compare-production-prediction-to-executed-cleara]] bounds the
+production prediction against the executed sampled and swept minima, with a
+coarse-endpoint probe that falsifies an endpoint-only implementation. Test-only:
+`crates/hekate-sim/tests/prediction_reference.rs` (5 tests) and
+`crates/hekate-sim/tests/prediction.rs` (15 tests), no production file changed,
+no tolerance widened; both slices pass the five gates on `8eef3c2` and
+`e2e0079`.

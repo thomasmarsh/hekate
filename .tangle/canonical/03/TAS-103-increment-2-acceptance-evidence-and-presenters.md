@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T03:41:36Z
 summary: Close Increment 2 analytic, adversarial, reproducibility, performance, matrix, and viewer gates.
-next: [[TAS-104-bound-predicted-versus-executed-clearance]]
+next: [[TAS-105-prove-deterministic-claims-and-unsafe-commit-policy]]
 ---
 
 Parent [[TAS-020-phase-2-increment-2-lateral-passing-wrong-way]].
