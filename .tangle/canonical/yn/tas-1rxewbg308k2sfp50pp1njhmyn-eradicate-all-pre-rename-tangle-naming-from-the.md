@@ -1,10 +1,9 @@
 ---
 context_rev: 1
 priority: P0
-status: proposed
-updated: 2026-09-15T16:09:50Z
+status: resolved
+updated: 2026-09-15T16:17:33Z
 summary: Eradicate all pre-rename tangle naming from the working tree.
-next: Remove the remaining libtangle_* target artifacts and add a checked-in guard that fails the repo if the old tangle-* crate names return.
 ---
 
 Area [[IDX-001-hekate]].
@@ -46,3 +45,33 @@ follow-up extends the matcher to `libtangle*`.
 Out of scope unless confirmed: the project's work-ledger is itself named
 "Tangle" (`.tangle/`, the `tangle` command, `tangle_revision`). That is
 intentional and is not a pre-rename artifact.
+
+# Result
+
+The pre-rename artifacts are gone and a guard prevents their return.
+
+- `target/` has zero `tangle*`/`libtangle*` matches. TAS-137 slice C removed
+  312 `libtangle_*` files (408.9 MiB) plus the earlier `tangle*` and incremental
+  artifacts; the recipe is `scripts/clean-target.sh` (35 GB -> 17 GB).
+- `scripts/check-no-legacy-tangle.sh` (commit `0c64445`) fails on any tracked
+  `tangle-<crate>`, `tangle_<crate>` identifier, or `libtangle` artifact name,
+  ignores the word "rectangle" and the intentional ledger spellings, and ships a
+  `--self-test` that rejects 13 forbidden tokens and ignores 6 allowed ones. CI
+  runs it next to the dependency-direction check.
+- Audit of remaining tracked `tangle` occurrences: all are intentional. The
+  ledger (`AGENTS.md`, `README.md`, `.gitignore`, `baselines/phase1/entry-gate.md`,
+  `perf/tick-phases.json`, `scripts/measure-tick-phases.sh`,
+  `spikes/kitty-graphics-poc/src/main.rs`, all `.tangle/**`) uses "Tangle" as the
+  work-ledger name; `scripts/clean-target.sh` and `docs/dev-loop.md` name the
+  patterns only to remove them; `scripts/check-no-legacy-tangle.sh` names every
+  pattern as its rule. Every other `tangle` substring in the tree is inside the
+  word "rectangle".
+- No Rust or manifest changed since the last green workspace gate
+  (`b384748`; 1118 passed / 0 failed / 3 skipped), so it remains green; the guard
+  is shell/docs/CI only. `tangle check` passes.
+
+Recorded residuals (P2, not blocking): the guard enumerates the six known old
+crate names, so a brand-new `tangle-<other>` would need adding; the two reclaimer
+files are excluded wholesale; the self-test exercises the boundary only for the
+underscore family. Evidence: commits `bbf4887`, `b384748`, `0c64445`;
+`/tmp/tas137/p0-verify.md`.
