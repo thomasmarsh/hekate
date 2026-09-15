@@ -4,11 +4,20 @@
 //! decision. The nominal direction, the permitted direction, and the physically
 //! possible direction stay separate, and a wrong-way traversal is an ordinary
 //! traversal the ordinary routing, steering, collision, yielding, and event
-//! paths carry. This module owns only the decision over the observer-stage
-//! context the contract fixes there: it returns the perceived rule, the
-//! selected option, a reason code, the affected facility and movement, and the
-//! context values it read. It adds no visibility-error or perception subsystem,
-//! chooses no trajectory, routes nothing, and emits nothing.
+//! paths carry. This module owns the decision over the observer-stage context
+//! the contract fixes there: it returns the perceived rule, the selected option,
+//! a reason code, the affected facility and movement, and the context values it
+//! read. It adds no visibility-error or perception subsystem, chooses no
+//! trajectory, routes nothing, and emits nothing.
+//!
+//! It also owns the **violation interval** the contract fixes from that decision
+//! ([`OpposingTraversalTracker`]): the maximal run of observed steps on which a
+//! body's centre is inside one object's extent while its traversal direction on
+//! that object is against the object's rule direction. The tracker is a pure
+//! observer like [`crate::close_pass::ClosePassTracker`] — it borrows the agent
+//! store and the compiled scenario and writes only its own records — and the
+//! kernel emits one [`crate::Event::OpposingTraversal`] when an interval opens
+//! and one when it closes.
 //!
 //! # Model card
 //!
@@ -106,12 +115,17 @@
 //! takes no draw at all, which is why every rejection is a function of its
 //! inputs alone.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use tangle_model::{
-    FacilityId, MovementId, NominalDirection, PermissionEffect, WrongWayPolicySource,
+    CompiledScenario, FacilityId, MovementDirection, MovementId, NominalDirection,
+    PermissionEffect, WrongWayPolicySource,
 };
 
-use crate::agent::AgentId;
+use crate::agent::{AgentId, AgentStore};
 use crate::rng::{STREAM_MANEUVER, derive_stream, uniform01};
+use crate::time::SimTime;
+use crate::units::Seconds;
 
 /// Why a wrong-way decision selected its option.
 ///
@@ -355,11 +369,7 @@ pub fn decide(inputs: WrongWayInputs, draw: f64) -> WrongWayDecision {
 
     let acceptance = inputs.policy.urgency * (1.0 - inputs.compliance);
     if draw < acceptance {
-        let reason = match inputs.permission {
-            Some(PermissionEffect::Permit) => WrongWayReason::LegalPermission,
-            Some(PermissionEffect::Obligate) => WrongWayReason::LegalObligation,
-            Some(PermissionEffect::Prohibit) | None => WrongWayReason::NoncompliantChoice,
-        };
+        let reason = opposing_reason(inputs.permission);
         WrongWayDecision::record(inputs, WrongWayOption::Opposing, reason, time_saving_s)
     } else {
         WrongWayDecision::record(
@@ -368,6 +378,22 @@ pub fn decide(inputs: WrongWayInputs, draw: f64) -> WrongWayDecision {
             WrongWayReason::CompliantChoice,
             time_saving_s,
         )
+    }
+}
+
+/// The decision reason code a selected opposing option carries under the
+/// applicable permission effect.
+///
+/// This is the contract's legality rule for the opposing option and nothing
+/// else: a `permit` makes it legal, an `obligate` makes it the obligated
+/// direction, and an absent or `prohibit`ed statement makes it a violation. The
+/// decision and the interval record both read their reason through it, so a
+/// traversal's recorded code has one spelling.
+fn opposing_reason(perceived_rule: Option<PermissionEffect>) -> WrongWayReason {
+    match perceived_rule {
+        Some(PermissionEffect::Permit) => WrongWayReason::LegalPermission,
+        Some(PermissionEffect::Obligate) => WrongWayReason::LegalObligation,
+        Some(PermissionEffect::Prohibit) | None => WrongWayReason::NoncompliantChoice,
     }
 }
 
@@ -391,6 +417,292 @@ pub fn maneuver_draw(root_seed: u64, agent: AgentId, ordinal: u32) -> f64 {
         let _ = uniform01(&mut rng);
     }
     uniform01(&mut rng)
+}
+
+/// The compiled traversal direction an agent's stored travel sign names.
+///
+/// `AgentStore::direction` is the longitudinal travel sign (`1.0` toward the
+/// path end, `-1.0` toward its start), the same sign the kernel's own traversal
+/// direction reads.
+fn travel_direction(sign: f64) -> MovementDirection {
+    if sign < 0.0 {
+        MovementDirection::Reverse
+    } else {
+        MovementDirection::Forward
+    }
+}
+
+/// One opposing-traversal interval: the record the kernel emits once when the
+/// interval opens and once when it closes.
+///
+/// The body travels `facility` in `direction` while the facility's authored
+/// `nominal_direction` is the rule direction, so the traversal is against it.
+/// `perceived_rule` is the applicable `permissions[]` effect, absent when no
+/// statement binds the pair; `reason` is the decision reason code that effect
+/// produces; and `violating` is `false` exactly when a `permit` or `obligate`
+/// statement makes the traversal legal, so a legal opposing traversal is
+/// recorded under its rule and never counted as a violation. `movement` is the
+/// movement connector the traversal carries, absent for a bare facility
+/// traversal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpposingTraversalObservation {
+    /// The traversing agent.
+    pub agent: AgentId,
+    /// The facility traversed against its rule direction.
+    pub facility: FacilityId,
+    /// The movement connector the traversal carries, absent for a facility
+    /// traversal.
+    pub movement: Option<MovementId>,
+    /// The direction the agent actually travels.
+    pub direction: MovementDirection,
+    /// The facility's authored nominal direction, which is its rule direction.
+    pub nominal_direction: NominalDirection,
+    /// The permission statement the agent acted under, absent when none
+    /// applies.
+    pub perceived_rule: Option<PermissionEffect>,
+    /// Why the traversal is an opposing one: the decision's own reason code.
+    pub reason: WrongWayReason,
+    /// `true` for a traversal the applicable rule does not permit.
+    pub violating: bool,
+    /// Tick the interval opened on.
+    pub start_tick: u64,
+    /// Tick the interval closed on: the first later step that left the extent,
+    /// left the rule direction, entered a different object, or ended the run.
+    pub end_tick: u64,
+    /// Simulated time of [`Self::start_tick`], in seconds.
+    pub start_time_s: f64,
+    /// Simulated time of [`Self::end_tick`], in seconds.
+    pub end_time_s: f64,
+}
+
+impl OpposingTraversalObservation {
+    /// Seconds the interval was open: the difference of its two boundary times.
+    pub fn duration_s(&self) -> f64 {
+        self.end_time_s - self.start_time_s
+    }
+}
+
+/// Whether two observations are the same traversal of the same object.
+///
+/// An interval closes and a new one opens when the object or the travel
+/// direction changes, which the contract's boundaries name: a different
+/// facility or movement is a different object, and the rule direction is a
+/// different traversal.
+fn same_traversal(
+    first: &OpposingTraversalObservation,
+    second: &OpposingTraversalObservation,
+) -> bool {
+    first.facility == second.facility
+        && first.movement == second.movement
+        && first.direction == second.direction
+}
+
+/// The opposing-traversal interval one body's observed state opens, or `None`
+/// when the body carries no interval.
+///
+/// The boundaries are the contract's own, read from the immutable observation
+/// and the compiled scenario:
+///
+/// - the object's **extent** is the facility traversal's compiled reference
+///   `[0, length]`; a facility without a reference path has no extent and can
+///   carry no interval;
+/// - an `either` object has no rule direction, so it can carry no interval;
+/// - the interval records a traversal whose direction is **against** the
+///   object's rule direction, which is its authored nominal direction: nominal
+///   travel is not counted at all, and a rejected decision therefore creates no
+///   interval;
+/// - the record's perceived rule, reason, and affected movement are the
+///   decision's own when this traversal is the opposing option a recorded
+///   decision selected, and are otherwise derived from the compiled policy, so
+///   a traversal the decision did not select still carries an inspectable
+///   reason.
+fn traversal_record(
+    scenario: &CompiledScenario,
+    agents: &AgentStore,
+    index: usize,
+    tick: u64,
+    time_s: f64,
+) -> Option<OpposingTraversalObservation> {
+    let state = agents.route_state[index]?;
+    let facility = scenario.facility(state.facility)?;
+    let length_m = facility.reference()?.geometry().length();
+    if !(0.0..=length_m).contains(&state.s_m) {
+        return None;
+    }
+    let rule_direction = match facility.nominal_direction() {
+        NominalDirection::Forward => MovementDirection::Forward,
+        NominalDirection::Reverse => MovementDirection::Reverse,
+        NominalDirection::Either => return None,
+    };
+    let direction = travel_direction(agents.direction[index]);
+    if direction == rule_direction {
+        return None;
+    }
+    let decision = state.wrong_way_decision.filter(|decision| {
+        decision.option == WrongWayOption::Opposing && decision.facility == state.facility
+    });
+    let (perceived_rule, reason, movement) = match decision {
+        Some(decision) => (decision.perceived_rule, decision.reason, decision.movement),
+        None => {
+            let perceived_rule = scenario
+                .traversal_policy(state.mode_template, state.facility, agents.movement[index])
+                .and_then(|policy| policy.nominal_effect());
+            (
+                perceived_rule,
+                opposing_reason(perceived_rule),
+                agents.movement[index],
+            )
+        }
+    };
+    let violating = !matches!(
+        perceived_rule,
+        Some(PermissionEffect::Permit) | Some(PermissionEffect::Obligate)
+    );
+    Some(OpposingTraversalObservation {
+        agent: AgentId::from_index(index),
+        facility: state.facility,
+        movement,
+        direction,
+        nominal_direction: facility.nominal_direction(),
+        perceived_rule,
+        reason,
+        violating,
+        start_tick: tick,
+        end_tick: tick,
+        start_time_s: time_s,
+        end_time_s: time_s,
+    })
+}
+
+/// Online opposing-traversal interval tracking for one run.
+///
+/// Fed once per tick from the integrated state by
+/// [`Simulation`](crate::Simulation); read through
+/// [`Simulation::opposing_traversal_tracker`](crate::Simulation::opposing_traversal_tracker).
+/// Fields are private: the pass only borrows state, and no caller can inject an
+/// interval a tick did not produce. See [`traversal_record`] for the boundaries
+/// and the module card for the decision the record comes from.
+///
+/// An interval closes exactly once, on the first later observed step that leaves
+/// the extent, leaves the rule direction, or enters a different object, and a
+/// despawn closes it the same way: the agent is no longer observed on its
+/// object. A run that ends with an interval still open closes it through
+/// [`Self::close_open`], whose close time is the interval's last observed tick,
+/// the run's final simulation time.
+#[derive(Debug, Default)]
+pub struct OpposingTraversalTracker {
+    /// Open intervals, ascending by agent, each carrying its last observed tick
+    /// and time.
+    open: BTreeMap<AgentId, OpposingTraversalObservation>,
+    /// Intervals opened on the tick just observed.
+    opened: Vec<OpposingTraversalObservation>,
+    /// Intervals closed on the tick just observed.
+    closed: Vec<OpposingTraversalObservation>,
+    /// Every interval closed so far, in close order: ascending close tick, then
+    /// ascending agent.
+    intervals: Vec<OpposingTraversalObservation>,
+}
+
+impl OpposingTraversalTracker {
+    /// Observe one integrated tick: open, extend, or close every agent's
+    /// opposing-traversal interval.
+    ///
+    /// Call once per tick, after the bodies have stepped and before new demand
+    /// is admitted, so the bodies observed are exactly the ones the tick
+    /// integrated. The pass borrows everything it reads and writes only its own
+    /// records.
+    pub(crate) fn observe(
+        &mut self,
+        agents: &AgentStore,
+        scenario: &CompiledScenario,
+        tick: u64,
+        step: Seconds,
+    ) {
+        let time_s = SimTime::from_tick(tick, step).seconds();
+        self.opened.clear();
+        self.closed.clear();
+        let mut seen: BTreeSet<AgentId> = BTreeSet::new();
+        for index in 0..agents.len() {
+            if !agents.alive[index] {
+                continue;
+            }
+            let agent = AgentId::from_index(index);
+            let Some(traversal) = traversal_record(scenario, agents, index, tick, time_s) else {
+                continue;
+            };
+            seen.insert(agent);
+            if let Some(open) = self.open.get_mut(&agent)
+                && same_traversal(open, &traversal)
+            {
+                open.end_tick = tick;
+                open.end_time_s = time_s;
+                continue;
+            }
+            match self.open.insert(agent, traversal.clone()) {
+                Some(previous) => {
+                    self.opened.push(traversal);
+                    self.close_interval(previous, tick, time_s);
+                }
+                None => self.opened.push(traversal),
+            }
+        }
+        let closing: Vec<AgentId> = self
+            .open
+            .keys()
+            .filter(|agent| !seen.contains(agent))
+            .copied()
+            .collect();
+        for agent in closing {
+            if let Some(open) = self.open.remove(&agent) {
+                self.close_interval(open, tick, time_s);
+            }
+        }
+    }
+
+    /// The intervals that opened on the tick just observed.
+    pub fn opened(&self) -> &[OpposingTraversalObservation] {
+        &self.opened
+    }
+
+    /// The intervals that closed on the tick just observed.
+    pub fn closed(&self) -> &[OpposingTraversalObservation] {
+        &self.closed
+    }
+
+    /// Every interval closed so far, in close order.
+    ///
+    /// An interval still open when the run's last tick has been observed is
+    /// absent here; [`Self::close_open`] closes it at run end.
+    pub fn intervals(&self) -> &[OpposingTraversalObservation] {
+        &self.intervals
+    }
+
+    /// Close every interval still open at the run's end.
+    ///
+    /// The run ending is the contract's last close boundary and its close time
+    /// is the final simulation time, which is the tick the interval was last
+    /// observed on. A run-end closure emits no event, exactly as a run-end
+    /// close-pass closure does: no tick remains to carry one, so the closed
+    /// interval is read from here. The closures are appended in
+    /// `(close tick, agent)` order after the tick closures, and closing twice is
+    /// impossible because the interval is removed.
+    pub fn close_open(&mut self) {
+        let mut closed: Vec<OpposingTraversalObservation> =
+            std::mem::take(&mut self.open).into_values().collect();
+        closed.sort_by_key(|interval| (interval.end_tick, interval.agent));
+        self.intervals.extend(closed);
+    }
+
+    /// Close one interval at `tick`, recording it in both close surfaces.
+    fn close_interval(&mut self, open: OpposingTraversalObservation, tick: u64, time_s: f64) {
+        let closed = OpposingTraversalObservation {
+            end_tick: tick,
+            end_time_s: time_s,
+            ..open
+        };
+        self.closed.push(closed.clone());
+        self.intervals.push(closed);
+    }
 }
 
 #[cfg(test)]
@@ -833,5 +1145,275 @@ mod tests {
         let kept = decide(inputs, REFUSING_DRAW);
         assert_eq!(kept.option, WrongWayOption::Nominal);
         assert_eq!(kept.reason, WrongWayReason::CompliantChoice);
+    }
+}
+
+/// The opposing-traversal interval's own boundaries, driven from a hand-built
+/// agent store so the geometric and rule boundaries the kernel's own runs do
+/// not reach — an `either` object, a body centre outside the extent, a run that
+/// ends mid-interval — are covered directly.
+#[cfg(test)]
+mod interval_tests {
+    use super::*;
+    use tangle_model::{ModeTemplateId, PathId, parse_scenario_source_v2};
+
+    use crate::agent::{AgentInit, AgentMode, RouteState};
+
+    /// The straight reference every fixture travels: the world x axis.
+    const REFERENCE_LENGTH_M: f64 = 100.0;
+
+    /// The fixed step the tracker tests advance by.
+    const DT: f64 = 0.05;
+
+    /// A version-2 document with one 100 m reference and one `rider` facility
+    /// over it, whose authored nominal direction is `nominal` and whose
+    /// permission statements are `permissions`. No demand: a test drives the
+    /// tracker by hand.
+    fn scenario(nominal: &str, permissions: &str) -> CompiledScenario {
+        let source = parse_scenario_source_v2(&format!(
+            "{{ schema_version: 2, id: 'wrong_way_interval', \
+             coordinate_system: {{ x: 'east_m', y: 'north_m' }}, \
+             paths: [ {{ id: 'guide', points: [ {{ x: 0.0, y: 0.0 }}, \
+             {{ x: {REFERENCE_LENGTH_M}, y: 0.0 }} ] }} ], \
+             portals: [ {{ id: 'entry', path: 'guide', end: 'start', width_m: 3.0 }}, \
+             {{ id: 'exit', path: 'guide', end: 'end', width_m: 3.0 }} ], \
+             regions: [ {{ id: 'band', points: [ {{ x: 0.0, y: -1.5 }}, \
+             {{ x: {REFERENCE_LENGTH_M}, y: -1.5 }}, \
+             {{ x: {REFERENCE_LENGTH_M}, y: 1.5 }}, {{ x: 0.0, y: 1.5 }} ] }} ], \
+             facilities: [ {{ id: 'rider_facility', region: 'band', \
+             reference_path: 'guide', width_m: 3.0, nominal_direction: '{nominal}', \
+             access: {{ modes: [ 'rider' ] }}, lateral_use: 'shared', \
+             speed_policy: {{ limit_mps: null }} }} ], \
+             movements: [ {{ id: 'through', from: 'entry', to: 'exit', \
+             path: 'guide', priority: 0, direction: 'forward' }} ], \
+             mode_templates: [ {{ id: 'rider', \
+             body: {{ kind: 'capsule', length_m: {{ min: 1.8, max: 1.8 }}, \
+             radius_m: {{ min: 0.35, max: 0.35 }} }}, motion: 'single_body_wheeled', \
+             tactics: [ 'follow', 'stop', 'yield' ], \
+             access: {{ facility_kinds: [ 'facility' ], nominal_direction: 'either', \
+             speed_policy: {{ limit_mps: null }} }}, occupancy: 'operator_only', \
+             profiles: {{ speed_mps: {{ min: 6.0, max: 6.0 }}, \
+             max_accel_mps2: {{ min: 1.2, max: 1.2 }}, \
+             comfortable_brake_mps2: {{ min: 2.0, max: 2.0 }}, \
+             time_gap_s: {{ min: 1.0, max: 1.0 }}, \
+             steering_rate_max_rad_s: {{ min: 0.9, max: 0.9 }}, \
+             lateral_clearance_m: {{ min: 0.3, max: 0.3 }}, \
+             compliance: {{ min: 1.0, max: 1.0 }} }} }} ], \
+             permissions: [{permissions}] }}"
+        ))
+        .expect("the document is version 2");
+        CompiledScenario::compile_v2(source).expect("the scenario compiles")
+    }
+
+    /// One rider body on the single facility at `s_m`, travelling `direction`.
+    fn push_rider(store: &mut AgentStore, compiled: &CompiledScenario, s_m: f64, direction: f64) {
+        let facility = FacilityId::from_index(0);
+        let geometry = compiled
+            .facility(facility)
+            .and_then(|facility| facility.reference())
+            .expect("the facility has a compiled reference")
+            .geometry();
+        let position = geometry.position_at(s_m);
+        let route = RouteState::project(
+            ModeTemplateId::from_index(0),
+            facility,
+            geometry,
+            position,
+            direction,
+            None,
+            None,
+        );
+        store.push(AgentInit {
+            mode: AgentMode::Vehicle,
+            path: PathId::from_index(0),
+            distance_m: s_m,
+            speed_mps: 5.0,
+            position,
+            heading_rad: 0.0,
+            body_length_m: 1.8,
+            body_width_m: 0.7,
+            direction,
+            movement: None,
+            profile: None,
+            narrow_profile: None,
+            pedestrian_route: None,
+            pedestrian_profile: None,
+            route_state: Some(route),
+        });
+    }
+
+    /// The rider's route state, for a test that changes what the tracker reads.
+    fn route(store: &mut AgentStore) -> &mut RouteState {
+        store.route_state[0]
+            .as_mut()
+            .expect("the rider carries route state")
+    }
+
+    fn observe(
+        tracker: &mut OpposingTraversalTracker,
+        store: &AgentStore,
+        compiled: &CompiledScenario,
+        tick: u64,
+    ) {
+        tracker.observe(store, compiled, tick, Seconds::from_secs(DT));
+    }
+
+    #[test]
+    fn the_interval_records_only_a_traversal_against_the_rule_direction() {
+        let compiled = scenario("forward", "");
+        let mut store = AgentStore::default();
+        push_rider(&mut store, &compiled, 50.0, 1.0);
+        let mut tracker = OpposingTraversalTracker::default();
+
+        // Nominal travel is not counted at all.
+        observe(&mut tracker, &store, &compiled, 1);
+        assert!(tracker.opened().is_empty());
+        assert!(tracker.intervals().is_empty());
+
+        // The opposing traversal opens one interval, against the authored
+        // nominal direction and inside the reference extent.
+        store.direction[0] = -1.0;
+        observe(&mut tracker, &store, &compiled, 2);
+        assert_eq!(tracker.opened().len(), 1);
+        let opened = &tracker.opened()[0];
+        assert_eq!(opened.agent, AgentId::from_index(0));
+        assert_eq!(opened.facility, FacilityId::from_index(0));
+        assert_eq!(opened.direction, MovementDirection::Reverse);
+        assert_eq!(opened.nominal_direction, NominalDirection::Forward);
+        assert_eq!(opened.perceived_rule, None);
+        assert_eq!(opened.reason, WrongWayReason::NoncompliantChoice);
+        assert!(opened.violating, "no statement makes it legal");
+        assert_eq!(opened.start_tick, 2);
+        assert_eq!(opened.movement, None);
+
+        // A body centre outside the extent carries no interval.
+        route(&mut store).s_m = REFERENCE_LENGTH_M + 1.0;
+        observe(&mut tracker, &store, &compiled, 3);
+        assert!(tracker.opened().is_empty());
+        assert_eq!(tracker.closed().len(), 1, "leaving the extent closes it");
+        assert_eq!(tracker.closed()[0].end_tick, 3);
+        assert_eq!(tracker.intervals(), tracker.closed());
+    }
+
+    #[test]
+    fn an_either_object_carries_no_interval() {
+        let compiled = scenario("either", "");
+        let mut store = AgentStore::default();
+        push_rider(&mut store, &compiled, 50.0, -1.0);
+        let mut tracker = OpposingTraversalTracker::default();
+        observe(&mut tracker, &store, &compiled, 1);
+        assert!(
+            tracker.opened().is_empty(),
+            "an object with no rule direction has no opposing traversal"
+        );
+    }
+
+    #[test]
+    fn a_permitted_opposing_traversal_is_recorded_legal() {
+        let compiled = scenario(
+            "forward",
+            "{ id: 'contraflow', kind: 'nominal_direction', holder: 'rider', \
+             target: 'rider_facility', effect: 'permit' }",
+        );
+        let mut store = AgentStore::default();
+        push_rider(&mut store, &compiled, 50.0, -1.0);
+        let mut tracker = OpposingTraversalTracker::default();
+        observe(&mut tracker, &store, &compiled, 1);
+        let opened = &tracker.opened()[0];
+        assert_eq!(opened.perceived_rule, Some(PermissionEffect::Permit));
+        assert_eq!(opened.reason, WrongWayReason::LegalPermission);
+        assert!(
+            !opened.violating,
+            "a permitted opposing traversal is legal, never a violation"
+        );
+    }
+
+    #[test]
+    fn a_recorded_decision_supplies_the_recorded_rule_reason_and_movement() {
+        let compiled = scenario("forward", "");
+        let mut store = AgentStore::default();
+        push_rider(&mut store, &compiled, 50.0, -1.0);
+        store.movement[0] = None;
+        route(&mut store).wrong_way_decision = Some(crate::wrong_way::WrongWayDecision {
+            perceived_rule: Some(PermissionEffect::Obligate),
+            option: WrongWayOption::Opposing,
+            reason: WrongWayReason::LegalObligation,
+            facility: FacilityId::from_index(0),
+            movement: Some(MovementId::from_index(0)),
+            time_saving_s: 12.0,
+            opposing_density_per_km: 3.0,
+            urgency: 0.5,
+            compliance: 0.0,
+        });
+        let mut tracker = OpposingTraversalTracker::default();
+        observe(&mut tracker, &store, &compiled, 1);
+        let opened = &tracker.opened()[0];
+        assert_eq!(opened.perceived_rule, Some(PermissionEffect::Obligate));
+        assert_eq!(opened.reason, WrongWayReason::LegalObligation);
+        assert!(!opened.violating, "an obligated traversal is legal");
+        assert_eq!(
+            opened.movement,
+            Some(MovementId::from_index(0)),
+            "the entry leaves the movement route behind, so the decision is \
+             the only surviving spelling of the connector it entered on"
+        );
+    }
+
+    #[test]
+    fn a_direction_change_and_a_new_object_close_and_reopen_the_interval() {
+        let compiled = scenario("forward", "");
+        let mut store = AgentStore::default();
+        push_rider(&mut store, &compiled, 50.0, -1.0);
+        let mut tracker = OpposingTraversalTracker::default();
+        observe(&mut tracker, &store, &compiled, 1);
+        assert_eq!(tracker.opened().len(), 1);
+
+        // The traversal becomes the rule direction: the interval closes and no
+        // new one opens.
+        store.direction[0] = 1.0;
+        observe(&mut tracker, &store, &compiled, 2);
+        assert!(tracker.opened().is_empty());
+        assert_eq!(tracker.closed().len(), 1);
+        assert_eq!(tracker.closed()[0].end_tick, 2);
+
+        // Turning round again is a new interval on the same object.
+        store.direction[0] = -1.0;
+        observe(&mut tracker, &store, &compiled, 3);
+        assert_eq!(tracker.opened().len(), 1);
+        assert_eq!(tracker.opened()[0].start_tick, 3);
+        assert_eq!(tracker.intervals().len(), 1, "the second one is still open");
+
+        // A despawn is a close: the body is no longer observed on its object.
+        store.alive[0] = false;
+        observe(&mut tracker, &store, &compiled, 4);
+        assert_eq!(tracker.closed().len(), 1);
+        assert_eq!(tracker.closed()[0].end_tick, 4);
+        assert_eq!(tracker.intervals().len(), 2);
+    }
+
+    #[test]
+    fn a_run_that_ends_mid_interval_closes_it_at_its_last_observed_tick() {
+        let compiled = scenario("forward", "");
+        let mut store = AgentStore::default();
+        push_rider(&mut store, &compiled, 50.0, -1.0);
+        let mut tracker = OpposingTraversalTracker::default();
+        for tick in 1..=3 {
+            observe(&mut tracker, &store, &compiled, tick);
+        }
+        assert!(tracker.intervals().is_empty(), "still open");
+
+        tracker.close_open();
+        let intervals = tracker.intervals();
+        assert_eq!(intervals.len(), 1);
+        assert_eq!(intervals[0].start_tick, 1);
+        assert_eq!(
+            intervals[0].end_tick, 3,
+            "the run ending closes at the final simulation time"
+        );
+        assert!((intervals[0].duration_s() - 2.0 * DT).abs() < 1e-12);
+        assert!(
+            tracker.closed().is_empty(),
+            "a run-end close emits no event"
+        );
     }
 }

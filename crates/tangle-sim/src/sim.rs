@@ -87,7 +87,9 @@ use crate::steering::{
 };
 use crate::time::SimTime;
 use crate::units::Seconds;
-use crate::wrong_way::{self, WrongWayInputs, WrongWayOption};
+use crate::wrong_way::{
+    self, OpposingTraversalObservation, OpposingTraversalTracker, WrongWayInputs, WrongWayOption,
+};
 
 /// Extra clearance in metres demanded beyond two bodies' half-lengths when a
 /// portal admits a vehicle.
@@ -300,6 +302,12 @@ pub struct Simulation {
     /// metrics pass it only borrows state and emits nothing, so it cannot change
     /// the simulated trajectory, an event stream, or a golden.
     close_passes: ClosePassTracker,
+    /// Opposing-traversal interval tracking over the same integrated tick: the
+    /// wrong-way intervals a body's traversal against a facility's rule
+    /// direction opens. See [`crate::wrong_way`] for the boundaries. Like the
+    /// metrics and close-pass passes it only borrows state, so it cannot change
+    /// the simulated trajectory.
+    opposing_traversals: OpposingTraversalTracker,
     /// Reused candidate buffer for a crossing-occupancy query, so the query
     /// does not allocate inside the tick loop.
     candidates: Vec<AgentId>,
@@ -453,6 +461,7 @@ impl Simulation {
             safety: SafetyMonitor::default(),
             metrics: InteractionMetrics::default(),
             close_passes: ClosePassTracker::default(),
+            opposing_traversals: OpposingTraversalTracker::default(),
             candidates: Vec::new(),
             events: Vec::new(),
             transitions: Vec::new(),
@@ -827,6 +836,28 @@ impl Simulation {
         self.close_passes.close_open();
     }
 
+    /// Opposing-traversal interval tracking for the run so far.
+    ///
+    /// Every closed wrong-way interval, with the perceived rule, the decision
+    /// reason, the affected facility and movement, and the legality the
+    /// traversal carries. See [`crate::wrong_way`] for the boundaries and the
+    /// determinism argument.
+    pub fn opposing_traversal_tracker(&self) -> &OpposingTraversalTracker {
+        &self.opposing_traversals
+    }
+
+    /// Close every wrong-way interval still open at the run's end.
+    ///
+    /// The run ending is the contract's last close boundary and its close time
+    /// is the final simulation time, so a consumer that has performed its last
+    /// [`Self::step`] calls this once before reading
+    /// [`Self::opposing_traversal_tracker`]. A run-end closure emits no event:
+    /// no tick remains to carry one, so the closed interval is read from the
+    /// tracker rather than from a step's event buffer.
+    pub fn close_open_opposing_traversals(&mut self) {
+        self.opposing_traversals.close_open();
+    }
+
     /// The [`Event::ClosePass`] of one closed observation, or `None` when the
     /// contract's applicability does not hold.
     ///
@@ -961,6 +992,30 @@ impl Simulation {
             .filter_map(|observation| self.close_pass_event(observation))
             .collect();
         self.events.extend(closed);
+
+        // Opposing-traversal tracking reads the same integrated bodies and the
+        // tick-start route state, so an interval's two boundaries describe
+        // exactly the state this tick produced. The kernel emits one
+        // [`Event::OpposingTraversal`] for each boundary the tick crossed.
+        self.opposing_traversals.observe(
+            &self.agents,
+            &self.scenario,
+            self.tick,
+            self.config.step(),
+        );
+        let boundaries: Vec<Event> = self
+            .opposing_traversals
+            .closed()
+            .iter()
+            .map(|interval| opposing_traversal_event(interval, false))
+            .chain(
+                self.opposing_traversals
+                    .opened()
+                    .iter()
+                    .map(|interval| opposing_traversal_event(interval, true)),
+            )
+            .collect();
+        self.events.extend(boundaries);
 
         self.advance_demand(dt);
 
@@ -1611,10 +1666,14 @@ impl Simulation {
                 .map(|inputs| wrong_way::decide(inputs, draw));
             // Every evaluation consumes its request and advances the agent's
             // decision ordinal, so a later request draws its own value rather
-            // than reusing the first, exactly as the decision record fixes.
+            // than reusing the first, exactly as the decision record fixes. The
+            // decision is recorded on the route state too, so the
+            // opposing-traversal interval can present the decision's own
+            // perceived rule, reason, and affected movement.
             self.agents.route_state[index] = Some(RouteState {
                 wrong_way_entry_requested: false,
                 wrong_way_decisions: ordinal + 1,
+                wrong_way_decision: decision.or(state.wrong_way_decision),
                 ..state
             });
             if let Some(decision) = decision
@@ -4170,6 +4229,27 @@ fn reference_heading(direction: f64, travel_rad: f64) -> f64 {
         wrap_pi(travel_rad - std::f64::consts::PI)
     } else {
         travel_rad
+    }
+}
+
+/// The [`Event::OpposingTraversal`] record of one interval boundary.
+///
+/// The contract gives an `OpposingTraversal` record to a traversal against a
+/// rule direction, which is exactly what an interval is, so every boundary of
+/// an interval carries one: `entering` is `true` at the open boundary and
+/// `false` at the close boundary, and the record's other fields are the ones
+/// the interval latched when it opened.
+fn opposing_traversal_event(interval: &OpposingTraversalObservation, entering: bool) -> Event {
+    Event::OpposingTraversal {
+        agent: interval.agent,
+        facility: interval.facility,
+        movement: interval.movement,
+        direction: interval.direction,
+        nominal_direction: interval.nominal_direction,
+        perceived_rule: interval.perceived_rule,
+        reason: interval.reason,
+        violating: interval.violating,
+        entering,
     }
 }
 

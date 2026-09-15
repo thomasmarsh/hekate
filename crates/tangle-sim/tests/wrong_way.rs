@@ -27,10 +27,14 @@
 use std::collections::BTreeMap;
 
 use glam::DVec2;
-use tangle_model::{CompiledScenario, CrossingId, MovementDirection, parse_scenario_source_v2};
+use tangle_model::{
+    CompiledScenario, CrossingId, MovementDirection, NominalDirection, PermissionEffect,
+    parse_scenario_source_v2,
+};
 use tangle_sim::{
-    AgentId, AgentMode, DespawnReason, Event, EventKind, FacilityTransitionRecord, ManeuverState,
+    AgentId, AgentMode, DespawnReason, Event, FacilityTransitionRecord, ManeuverState,
     NEAR_MISS_THRESHOLD_M, RouteStateSample, RunConfig, Simulation, SnapshotDetail, TransitionKind,
+    WrongWayReason,
 };
 
 /// The fixed step the fixtures run at, which is [`RunConfig`]'s own default.
@@ -521,24 +525,21 @@ fn a_connector_handoff_emits_one_facility_transition_event_mapping_its_record() 
                 "the step buffer is non-decreasing by the documented order key"
             );
         }
-        // The rider's own records keep the documented kind order: nothing that
-        // sorts after a handoff precedes it within one step.
-        let mut handed_off = false;
-        for event in output
+        // The rider's own records keep the documented kind order, so the
+        // handoff takes its own position in the step's sort: the record is the
+        // handoff fact the physical-advance stage already produced, and only
+        // the kinds that sort after a handoff (an opposing-traversal interval
+        // edge, a close pass) can follow it within one step.
+        let kinds: Vec<u8> = output
             .events()
             .iter()
             .filter(|event| event.agent() == rider)
-        {
-            if event.kind() == EventKind::FacilityTransition {
-                handed_off = true;
-            } else {
-                assert!(
-                    !handed_off,
-                    "no kind after facility_transition precedes it: {:?}",
-                    event.kind()
-                );
-            }
-        }
+            .map(|event| event.kind().order())
+            .collect();
+        assert!(
+            kinds.windows(2).all(|pair| pair[0] <= pair[1]),
+            "the rider's records keep the documented kind order: {kinds:?}"
+        );
         records.extend(
             output
                 .facility_transitions()
@@ -1958,4 +1959,271 @@ fn no_authored_flag_can_disable_a_query() {
             "a flag that would disable a query is rejected, not accepted: {flag}"
         );
     }
+}
+
+/// One `OpposingTraversal` boundary as a test reads it.
+#[derive(Debug, Clone, PartialEq)]
+struct IntervalBoundary {
+    tick: u64,
+    entering: bool,
+    facility: usize,
+    movement: Option<usize>,
+    direction: MovementDirection,
+    nominal_direction: NominalDirection,
+    perceived_rule: Option<PermissionEffect>,
+    reason: WrongWayReason,
+    violating: bool,
+}
+
+/// Run `sim` for at most `steps`, returning `rider`'s opposing-traversal
+/// boundaries in emission order, the tick of each of its facility handoffs, and
+/// its despawn tick.
+fn rider_boundaries(
+    sim: &mut Simulation,
+    rider: AgentId,
+    steps: u64,
+) -> (Vec<IntervalBoundary>, Vec<u64>, Option<u64>) {
+    let mut boundaries = Vec::new();
+    let mut handoffs = Vec::new();
+    let mut despawned = None;
+    for _ in 0..steps {
+        let output = sim.step();
+        let tick = output.time().tick();
+        for event in output.events() {
+            if event.agent() != rider {
+                continue;
+            }
+            match event {
+                Event::OpposingTraversal {
+                    facility,
+                    movement,
+                    direction,
+                    nominal_direction,
+                    perceived_rule,
+                    reason,
+                    violating,
+                    entering,
+                    ..
+                } => boundaries.push(IntervalBoundary {
+                    tick,
+                    entering: *entering,
+                    facility: facility.index(),
+                    movement: movement.map(tangle_model::MovementId::index),
+                    direction: *direction,
+                    nominal_direction: *nominal_direction,
+                    perceived_rule: *perceived_rule,
+                    reason: *reason,
+                    violating: *violating,
+                }),
+                Event::FacilityTransition { .. } => handoffs.push(tick),
+                Event::Despawned { .. } => despawned = Some(tick),
+                _ => {}
+            }
+        }
+        if despawned.is_some() {
+            break;
+        }
+    }
+    (boundaries, handoffs, despawned)
+}
+
+/// The interval boundaries of one turned rider in the forward-rule fixture.
+fn turned_rider_boundaries() -> (Vec<IntervalBoundary>, Vec<u64>, Option<u64>) {
+    let mut sim = build(&forward_rule_scenario(72.0));
+    let (rider, _) = lone_rider_on(&mut sim, 0, 5.0..=20.0);
+    assert!(sim.request_wrong_way_entry(rider));
+    rider_boundaries(&mut sim, rider, 600)
+}
+
+/// A clear opposing entry records exactly one interval per object the rider
+/// traverses, opened and closed at the contract's own boundaries: the interval
+/// opens on the first step the rider's centre is inside the facility's extent
+/// and its direction is against the rule, and it closes on the handoff that
+/// takes it to a different object, then once more at its route exit. The record
+/// carries the decision's perceived rule, reason code, affected facility and
+/// movement, and the legality of the traversal.
+#[test]
+fn the_interval_opens_at_the_entry_and_closes_at_the_object_boundary() {
+    let (boundaries, handoffs, despawned) = turned_rider_boundaries();
+
+    assert_eq!(
+        boundaries.len(),
+        4,
+        "two intervals, each with an open and a close boundary: {boundaries:?}"
+    );
+    let open = &boundaries[0];
+    assert!(open.entering);
+    assert_eq!(open.facility, 0);
+    assert_eq!(open.direction, MovementDirection::Reverse);
+    assert_eq!(open.nominal_direction, NominalDirection::Forward);
+    assert_eq!(open.perceived_rule, None, "no statement binds the pair");
+    assert_eq!(open.reason, WrongWayReason::NoncompliantChoice);
+    assert!(open.violating, "no statement makes the traversal legal");
+    assert_eq!(
+        open.movement,
+        Some(0),
+        "the affected movement is the connector the rider entered on"
+    );
+
+    let close = &boundaries[1];
+    assert!(!close.entering);
+    assert_eq!(close.facility, 0, "the same object it opened on");
+    assert_eq!(
+        close.tick, handoffs[0],
+        "the connector handoff is the close boundary"
+    );
+    assert!(open.tick < close.tick, "the interval spans at least a step");
+    assert_eq!(
+        close.reason, open.reason,
+        "the record is the one it latched"
+    );
+    assert_eq!(close.violating, open.violating);
+
+    let opened_again = &boundaries[2];
+    assert!(opened_again.entering);
+    assert_eq!(
+        opened_again.facility, 1,
+        "the destination object opens its own interval"
+    );
+    assert_eq!(
+        opened_again.tick, close.tick,
+        "the handoff is both boundaries"
+    );
+
+    let closed_at_exit = &boundaries[3];
+    assert!(!closed_at_exit.entering);
+    assert_eq!(closed_at_exit.facility, 1);
+    assert_eq!(
+        closed_at_exit.tick,
+        despawned.expect("the rider despawns at the end of its route"),
+        "the route exit is the final close boundary"
+    );
+}
+
+/// A rejected decision creates no interval: the request is recorded and the
+/// kernel evaluates the decision, but the rider never traverses the opposing
+/// direction, so neither boundary is emitted and the rider completes its
+/// nominal route.
+#[test]
+fn a_rejected_decision_creates_no_interval() {
+    let refused = forward_rule_scenario(72.0).replace("urgency: 1.0", "urgency: 0.0");
+    let mut sim = build(&refused);
+    let (rider, _) = lone_rider_on(&mut sim, 0, 5.0..=20.0);
+    assert!(
+        sim.request_wrong_way_entry(rider),
+        "the request itself is recorded"
+    );
+
+    let (boundaries, handoffs, despawned) = rider_boundaries(&mut sim, rider, 600);
+
+    assert!(
+        boundaries.is_empty(),
+        "a rejection that selects the nominal option emits no boundary: {boundaries:?}"
+    );
+    assert_eq!(
+        handoffs.len(),
+        0,
+        "the rejected rider never enters the opposing traversal that continues onto the connector"
+    );
+    assert!(
+        despawned.is_some(),
+        "the rider completes its nominal route and despawns"
+    );
+}
+
+/// A scenario that authors neither the wrong-way policy nor the capability it
+/// gates is inapplicable: the entry seam refuses the request, and no interval
+/// boundary exists for any traversal, so the run's stream is the one a scenario
+/// with none of the increment-2 wrong-way shapes produces.
+#[test]
+fn an_inapplicable_scenario_emits_no_opposing_traversal() {
+    let inapplicable = forward_rule_scenario(72.0)
+        .replace(", 'reverse_direction'", "")
+        .replace(WRONG_WAY_POLICY, "");
+    let mut sim = build(&inapplicable);
+    let (rider, _) = lone_rider_on(&mut sim, 0, 5.0..=20.0);
+    assert!(
+        !sim.request_wrong_way_entry(rider),
+        "no `maneuver_policy.wrong_way`, no entry"
+    );
+
+    let (boundaries, _, despawned) = rider_boundaries(&mut sim, rider, 600);
+
+    assert!(boundaries.is_empty(), "{boundaries:?}");
+    assert!(despawned.is_some(), "the rider completes its nominal route");
+}
+
+/// A `permit` statement makes the opposing traversal legal, so its interval is
+/// recorded under that rule and never as a violation.
+#[test]
+fn a_permitted_opposing_traversal_is_recorded_legal() {
+    let permitted = forward_rule_scenario(72.0).replace(
+        "  movements: [",
+        "  permissions: [ { id: 'contraflow_a', kind: 'nominal_direction', \
+         holder: 'rider', target: 'a', effect: 'permit' } ],\n  movements: [",
+    );
+    let mut sim = build(&permitted);
+    let (rider, _) = lone_rider_on(&mut sim, 0, 5.0..=20.0);
+    assert!(sim.request_wrong_way_entry(rider));
+
+    let (boundaries, _, _) = rider_boundaries(&mut sim, rider, 600);
+
+    let open = boundaries.first().expect("the permitted entry opens one");
+    assert_eq!(open.perceived_rule, Some(PermissionEffect::Permit));
+    assert_eq!(open.reason, WrongWayReason::LegalPermission);
+    assert!(
+        !open.violating,
+        "a permitted opposing traversal is a legal interval"
+    );
+}
+
+/// The interval boundaries are a pure function of the run, so an identical
+/// replay reproduces every one of them with the same tick, object, and record.
+#[test]
+fn the_interval_boundaries_survive_replay() {
+    let first = turned_rider_boundaries();
+    let second = turned_rider_boundaries();
+
+    assert_eq!(first, second, "the same run reproduces the same boundaries");
+    assert_eq!(first.0.len(), 4, "the replayed run reports both intervals");
+}
+
+/// The run ending is a close boundary: an interval still open on the last step
+/// closes at the final simulation time, and the run-end closure emits no event
+/// because no tick remains to carry one.
+#[test]
+fn an_interval_open_at_the_run_end_closes_at_the_final_simulation_time() {
+    let mut sim = build(&forward_rule_scenario(72.0));
+    let (rider, _) = lone_rider_on(&mut sim, 0, 5.0..=20.0);
+    assert!(sim.request_wrong_way_entry(rider));
+
+    let mut opened = 0;
+    let mut last_tick = 0;
+    for _ in 0..600 {
+        let output = sim.step();
+        last_tick = output.time().tick();
+        opened += output
+            .events()
+            .iter()
+            .filter(|event| matches!(event, Event::OpposingTraversal { entering: true, .. }))
+            .count();
+        if opened > 0 {
+            break;
+        }
+    }
+    assert_eq!(opened, 1, "the entry opens exactly one interval");
+    assert!(
+        sim.opposing_traversal_tracker().intervals().is_empty(),
+        "the interval is still open"
+    );
+
+    sim.close_open_opposing_traversals();
+    let intervals = sim.opposing_traversal_tracker().intervals();
+    assert_eq!(intervals.len(), 1);
+    assert_eq!(intervals[0].start_tick, last_tick);
+    assert_eq!(
+        intervals[0].end_tick, last_tick,
+        "the close time is the run's final simulation time"
+    );
+    assert_eq!(intervals[0].duration_s(), 0.0);
 }

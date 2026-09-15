@@ -18,6 +18,7 @@ use crate::profile::{PedestrianProfile, VehicleProfile};
 use crate::stage::{LateralManeuverRequest, ManeuverCorridor, ManeuverReason, ManeuverState};
 use crate::steering::BoundedSteering;
 use crate::time::SimTime;
+use crate::wrong_way::WrongWayDecision;
 
 /// Which mode of agent a slot holds.
 ///
@@ -195,6 +196,12 @@ pub(crate) struct RouteState {
     /// stream ([`crate::wrong_way::maneuver_draw`]). A repeated entry request
     /// therefore draws its own value rather than reusing the first.
     pub(crate) wrong_way_decisions: u32,
+    /// The most recent wrong-way decision this agent evaluated, or `None`
+    /// before its first decision. It is the record the opposing-traversal
+    /// interval reads its perceived rule, reason code, affected movement, and
+    /// legality from, so an entry the kernel decided presents the decision's
+    /// own facts rather than a re-derivation.
+    pub(crate) wrong_way_decision: Option<WrongWayDecision>,
 }
 
 impl RouteState {
@@ -243,6 +250,7 @@ impl RouteState {
             maneuver_reason: None,
             wrong_way_entry_requested: false,
             wrong_way_decisions: 0,
+            wrong_way_decision: None,
         }
     }
 
