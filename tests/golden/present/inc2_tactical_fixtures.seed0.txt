@@ -1,0 +1,35 @@
+Increment 2 tactical overlays: seed 0, step 0.05 s
+
+scenarios/phase2/inc2/narrow_passing_v2.json5
+  corridor opened at tick 18 for #0
+  corridor #0  facility 0  usable corridor -1.97..1.97 m  offset 0.00 m  clearance 0.75 m  horizon 2.00 s
+  target none (no fixed target offset)
+  gap none (no predicted clearance)
+  maneuver none (no open maneuver)
+  rule none (no open opposing traversal)
+  maneuver opened at tick 712 for #1
+  corridor #1  facility 0  usable corridor -1.90..1.90 m  offset 0.00 m  clearance 0.75 m  horizon 2.00 s
+  target #1  target offset 1.64 m (left)  from 0.00 m
+  gap #1  predicted min clearance 1.63 m  target 0.75 m  margin 0.88 m  horizon 2.00 s
+  maneuver #1  maneuver preparing  tactic pass  edge attempted  reason slower_leader  partner #0  target 1.64 m (left)  facility 0 -> none
+  rule none (no open opposing traversal)
+  last maneuver frame at tick 1097 for #1
+  corridor #1  facility 0  usable corridor -1.90..1.90 m  offset 0.00 m  clearance 0.75 m  horizon 2.00 s
+  target #1  target offset 1.64 m (left)  from 0.00 m
+  gap #1  predicted min clearance 1.07 m  target 0.75 m  margin 0.32 m  horizon 2.00 s
+  maneuver #1  maneuver returning  tactic pass  edge completed  reason settled  partner #0  target 1.64 m (left)  facility 0 -> none
+  rule none (no open opposing traversal)
+
+scenarios/phase2/inc2/narrow_wrong_way_v2.json5 (occupied opposing corridor)
+  wrong_way opened at tick 121 for #2
+  corridor #2  facility 5  usable corridor -1.22..1.22 m  offset -0.00 m  clearance none  horizon none
+  target none (no fixed target offset)
+  gap none (no predicted clearance)
+  maneuver none (no open maneuver)
+  rule #2  opposing facility 5  movement 3  direction reverse  nominal forward  rule permit  reason legal_permission  violating false
+  run end at tick 600 for #2
+  corridor #2  facility 5  usable corridor -1.22..1.22 m  offset -0.00 m  clearance none  horizon none
+  target none (no fixed target offset)
+  gap none (no predicted clearance)
+  maneuver none (no open maneuver)
+  rule #2  opposing facility 5  movement 3  direction reverse  nominal forward  rule permit  reason legal_permission  violating false
