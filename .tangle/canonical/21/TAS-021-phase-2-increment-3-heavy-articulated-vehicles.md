@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T20:10:01Z
 summary: Increment 3 adds buses, rigid trucks, and a tractor-semitrailer with segment-level swept collision evidence.
-next: Add bus and rigid-truck templates with heavy-vehicle dynamics and swept turning envelopes.
+next: "[[tas-6p6tqvwkmq42ckx4cd9h1enx54-add-bus-and-rigid-truck-box-templates-with]]"
 ---
 
 # Outcome
