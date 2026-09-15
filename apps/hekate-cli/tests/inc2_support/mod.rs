@@ -205,6 +205,20 @@ pub const FIXTURES: [Fixture; 6] = [
     },
 ];
 
+// The determinism and golden suites hand-maintain one `#[test]` per
+// fixture+preset, so growing either table without adding its cases would
+// silently leave the new entry untested. These guards turn that into a build
+// failure that points the author at the per-case lists in `inc2_determinism.rs`
+// and `inc2_trace.rs`.
+const _: () = assert!(
+    FIXTURES.len() == 6,
+    "a new fixture needs its per-case tests added to inc2_determinism.rs and inc2_trace.rs"
+);
+const _: () = assert!(
+    PRESETS.len() == 2,
+    "a new preset needs its per-case tests added to inc2_determinism.rs and inc2_trace.rs"
+);
+
 /// A repository-root-relative path resolved against the test binary's crate.
 pub fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

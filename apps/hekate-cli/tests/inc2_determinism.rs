@@ -50,8 +50,8 @@ use hekate_sim::{
     AgentId, Event, ManeuverState, RunConfig, Seconds, Simulation, SnapshotDetail, maneuver_draw,
 };
 use inc2_support::{
-    FIXTURES, Fixture, PRESETS, Plan, SEED_BANK, STANDARD_STEP_S, assert_maneuver_occurs,
-    canonical, repo_path, run,
+    FIXTURES, Fixture, PRESETS, SEED_BANK, STANDARD_STEP_S, assert_maneuver_occurs, canonical,
+    repo_path, run,
 };
 
 /// A seed that is not banked, used only to prove a trace hash is not constant.
@@ -84,70 +84,211 @@ impl Drop for Scratch {
     }
 }
 
-/// Every checked-in Increment 2 fixture repeats its canonical trace bytes and
-/// hash at the fixed pinned seed at both required presets, and a different seed
-/// changes the trace.
-///
-/// The driven runs are `TraceRecorder` runs, and for the three fixtures whose
-/// maneuver needs no request they are asserted to be exactly the
-/// [`canonical_trace`] bytes `hekate-cli run` writes, so the Standard half of
-/// the reproducibility claim is CLI-reproducible for those three.
-#[test]
-fn every_inc2_fixture_reproduces_its_trace_hash_at_both_required_presets() {
-    for fixture in FIXTURES {
-        for (preset, step_s) in PRESETS {
-            let first = run(&fixture, fixture.pinned_seed, step_s);
-            let second = run(&fixture, fixture.pinned_seed, step_s);
-            assert_eq!(
-                first.trace.hash(),
-                second.trace.hash(),
-                "{} [{preset}]: the same seed and step produced two trace hashes",
-                fixture.id
-            );
-            assert_eq!(
-                first.trace.bytes(),
-                second.trace.bytes(),
-                "{} [{preset}]: the same seed and step produced two traces",
-                fixture.id
-            );
-            println!(
-                "{} [{preset}] seed {} {} bytes {}",
-                fixture.id,
-                fixture.pinned_seed,
-                first.trace.hash(),
-                first.trace.bytes().len()
-            );
-        }
+// Every checked-in Increment 2 fixture repeats its canonical trace bytes and
+// hash at the fixed pinned seed at both required presets, and a different seed
+// changes the trace.
+//
+// The driven runs are `TraceRecorder` runs, and for the three fixtures whose
+// maneuver needs no request they are asserted to be exactly the
+// `canonical_trace` bytes `hekate-cli run` writes, so the Standard half of the
+// reproducibility claim is CLI-reproducible for those three.
+//
+// The claim is one `#[test]` per fixture+preset, plus one per fixture for the
+// different-seed check and one per autonomous fixture for the canonical-trace
+// check, so nextest runs every case in its own process. Each case's assertions
+// live in `assert_reproduces_trace`, `assert_other_seed_changes_trace`, and
+// `assert_standard_run_is_canonical`; the macros below only name the cases.
 
-        let standard = run(&fixture, fixture.pinned_seed, STANDARD_STEP_S);
-        let other = run(&fixture, OTHER_SEED, STANDARD_STEP_S);
-        assert_ne!(
-            standard.trace.hash(),
-            other.trace.hash(),
-            "{}: two different seeds produced one trace hash",
-            fixture.id
-        );
-
-        if fixture.plan == Plan::Autonomous {
-            let direct = canonical(&fixture, fixture.pinned_seed, STANDARD_STEP_S);
-            assert_eq!(
-                standard.trace.bytes(),
-                direct.bytes(),
-                "{}: a run with no request must be the canonical trace `hekate-cli run` writes",
-                fixture.id
-            );
-        }
-    }
+/// One fixture+preset reproduction case: the same pinned seed and step twice
+/// produce the same canonical trace bytes and hash.
+fn assert_reproduces_trace(fixture: &Fixture, preset: &str, step_s: f64) {
+    let first = run(fixture, fixture.pinned_seed, step_s);
+    let second = run(fixture, fixture.pinned_seed, step_s);
+    assert_eq!(
+        first.trace.hash(),
+        second.trace.hash(),
+        "{} [{preset}]: the same seed and step produced two trace hashes",
+        fixture.id
+    );
+    assert_eq!(
+        first.trace.bytes(),
+        second.trace.bytes(),
+        "{} [{preset}]: the same seed and step produced two traces",
+        fixture.id
+    );
+    println!(
+        "{} [{preset}] seed {} {} bytes {}",
+        fixture.id,
+        fixture.pinned_seed,
+        first.trace.hash(),
+        first.trace.bytes().len()
+    );
 }
 
-/// The checked-in bank declares exactly the pinned seeds, and every pinned seed
-/// admits its fixture's intended maneuver at both required presets.
+/// One fixture's different-seed case: a seed outside the bank produces a
+/// different Standard trace, so the reproduction above is not a constant.
+fn assert_other_seed_changes_trace(fixture: &Fixture) {
+    let standard = run(fixture, fixture.pinned_seed, STANDARD_STEP_S);
+    let other = run(fixture, OTHER_SEED, STANDARD_STEP_S);
+    assert_ne!(
+        standard.trace.hash(),
+        other.trace.hash(),
+        "{}: two different seeds produced one trace hash",
+        fixture.id
+    );
+}
+
+/// One autonomous fixture's CLI-reproducibility case: its Standard run is
+/// exactly the [`canonical_trace`] bytes `hekate-cli run` writes.
+fn assert_standard_run_is_canonical(fixture: &Fixture) {
+    let standard = run(fixture, fixture.pinned_seed, STANDARD_STEP_S);
+    let direct = canonical(fixture, fixture.pinned_seed, STANDARD_STEP_S);
+    assert_eq!(
+        standard.trace.bytes(),
+        direct.bytes(),
+        "{}: a run with no request must be the canonical trace `hekate-cli run` writes",
+        fixture.id
+    );
+}
+
+/// Generate the per-fixture+preset reproduction tests, one `#[test]` per case,
+/// over the `FIXTURES` and `PRESETS` indices `inc2_support` declares.
+macro_rules! reproduction_cases {
+    ($(($name:ident, $fixture_index:literal, $preset_index:literal)),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                let (preset, step_s) = PRESETS[$preset_index];
+                assert_reproduces_trace(&FIXTURES[$fixture_index], preset, step_s);
+            }
+        )+
+    };
+}
+
+/// Generate the per-fixture different-seed tests, one `#[test]` per fixture.
+macro_rules! other_seed_cases {
+    ($(($name:ident, $fixture_index:literal)),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                assert_other_seed_changes_trace(&FIXTURES[$fixture_index]);
+            }
+        )+
+    };
+}
+
+/// Generate the per-autonomous-fixture canonical-trace tests, one `#[test]` per
+/// autonomous fixture.
+macro_rules! canonical_trace_cases {
+    ($(($name:ident, $fixture_index:literal)),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                assert_standard_run_is_canonical(&FIXTURES[$fixture_index]);
+            }
+        )+
+    };
+}
+
+reproduction_cases!(
+    (
+        narrow_passing_v2_reproduces_its_trace_hash_at_standard,
+        0,
+        0
+    ),
+    (narrow_passing_v2_reproduces_its_trace_hash_at_fine, 0, 1),
+    (
+        motor_passing_narrow_v2_reproduces_its_trace_hash_at_standard,
+        1,
+        0
+    ),
+    (
+        motor_passing_narrow_v2_reproduces_its_trace_hash_at_fine,
+        1,
+        1
+    ),
+    (
+        motor_lane_change_v2_reproduces_its_trace_hash_at_standard,
+        2,
+        0
+    ),
+    (motor_lane_change_v2_reproduces_its_trace_hash_at_fine, 2, 1),
+    (
+        narrow_passing_unsafe_v2_reproduces_its_trace_hash_at_standard,
+        3,
+        0
+    ),
+    (
+        narrow_passing_unsafe_v2_reproduces_its_trace_hash_at_fine,
+        3,
+        1
+    ),
+    (
+        motor_lane_change_boundary_v2_reproduces_its_trace_hash_at_standard,
+        4,
+        0
+    ),
+    (
+        motor_lane_change_boundary_v2_reproduces_its_trace_hash_at_fine,
+        4,
+        1
+    ),
+    (
+        narrow_wrong_way_v2_reproduces_its_trace_hash_at_standard,
+        5,
+        0
+    ),
+    (narrow_wrong_way_v2_reproduces_its_trace_hash_at_fine, 5, 1),
+);
+
+other_seed_cases!(
+    (
+        narrow_passing_v2_changes_its_trace_for_a_seed_outside_the_bank,
+        0
+    ),
+    (
+        motor_passing_narrow_v2_changes_its_trace_for_a_seed_outside_the_bank,
+        1
+    ),
+    (
+        motor_lane_change_v2_changes_its_trace_for_a_seed_outside_the_bank,
+        2
+    ),
+    (
+        narrow_passing_unsafe_v2_changes_its_trace_for_a_seed_outside_the_bank,
+        3
+    ),
+    (
+        motor_lane_change_boundary_v2_changes_its_trace_for_a_seed_outside_the_bank,
+        4
+    ),
+    (
+        narrow_wrong_way_v2_changes_its_trace_for_a_seed_outside_the_bank,
+        5
+    ),
+);
+
+canonical_trace_cases!(
+    (narrow_passing_v2_standard_run_is_the_canonical_cli_trace, 0),
+    (
+        motor_passing_narrow_v2_standard_run_is_the_canonical_cli_trace,
+        1
+    ),
+    (
+        narrow_passing_unsafe_v2_standard_run_is_the_canonical_cli_trace,
+        3
+    ),
+);
+
+/// The checked-in bank declares exactly the pinned seeds.
 ///
 /// This is what makes the hash stability above meaningful: a hash comparison
 /// over a run that never admits the fixture's pair proves only that an empty run
-/// is empty.
+/// is empty. That every declared seed admits its fixture's maneuver at both
+/// required presets is the generated `*_admits_its_maneuver_at_*` cases, one
+/// `#[test]` per fixture+preset; this test asserts only the declaration.
 #[test]
-fn the_declared_seed_bank_admits_every_fixtures_maneuver_at_both_required_presets() {
+fn the_declared_seed_bank_declares_exactly_the_pinned_seeds() {
     let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");
     let mut pinned: Vec<u64> = FIXTURES.iter().map(|fixture| fixture.pinned_seed).collect();
     pinned.sort_unstable();
@@ -156,36 +297,81 @@ fn the_declared_seed_bank_admits_every_fixtures_maneuver_at_both_required_preset
         loaded.bank.seeds, pinned,
         "the declared bank is exactly the fixtures' pinned seeds"
     );
-
-    for fixture in FIXTURES {
-        assert!(
-            loaded.bank.seeds.contains(&fixture.pinned_seed),
-            "{}: pinned seed {} is not a declared bank seed",
-            fixture.id,
-            fixture.pinned_seed
-        );
-        for (preset, step_s) in PRESETS {
-            let run = run(&fixture, fixture.pinned_seed, step_s);
-            assert_maneuver_occurs(&fixture, preset, &run);
-            assert!(
-                run.observation
-                    .edges
-                    .values()
-                    .all(|edges| edges.iter().all(|(_, to, _)| *to != ManeuverState::Aborted)),
-                "{} [{preset}]: the fixture's maneuver must not abort",
-                fixture.id
-            );
-            println!(
-                "{} [{preset}] seed {} admits its maneuver: {} overtaking interval(s), {} handoff(s), {} wrong-way entr(ies)",
-                fixture.id,
-                fixture.pinned_seed,
-                run.observation.overtakes.len(),
-                run.observation.facility_transitions,
-                run.observation.wrong_way.len()
-            );
-        }
-    }
 }
+
+/// One fixture+preset bank-admission case: the pinned seed is a declared bank
+/// seed and its run admits the fixture's intended maneuver without aborting.
+fn assert_seed_bank_admits_maneuver(fixture: &Fixture, preset: &str, step_s: f64) {
+    let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");
+    assert!(
+        loaded.bank.seeds.contains(&fixture.pinned_seed),
+        "{}: pinned seed {} is not a declared bank seed",
+        fixture.id,
+        fixture.pinned_seed
+    );
+    let run = run(fixture, fixture.pinned_seed, step_s);
+    assert_maneuver_occurs(fixture, preset, &run);
+    assert!(
+        run.observation
+            .edges
+            .values()
+            .all(|edges| edges.iter().all(|(_, to, _)| *to != ManeuverState::Aborted)),
+        "{} [{preset}]: the fixture's maneuver must not abort",
+        fixture.id
+    );
+    println!(
+        "{} [{preset}] seed {} admits its maneuver: {} overtaking interval(s), {} handoff(s), {} wrong-way entr(ies)",
+        fixture.id,
+        fixture.pinned_seed,
+        run.observation.overtakes.len(),
+        run.observation.facility_transitions,
+        run.observation.wrong_way.len()
+    );
+}
+
+/// Generate the per-fixture+preset bank-admission tests, one `#[test]` per case.
+macro_rules! seed_bank_admission_cases {
+    ($(($name:ident, $fixture_index:literal, $preset_index:literal)),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                let (preset, step_s) = PRESETS[$preset_index];
+                assert_seed_bank_admits_maneuver(&FIXTURES[$fixture_index], preset, step_s);
+            }
+        )+
+    };
+}
+
+seed_bank_admission_cases!(
+    (narrow_passing_v2_admits_its_maneuver_at_standard, 0, 0),
+    (narrow_passing_v2_admits_its_maneuver_at_fine, 0, 1),
+    (
+        motor_passing_narrow_v2_admits_its_maneuver_at_standard,
+        1,
+        0
+    ),
+    (motor_passing_narrow_v2_admits_its_maneuver_at_fine, 1, 1),
+    (motor_lane_change_v2_admits_its_maneuver_at_standard, 2, 0),
+    (motor_lane_change_v2_admits_its_maneuver_at_fine, 2, 1),
+    (
+        narrow_passing_unsafe_v2_admits_its_maneuver_at_standard,
+        3,
+        0
+    ),
+    (narrow_passing_unsafe_v2_admits_its_maneuver_at_fine, 3, 1),
+    (
+        motor_lane_change_boundary_v2_admits_its_maneuver_at_standard,
+        4,
+        0
+    ),
+    (
+        motor_lane_change_boundary_v2_admits_its_maneuver_at_fine,
+        4,
+        1
+    ),
+    (narrow_wrong_way_v2_admits_its_maneuver_at_standard, 5, 0),
+    (narrow_wrong_way_v2_admits_its_maneuver_at_fine, 5, 1),
+);
 
 /// The decompressed canonical event stream of a run directory.
 fn event_stream(directory: &Path) -> Vec<u8> {
