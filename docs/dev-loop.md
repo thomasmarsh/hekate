@@ -37,7 +37,7 @@ running anything.
 cargo nextest run --workspace --all-features
 ```
 
-That is the full gate: 1055 non-ignored tests across the workspace's test
+That is the full gate: 1118 non-ignored tests across the workspace's test
 binaries, the same selection `cargo test --workspace --all-features` makes over
 test binaries.
 
@@ -95,27 +95,31 @@ scripts/clean-target.sh             # remove it and report the reclaimed space
 The script prints `du -sh target` before and after plus the reclaimed delta, and
 removes three kinds of pure build output that cargo rebuilds on demand:
 
-- `target/**/tangle*` — fingerprints, rlibs, and test binaries from before the
-  workspace crates were renamed from `tangle-*` to `hekate-*`. No current
-  manifest names a `tangle-*` crate, so nothing reads them again.
+- `target/**/tangle*` and `target/**/libtangle*` — fingerprints, rlibs, and
+  test binaries from before the workspace crates were renamed from `tangle-*`
+  to `hekate-*`. No current manifest names a `tangle-*` crate, so nothing reads
+  them again. Both the bare and the `lib`-prefixed artifact names are matched.
 - `target/debug/incremental/` — the per-hash incremental cache.
 - `target/doc/` — the rustdoc output.
 
-On the 2026-09-15 tree (34 GB) the measured reclaim is about 17 GiB: 9.2 GiB of
-unique pre-rename `tangle*` artifacts, 7.9 GiB of non-`tangle*` incremental
-cache (the whole directory measures 13 GiB, and 5.15 GiB of it is the `tangle*`
-already counted once above), and 24 MiB of rustdoc output. The two rules overlap
-by design, so those 5.15 GiB are removed by whichever runs first, never twice.
-The script only ever descends from `target/`, so source, checked-in goldens,
-scenarios, schemas, and `Cargo.lock` are never candidates, and re-running it is
-a no-op.
+On the 2026-09-15 tree (35 GB) the measured reclaim is about 17 GiB, reaching
+18 GB, spread over the three classes above: the pre-rename `tangle*`/`libtangle*`
+artifacts, the per-hash incremental cache, and the rustdoc output. The rules
+overlap by design, so an artifact both classes match is removed by whichever
+runs first, never twice. The script only ever descends from the target directory
+(`$CARGO_TARGET_DIR` when set, `target/` otherwise), so source, checked-in
+goldens, scenarios, schemas, and `Cargo.lock` are never candidates, and
+re-running it is a no-op once the tree is clean. It relies on `find`'s default
+`-P`, so a symlinked target directory is not followed.
 
-What it costs: deleting the `tangle*` artifacts is free, because no `hekate-*`
-fingerprint references them, so the next build reuses every `hekate-*` artifact
-it keeps and neither invalidates nor relinks them. Deleting
-`target/debug/incremental` is not free: the next incremental build recompiles
-rather than reusing the per-crate cache, so the first `cargo nextest` after the
-prune is slower and then the cache refills.
+What it costs: deleting the `tangle*`/`libtangle*` artifacts is free, because no
+`hekate-*` fingerprint references them, so the next build reuses every
+`hekate-*` artifact it keeps and neither invalidates nor relinks them. Deleting
+`target/debug/incremental` is free until sources change: cargo consumes the
+per-crate cache only when it recompiles a crate, and the measured post-prune
+runs recompiled nothing (`Finished` in 0.25 s and 0.68 s, no `Compiling`
+lines). The cost appears only once a source change forces a recompile, which
+then runs without the per-crate cache; the cache refills as it goes.
 
 Cargo never collects superseded hashed test binaries, so `target/debug/deps`
 also holds several stale `hekate_viewer-*` binaries of about 390 MB each. They
