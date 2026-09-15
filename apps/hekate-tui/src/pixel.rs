@@ -15,11 +15,12 @@ use hekate_present::{BodyEmphasis, BodyShape, SceneFrame, Viewport};
 
 use crate::palette::Rgb;
 use crate::raster::{
-    BACKGROUND, BODY_COLOR, BOUNDARY_COLOR, CELL_ASPECT, CONFLICT_COLOR, CROSSING_COLOR,
-    FACILITY_COLOR, FACILITY_REFERENCE_COLOR, MOVEMENT_COLOR, OCCUPIED_COLOR, PATH_COLOR,
-    PORTAL_COLOR, REGION_COLOR, RULE_COLOR, RULE_MARKER_OFFSET_M, Rasterizer, SELECTED_BACKGROUND,
-    SELECTED_COLOR, SIGNAL_COLOR, SIGNAL_GATE_HALF_WIDTH_M, VECTOR_COLOR, emphasis_color,
-    marker_color, marker_glyph,
+    BACKGROUND, BODY_COLOR, BOUNDARY_COLOR, CELL_ASPECT, CONFLICT_COLOR, CORRIDOR_COLOR,
+    CROSSING_COLOR, FACILITY_COLOR, FACILITY_REFERENCE_COLOR, MOVEMENT_COLOR, OCCUPIED_COLOR,
+    PATH_COLOR, PORTAL_COLOR, REGION_COLOR, RULE_COLOR, RULE_MARKER_OFFSET_M, Rasterizer,
+    SELECTED_BACKGROUND, SELECTED_COLOR, SIGNAL_COLOR, SIGNAL_GATE_HALF_WIDTH_M,
+    TARGET_OFFSET_COLOR, VECTOR_COLOR, circle_ring, emphasis_color, maneuver_color, marker_color,
+    marker_glyph, predicted_gap_color, wrong_way_color,
 };
 
 /// Default pixels per terminal column.
@@ -33,6 +34,15 @@ pub const MAX_FRAME_PIXELS: u64 = 1920 * 1080;
 const LINE_HALF_WIDTH: i64 = 1;
 /// Chords approximating one capsule cap's semicircle in the pixel backend.
 const CAPSULE_CAP_SEGMENTS: usize = 16;
+/// Chords approximating one body-marker ring.
+const MARKER_RING_SEGMENTS: usize = 12;
+/// Pixel radius of the ring a body's maneuver marker draws.
+const MANEUVER_RING_RADIUS: f64 = 3.0;
+/// Pixel radius of the ring a body's wrong-way marker draws.
+///
+/// It is wider than [`MANEUVER_RING_RADIUS`], so one body carrying both an open
+/// maneuver interval and an open opposing traversal shows both markers.
+const WRONG_WAY_RING_RADIUS: f64 = 6.0;
 
 /// A tightly packed RGBA8 image, row-major, four bytes per pixel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +205,24 @@ impl PixelRasterizer {
         self.draw_bodies(&mut image, frame, &emphasis);
         if frame.overlays.safety {
             self.draw_safety(&mut image, frame);
+        }
+        // The route-relative tactical overlays follow the safety overlay, in
+        // the declaration order of `Overlay`, so a frame's picture is the same
+        // picture on every backend.
+        if frame.overlays.corridor {
+            self.draw_corridors(&mut image, frame);
+        }
+        if frame.overlays.target_offset {
+            self.draw_target_offsets(&mut image, frame);
+        }
+        if frame.overlays.predicted_gap {
+            self.draw_predicted_gaps(&mut image, frame);
+        }
+        if frame.overlays.maneuver {
+            self.draw_maneuvers(&mut image, frame);
+        }
+        if frame.overlays.wrong_way {
+            self.draw_wrong_way(&mut image, frame);
         }
         if frame.overlays.vectors {
             self.draw_vectors(&mut image, frame);
@@ -615,6 +643,115 @@ impl PixelRasterizer {
             );
         }
     }
+
+    /// Draw the frame's usable-corridor overlays: the segment of the facility
+    /// band each body plus its clearance may occupy, ascending by agent.
+    ///
+    /// The interval is absolute in the body's travel frame, so the segment is
+    /// laid out from the body's own offset, not from the body's position as if
+    /// it were on the band reference.
+    fn draw_corridors(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+        for corridor in frame.corridors() {
+            let from =
+                corridor.anchor() + corridor.left() * (corridor.d_min_m() - corridor.offset_m());
+            let to =
+                corridor.anchor() + corridor.left() * (corridor.d_max_m() - corridor.offset_m());
+            image.segment(
+                self.project(frame.viewport, from),
+                self.project(frame.viewport, to),
+                CORRIDOR_COLOR,
+                LINE_HALF_WIDTH,
+            );
+        }
+    }
+
+    /// Draw the frame's target-offset overlays: the segment each body
+    /// displaces along toward its fixed offset, ascending by agent.
+    fn draw_target_offsets(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+        for target in frame.target_offsets() {
+            image.segment(
+                self.project(frame.viewport, target.anchor()),
+                self.project(frame.viewport, target.target()),
+                TARGET_OFFSET_COLOR,
+                LINE_HALF_WIDTH,
+            );
+        }
+    }
+
+    /// Draw the frame's predicted-gap overlays: an outline at each body of the
+    /// clearance the run predicts, ascending by agent, colored by whether that
+    /// clearance meets the mode's target.
+    fn draw_predicted_gaps(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+        for gap in frame.predicted_gaps() {
+            let ring = circle_ring(gap.anchor(), gap.predicted_min_clearance_m().max(0.0));
+            self.draw_ring(
+                image,
+                frame.viewport,
+                &ring,
+                predicted_gap_color(gap.margin_m()),
+            );
+        }
+    }
+
+    /// Draw the frame's maneuver overlays: each body with an open maneuver
+    /// interval carries a ring around its position, ascending by agent, in the
+    /// color of its live state.
+    fn draw_maneuvers(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+        for maneuver in frame.maneuver_overlays() {
+            let Some(body) = frame.body(maneuver.agent()) else {
+                continue;
+            };
+            let center = self.project(frame.viewport, body.position);
+            self.draw_marker_ring(
+                image,
+                center,
+                MANEUVER_RING_RADIUS,
+                maneuver_color(maneuver.state()),
+            );
+        }
+    }
+
+    /// Draw the frame's wrong-way overlays: each body with an open opposing
+    /// traversal carries an outer ring, ascending by agent, colored by whether
+    /// the traversal violates the rule.
+    fn draw_wrong_way(&self, image: &mut RgbaImage, frame: &SceneFrame) {
+        for wrong_way in frame.wrong_way_overlays() {
+            let Some(body) = frame.body(wrong_way.agent()) else {
+                continue;
+            };
+            let center = self.project(frame.viewport, body.position);
+            self.draw_marker_ring(
+                image,
+                center,
+                WRONG_WAY_RING_RADIUS,
+                wrong_way_color(wrong_way.violating()),
+            );
+        }
+    }
+
+    /// Draw a hollow ring of `radius_px` pixels around a pixel-space centre.
+    ///
+    /// The pixel backend has no glyphs, so a body marker is a ring, exactly as
+    /// a safety marker is a cross. One pixel column is half a pixel row, so a
+    /// ring drawn round in pixel space is round in world space too.
+    fn draw_marker_ring(
+        &self,
+        image: &mut RgbaImage,
+        center: (f64, f64),
+        radius_px: f64,
+        color: Rgb,
+    ) {
+        let at = |step: usize| {
+            let angle = std::f64::consts::TAU * step as f64 / MARKER_RING_SEGMENTS as f64;
+            (
+                center.0 + angle.cos() * radius_px,
+                center.1 + angle.sin() * radius_px,
+            )
+        };
+        for step in 0..MARKER_RING_SEGMENTS {
+            image.segment(at(step), at(step + 1), color, 0);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -623,16 +760,22 @@ mod tests {
 
     use std::sync::Arc;
 
-    use hekate_model::{BodyKind, CompiledScenario, CrossingId, parse_scenario_source};
+    use hekate_model::{
+        BodyKind, CompiledScenario, CrossingId, FacilityId, MovementDirection, NominalDirection,
+        PermissionEffect, TacticKind, parse_scenario_source,
+    };
     use hekate_present::{
-        FrameStatus, Overlays, SafetyOverlay, SceneGeometry, Speed, TacticalOverlay, load_scenario,
+        FrameStatus, Overlay, Overlays, SafetyOverlay, SceneGeometry, Speed, TacticalOverlay,
+        load_scenario,
     };
     use hekate_sim::{
-        AgentId, AgentMode, BodySegmentSample, Event, RegionKey, RunConfig, Simulation,
-        SnapshotDetail,
+        AgentId, AgentMode, BodySegmentSample, Event, ManeuverEdge, ManeuverReasonCode,
+        ManeuverState, PassSide, RegionKey, RunConfig, Simulation, SnapshotDetail, WrongWayReason,
     };
 
-    use crate::raster::{COLLISION_COLOR, QUEUE_COLOR};
+    use crate::raster::{
+        COLLISION_COLOR, PREDICTED_GAP_MARGIN_COLOR, PREDICTED_GAP_SHORTFALL_COLOR, QUEUE_COLOR,
+    };
 
     fn scenario() -> CompiledScenario {
         let source = parse_scenario_source(
@@ -799,6 +942,198 @@ mod tests {
         assert!(!contains_color(&image, COLLISION_COLOR));
         assert!(!contains_color(&image, QUEUE_COLOR));
         assert!(contains_color(&image, BODY_COLOR));
+    }
+
+    /// Overlays with every flag off except the one the caller turns on.
+    fn only(overlay: Overlay) -> Overlays {
+        let mut overlays = Overlays {
+            geometry: false,
+            vectors: false,
+            safety: false,
+            corridor: false,
+            target_offset: false,
+            predicted_gap: false,
+            maneuver: false,
+            wrong_way: false,
+        };
+        overlays.toggle(overlay);
+        overlays
+    }
+
+    /// A frame over a checked-in version-2 fixture held long enough for both
+    /// narrow modes to spawn, carrying the route state and the maneuver and
+    /// opposing-traversal records every tactical overlay draws from.
+    ///
+    /// Agent 0 (scooter) gets a target offset, a predicted clearance that meets
+    /// its target, and an open maneuver interval; agent 1 (scooter) gets a
+    /// predicted clearance below its target and an open opposing traversal.
+    fn tactical_frame() -> SceneFrame {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenarios/phase2/inc1/narrow_isolated_straight_v2.json5");
+        let compiled = load_scenario(&path).expect("fixture loads");
+        let mut sim = Simulation::new(compiled.clone(), RunConfig::new(0)).expect("builds");
+        for _ in 0..400 {
+            sim.step();
+        }
+        let snapshot = sim.snapshot(SnapshotDetail::Full);
+        assert!(
+            snapshot.agents().len() >= 2,
+            "the run must spawn both lanes"
+        );
+        let mut bodies: Vec<hekate_present::SceneBody> = snapshot
+            .agents()
+            .iter()
+            .map(|sample| hekate_present::SceneBody::project(&[], sample, 0.0))
+            .collect();
+        for body in &mut bodies {
+            let Some(state) = body.route_state.as_mut() else {
+                continue;
+            };
+            match body.id {
+                0 => {
+                    state.maneuver_state = ManeuverState::Committed;
+                    state.target_offset_m = Some(0.8);
+                    state.predicted_min_clearance_m = Some(0.9);
+                    state.target_clearance_m = Some(0.5);
+                    state.opposing_direction = Some(MovementDirection::Reverse);
+                    state.perceived_rule = Some(PermissionEffect::Prohibit);
+                }
+                1 => {
+                    state.predicted_min_clearance_m = Some(0.4);
+                    state.target_clearance_m = Some(0.5);
+                }
+                _ => {}
+            }
+        }
+
+        let mut tactical = TacticalOverlay::default();
+        tactical.observe(
+            snapshot.time().tick(),
+            &[
+                Event::Maneuver {
+                    agent: AgentId::from_index(0),
+                    kind: TacticKind::Overtake,
+                    from: ManeuverState::Preparing,
+                    to: ManeuverState::Committed,
+                    edge: ManeuverEdge::Committed,
+                    partner: Some(AgentId::from_index(1)),
+                    source_facility: FacilityId::from_index(1),
+                    target_facility: None,
+                    target_offset_m: 0.8,
+                    side: PassSide::Left,
+                    reason: ManeuverReasonCode::SlowerLeader,
+                },
+                Event::OpposingTraversal {
+                    agent: AgentId::from_index(1),
+                    facility: FacilityId::from_index(1),
+                    movement: None,
+                    direction: MovementDirection::Reverse,
+                    nominal_direction: NominalDirection::Forward,
+                    perceived_rule: Some(PermissionEffect::Prohibit),
+                    reason: WrongWayReason::NoncompliantChoice,
+                    violating: true,
+                    entering: true,
+                },
+            ],
+        );
+
+        // Fit the frame to the bodies the overlays anchor on, so the whole
+        // scene sits inside the test image.
+        let mut low = bodies[0].position;
+        let mut high = low;
+        for body in &bodies {
+            low = low.min(body.position);
+            high = high.max(body.position);
+        }
+        let screen = (f64::from(120), f64::from(40) * CELL_ASPECT);
+
+        SceneFrame {
+            scenario_id: compiled.id().to_owned(),
+            time_seconds: snapshot.time().seconds(),
+            tick: snapshot.time().tick(),
+            status: FrameStatus {
+                agents: bodies.len(),
+                speed: Speed::Real,
+                paused: true,
+                selection: None,
+            },
+            viewport: Viewport::fit((low, high), screen, 2.0),
+            geometry: Arc::new(SceneGeometry::from_scenario(&compiled)),
+            bodies,
+            overlays: Overlays::default(),
+            safety: SafetyOverlay::default(),
+            tactical,
+        }
+    }
+
+    /// Every tactical overlay draws in the pixel backend from the frame's
+    /// projected data, its flag alone governs it, and an empty fold draws
+    /// nothing.
+    #[test]
+    fn every_tactical_overlay_is_flag_gated_and_drawn_from_the_frame() {
+        let raster = PixelRasterizer::new(120, 40);
+        for (name, overlay, color) in [
+            ("usable corridor", Overlay::Corridor, CORRIDOR_COLOR),
+            ("target offset", Overlay::TargetOffset, TARGET_OFFSET_COLOR),
+            (
+                "committed maneuver",
+                Overlay::Maneuver,
+                maneuver_color(ManeuverState::Committed),
+            ),
+            ("wrong-way", Overlay::WrongWay, wrong_way_color(true)),
+        ] {
+            let mut frame = tactical_frame();
+            frame.overlays = only(overlay);
+            assert!(
+                contains_color(&raster.rasterize(&frame), color),
+                "the {name} was not drawn"
+            );
+
+            frame.overlays.toggle(overlay);
+            assert!(
+                !contains_color(&raster.rasterize(&frame), color),
+                "the {name} overlay stayed on"
+            );
+        }
+
+        // The two predicted gaps differ only in margin: the one that meets its
+        // target draws sage and the shortfall red.
+        let mut gaps = tactical_frame();
+        gaps.overlays = only(Overlay::PredictedGap);
+        let image = raster.rasterize(&gaps);
+        assert!(
+            contains_color(&image, PREDICTED_GAP_MARGIN_COLOR),
+            "the met gap was not drawn"
+        );
+        assert!(
+            contains_color(&image, PREDICTED_GAP_SHORTFALL_COLOR),
+            "the short gap was not drawn"
+        );
+
+        // A Phase 1 frame has no route state and no folded interval, so every
+        // tactical overlay draws nothing while its flag stays on. Vectors are
+        // off because a velocity vector shares the committed-maneuver color.
+        let mut phase_1 = frame(Viewport::new(DVec2::ZERO, 0.5));
+        phase_1.overlays.geometry = false;
+        phase_1.overlays.vectors = false;
+        phase_1.overlays.safety = false;
+        let image = raster.rasterize(&phase_1);
+        for (name, color) in [
+            ("usable corridor", CORRIDOR_COLOR),
+            ("target offset", TARGET_OFFSET_COLOR),
+            ("predicted gap", PREDICTED_GAP_MARGIN_COLOR),
+            ("maneuver", maneuver_color(ManeuverState::Committed)),
+            ("wrong-way", wrong_way_color(true)),
+        ] {
+            assert!(
+                !contains_color(&image, color),
+                "the {name} drew on a Phase 1 frame"
+            );
+        }
+        assert!(
+            contains_color(&image, BODY_COLOR),
+            "the bodies must still draw"
+        );
     }
 
     #[test]

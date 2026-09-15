@@ -109,7 +109,8 @@ impl Hud {
             None => "\
 space pause   . step   1/2/3 speed   r restart   n next seed   \
 WASD/arrows pan   +/- zoom   tab select   g geometry   v vectors   b safety   \
-c corridor   t target   p gap   m maneuver   o wrong-way   esc clear   q quit"
+c corridor   t target   p gap   m maneuver   o wrong-way   e wrong-way entry   \
+esc clear   q quit"
                 .to_owned(),
         }
     }
@@ -389,6 +390,12 @@ mod tests {
         ] {
             assert!(legend.contains(key), "the legend omits '{key}': {legend}");
         }
+        // The wrong-way entry is a host request rather than an overlay toggle,
+        // so the legend names it beside the overlay it feeds.
+        assert!(
+            legend.contains("e wrong-way entry"),
+            "the legend omits the wrong-way entry key: {legend}"
+        );
     }
 
     /// The same frame with `events` folded in at its own tick.

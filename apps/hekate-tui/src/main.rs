@@ -235,6 +235,12 @@ fn handle_key(session: &mut ViewerSession, key: KeyEvent) -> bool {
         KeyCode::Char('p') => session.apply(ViewCommand::ToggleOverlay(Overlay::PredictedGap)),
         KeyCode::Char('m') => session.apply(ViewCommand::ToggleOverlay(Overlay::Maneuver)),
         KeyCode::Char('o') => session.apply(ViewCommand::ToggleOverlay(Overlay::WrongWay)),
+        // A wrong-way entry is a kernel request rather than a view command: a
+        // checked-in scenario authors no request, so this is the host seam that
+        // makes the rule-state overlay reachable in a normal run.
+        KeyCode::Char('e') => {
+            session.request_wrong_way_entry();
+        }
         KeyCode::Tab => session.select_next(),
         KeyCode::Esc => session.apply(ViewCommand::ClearSelection),
         KeyCode::Char('+' | '=') => session.apply(ViewCommand::Zoom(ZOOM_IN)),

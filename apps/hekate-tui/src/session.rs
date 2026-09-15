@@ -16,7 +16,7 @@ use hekate_present::{
     Applied, BackendResult, PresentationController, RendererBackend, RestartMode, SceneFrame,
     SceneGeometry, Speed, ViewCommand, Viewport,
 };
-use hekate_sim::{Event, InitError, RunConfig, Simulation, Snapshot, SnapshotDetail};
+use hekate_sim::{AgentId, Event, InitError, RunConfig, Simulation, Snapshot, SnapshotDetail};
 
 use crate::backend::{CellBackend, RunInfo};
 use crate::palette::ColorDepth;
@@ -237,6 +237,25 @@ impl<B: SessionBackend> TuiSession<B> {
             .apply(&ViewCommand::SelectNearest(next), &frame);
     }
 
+    /// Ask the kernel to record a wrong-way entry request for the selected
+    /// agent, so the wrong-way rule state is reachable in a normal run.
+    ///
+    /// The kernel owns the decision: it records the request only for a live
+    /// agent that carries route state on a connected opposing traversal, and
+    /// its wrong-way pass evaluates the scenario's policy at the start of the
+    /// next step. A checked-in scenario authors no request, so this is the host
+    /// seam a viewer supplies. Returns whether a request was recorded.
+    pub fn request_wrong_way_entry(&mut self) -> bool {
+        let frame = self.project();
+        let Some(id) = frame.status.selection else {
+            return false;
+        };
+        if frame.body(id).and_then(|body| body.route_state).is_none() {
+            return false;
+        }
+        self.sim.request_wrong_way_entry(AgentId::from_index(id))
+    }
+
     /// Consume `frame_secs` of wall time, stepping the kernel in whole fixed
     /// steps. Returns the number of ticks taken.
     pub fn advance(&mut self, frame_secs: f64) -> u64 {
@@ -345,7 +364,8 @@ fn next_selection(frame: &SceneFrame) -> Option<DVec2> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hekate_present::Overlay;
+    use hekate_model::PathId;
+    use hekate_present::{Overlay, load_scenario};
 
     fn scenario() -> Arc<CompiledScenario> {
         let source = hekate_model::parse_scenario_source(
@@ -415,6 +435,101 @@ mod tests {
         session.select_next();
         let second = session.selection();
         assert_ne!(first, second);
+    }
+
+    /// The wrong-way trigger names nothing without a selection, and refuses an
+    /// agent that carries no route state.
+    #[test]
+    fn the_wrong_way_trigger_needs_a_selected_agent_with_route_state() {
+        let mut session = session();
+        assert!(
+            !session.request_wrong_way_entry(),
+            "an empty selection asks the kernel for nothing"
+        );
+        session.advance(0.05);
+        session.select_next();
+        assert!(session.selection().is_some());
+        assert!(
+            !session.request_wrong_way_entry(),
+            "a Phase 1 body carries no route state to enter against"
+        );
+    }
+
+    /// The wrong-way trigger records the kernel request for the selected agent,
+    /// and the kernel's next step then opens the opposing traversal the
+    /// wrong-way overlay draws.
+    #[test]
+    fn the_wrong_way_trigger_opens_the_selected_agents_opposing_traversal() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenarios/phase2/inc2/narrow_wrong_way_v2.json5");
+        let scenario = Arc::new(load_scenario(&path).expect("the fixture loads"));
+        assert_eq!(
+            scenario.id_map().path_name(PathId::from_index(0)),
+            Some("guide_a"),
+            "corridor a's guide path is the fixture's first path"
+        );
+        let mut session =
+            TuiSession::new(scenario, 0, Vec::new(), ColorDepth::Truecolor).expect("starts");
+        assert!(
+            !session.request_wrong_way_entry(),
+            "an empty selection asks the kernel for nothing"
+        );
+
+        // Step until corridor a holds its lone rider inside the window the
+        // Increment 2 suite records that corridor's entry from, so the policy
+        // the fixture authors selects the opposing option.
+        let mut found: Option<(usize, DVec2)> = None;
+        for _ in 0..400 {
+            session.advance(0.5);
+            let snapshot = session.simulation().snapshot(SnapshotDetail::Full);
+            let on_corridor: Vec<&hekate_sim::AgentSample> = snapshot
+                .agents()
+                .iter()
+                .filter(|sample| {
+                    sample
+                        .motion
+                        .as_ref()
+                        .is_some_and(|motion| motion.path == PathId::from_index(0))
+                })
+                .collect();
+            if on_corridor.len() == 1 {
+                let sample = on_corridor[0];
+                let in_window = sample
+                    .motion
+                    .as_ref()
+                    .is_some_and(|motion| (5.0..=20.0).contains(&motion.path_distance_m));
+                if in_window {
+                    found = Some((sample.id.index(), sample.position));
+                    break;
+                }
+            }
+        }
+        let (id, position) = found.expect("corridor a admits a lone rider into the entry window");
+
+        session.apply(ViewCommand::SelectNearest(position));
+        assert_eq!(
+            session.selection(),
+            Some(id),
+            "the corridor's rider is the selected agent"
+        );
+        assert!(
+            session.request_wrong_way_entry(),
+            "the rider's route state admits a wrong-way entry"
+        );
+
+        // The kernel's wrong-way pass runs at the start of the next step, so
+        // the inspector reports the open interval within the following ticks.
+        session.advance(0.5);
+        session.draw().expect("the session draws");
+        let footer = session.backend().footer_line();
+        assert!(
+            footer.starts_with(&format!("Agent #{id}")),
+            "the inspector still describes the turned rider: {footer}"
+        );
+        assert!(
+            footer.contains("opposing facility"),
+            "the inspector must report the open opposing traversal: {footer}"
+        );
     }
 
     #[test]

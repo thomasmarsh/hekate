@@ -9,11 +9,11 @@
 //! is the terminal half of the backend parity
 //! `crates/hekate-present/tests/inc2_fixture_overlays.rs` pins in its golden.
 //!
-//! The occupied opposing corridor needs an entry request the session's public
-//! API cannot record mid-run (a checked-in scenario authors none), so the
-//! wrong-way interval itself is projected and pinned in the shared suite and
-//! rasterized from synthetic frames in `hekate-tui`'s own unit tests; this file
-//! pins that the fixture itself opens and draws in the terminal backend.
+//! The occupied opposing corridor's wrong-way interval needs an entry request a
+//! checked-in scenario authors none of; `TuiSession::request_wrong_way_entry` is
+//! the host seam a normal run uses to record one, and its own unit tests drive
+//! that seam against this fixture. This file pins that the fixture itself opens
+//! and draws in the terminal backend.
 
 use std::path::PathBuf;
 use std::sync::Arc;

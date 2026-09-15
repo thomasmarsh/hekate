@@ -791,8 +791,8 @@ impl Rasterizer {
 
 /// A closed polygon sampling the circle at `centre` of `radius_m`, so a
 /// predicted-gap clearance draws as a ring rather than a filled disc that would
-/// cover the body at its centre.
-fn circle_ring(centre: DVec2, radius_m: f64) -> Vec<DVec2> {
+/// cover the body at its centre. The pixel backend draws the same ring.
+pub(crate) fn circle_ring(centre: DVec2, radius_m: f64) -> Vec<DVec2> {
     (0..PREDICTED_GAP_RING_STEPS)
         .map(|step| {
             let angle = std::f64::consts::TAU * step as f64 / PREDICTED_GAP_RING_STEPS as f64;
