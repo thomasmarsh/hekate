@@ -108,7 +108,7 @@ pub const fn emphasis_color(emphasis: BodyEmphasis) -> Rgb {
 /// Glyph one safety-marker kind draws, or `None` for a record with no marker.
 pub const fn marker_glyph(kind: EventKind) -> Option<char> {
     match kind {
-        EventKind::Collision => Some('X'),
+        EventKind::Collision | EventKind::ArticulatedSegmentContact => Some('X'),
         EventKind::NearMiss => Some('~'),
         EventKind::Violation => Some('!'),
         EventKind::Entry | EventKind::Exit => Some('x'),
@@ -129,7 +129,7 @@ pub const fn marker_glyph(kind: EventKind) -> Option<char> {
 /// Color one safety-marker kind draws.
 pub const fn marker_color(kind: EventKind) -> Rgb {
     match kind {
-        EventKind::Collision => COLLISION_COLOR,
+        EventKind::Collision | EventKind::ArticulatedSegmentContact => COLLISION_COLOR,
         EventKind::NearMiss => NEAR_MISS_COLOR,
         EventKind::Violation => VIOLATION_COLOR,
         EventKind::Entry | EventKind::Exit => OCCUPIED_COLOR,

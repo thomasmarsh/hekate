@@ -215,6 +215,11 @@ impl ArticulatedState {
         &self.trailers
     }
 
+    /// Every segment's sampled geometry, in chain order, lead segment first.
+    pub(crate) fn segments(&self) -> &[ArticulatedSegmentGeometry] {
+        &self.segments
+    }
+
     /// Drive every trailing segment's pose from the lead segment's just-
     /// integrated pose, and report each hitch's exceeded-limit edge.
     ///

@@ -918,6 +918,12 @@ impl RunMetricsRecorder {
                 entering: true,
                 ..
             } => self.pending_conflicts.push((agent.get(), other.get())),
+            Event::ArticulatedSegmentContact {
+                agent,
+                other,
+                contacting: true,
+                ..
+            } => self.pending_conflicts.push((agent.get(), other.get())),
             _ => {}
         }
 
@@ -1879,6 +1885,9 @@ fn counted_family(event: &Event) -> Option<(EventFamily, Option<&'static str>)> 
         Event::Collision { contacting, .. } => {
             (*contacting).then_some((EventFamily::Collisions, None))
         }
+        Event::ArticulatedSegmentContact { contacting, .. } => {
+            (*contacting).then_some((EventFamily::Collisions, None))
+        }
         Event::NearMiss { entering, .. } => (*entering).then_some((EventFamily::NearMisses, None)),
         Event::Violation { kind, .. } => Some((EventFamily::Violations, Some(kind.label()))),
         Event::Entry { .. } => Some((EventFamily::RegionEntries, None)),
@@ -1921,7 +1930,8 @@ const fn event_agent(event: &Event) -> AgentId {
         | Event::FacilityTransition { agent, .. }
         | Event::OpposingTraversal { agent, .. }
         | Event::ClosePass { agent, .. }
-        | Event::ArticulationLimitExceeded { agent, .. } => *agent,
+        | Event::ArticulationLimitExceeded { agent, .. }
+        | Event::ArticulatedSegmentContact { agent, .. } => *agent,
     }
 }
 

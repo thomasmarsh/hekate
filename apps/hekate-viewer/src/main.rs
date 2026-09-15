@@ -413,7 +413,8 @@ fn advance_simulation(time: Res<Time>, mut state: ResMut<ViewerState>) {
                     | Event::FacilityTransition { .. }
                     | Event::OpposingTraversal { .. }
                     | Event::ClosePass { .. }
-                    | Event::ArticulationLimitExceeded { .. } => {}
+                    | Event::ArticulationLimitExceeded { .. }
+                    | Event::ArticulatedSegmentContact { .. } => {}
                 }
             }
         }
@@ -1018,7 +1019,9 @@ fn emphasis_color(emphasis: BodyEmphasis) -> Color {
 fn marker_color(marker: &SafetyMarker) -> Color {
     use hekate_sim::EventKind;
     match marker.kind() {
-        EventKind::Collision => Color::srgb(0.95, 0.25, 0.25),
+        EventKind::Collision | EventKind::ArticulatedSegmentContact => {
+            Color::srgb(0.95, 0.25, 0.25)
+        }
         EventKind::NearMiss => Color::srgb(0.98, 0.73, 0.15),
         EventKind::Violation => Color::srgb(0.85, 0.35, 0.95),
         EventKind::Entry | EventKind::Exit => Color::srgb(0.98, 0.62, 0.18),

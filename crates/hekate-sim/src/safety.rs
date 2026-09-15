@@ -142,7 +142,7 @@ impl SafetyMonitor {
         self.start_shapes.resize(agents.len(), None);
         for index in 0..agents.len() {
             if agents.alive[index] {
-                self.start_shapes[index] = Some(query::agent_body(agents, index));
+                self.start_shapes[index] = Some(agent_broad_phase_shape(agents, index));
             }
         }
     }
@@ -162,7 +162,7 @@ impl SafetyMonitor {
         self.waiting.resize(agents.len(), false);
         self.forget_dead(agents);
         self.index_bodies(agents);
-        self.scan_pairs(events);
+        self.scan_pairs(agents, events);
         self.scan_regions(agents, scenario, events);
         self.scan_states(agents, events);
     }
@@ -201,7 +201,7 @@ impl SafetyMonitor {
             if !agents.alive[index] {
                 continue;
             }
-            let end = query::agent_body(agents, index);
+            let end = agent_broad_phase_shape(agents, index);
             let start = self.start_shapes[index].unwrap_or(end);
             let body = SweptBody {
                 shape: start,
@@ -246,40 +246,77 @@ impl SafetyMonitor {
     }
 
     /// Emit the contact and near-miss edges of every candidate pair.
-    fn scan_pairs(&mut self, events: &mut Vec<Event>) {
+    fn scan_pairs(&mut self, agents: &AgentStore, events: &mut Vec<Event>) {
         self.pairs.clear();
         self.grid.candidate_pairs(&mut self.pairs);
         for position in 0..self.pairs.len() {
             let (first, second) = self.pairs[position];
-            self.scan_pair(first, second, events);
+            self.scan_pair(agents, first, second, events);
         }
-        self.close_stale_pairs(events);
+        self.close_stale_pairs(agents, events);
     }
 
     /// Emit the edges of one observed pair.
-    fn scan_pair(&mut self, first: AgentId, second: AgentId, events: &mut Vec<Event>) {
+    ///
+    /// A pair where neither side is an `ArticulatedWheeled` chain keeps the
+    /// exact existing swept clearance and time-of-impact/band-entry cast,
+    /// unchanged. A pair where either side is a chain instead compares every
+    /// segment of each side against every segment of the other
+    /// ([`agent_segments`], [`min_segment_clearance`]), using only exact,
+    /// tick-end (static) geometry: this is the deliberate, temporary
+    /// precision gap documented on [`Event::ArticulatedSegmentContact`] —
+    /// sub-tick swept precision for a chain segment is the next sibling
+    /// node's job.
+    fn scan_pair(
+        &mut self,
+        agents: &AgentStore,
+        first: AgentId,
+        second: AgentId,
+        events: &mut Vec<Event>,
+    ) {
         let key = (first, second);
-        let first_body = self.body_of(first);
-        let second_body = self.body_of(second);
-        let clearance_m =
-            query::body_clearance_m(&first_body.end_shape(), &second_body.end_shape());
-        // The signed clearance of two convex bodies under relative translation
-        // is 1-Lipschitz, so a pair clear of a band by more than the tick's
-        // relative displacement was never inside it this tick. That certificate
-        // skips the cast for the pairs that cannot be close.
-        let relative_m = (second_body.displacement_m - first_body.displacement_m).length();
-        let near_hit = clearance_m <= NEAR_MISS_THRESHOLD_M
-            || (clearance_m <= NEAR_MISS_THRESHOLD_M + relative_m
-                && band_entry(&first_body, &second_body, NEAR_MISS_THRESHOLD_M).is_some());
-        // The contact band sits inside the near-miss band, so a pair the
-        // certificate excluded from the wider band cannot have touched either.
-        // Contact takes precedence in the reporting: the near-miss state is
-        // `false` for exactly the ticks the pair is in contact, which is why the
-        // two records are two nested per-tick predicates rather than a special
-        // case in the emission below.
-        let contact =
-            near_hit && (clearance_m <= 0.0 || time_of_impact(&first_body, &second_body).is_some());
-        let near = near_hit && !contact;
+        let first_is_chain = agents.articulated[first.index()].is_some();
+        let second_is_chain = agents.articulated[second.index()].is_some();
+
+        let (contact, near, clearance_m, first_segment, second_segment) =
+            if first_is_chain || second_is_chain {
+                let first_segments = agent_segments(agents, first.index());
+                let second_segments = agent_segments(agents, second.index());
+                let (clearance_m, first_index, second_index) =
+                    min_segment_clearance(&first_segments, &second_segments);
+                let contact = clearance_m <= 0.0;
+                let near = !contact && clearance_m <= NEAR_MISS_THRESHOLD_M;
+                (
+                    contact,
+                    near,
+                    clearance_m,
+                    first_is_chain.then_some(first_index),
+                    second_is_chain.then_some(second_index),
+                )
+            } else {
+                let first_body = self.body_of(first);
+                let second_body = self.body_of(second);
+                let clearance_m =
+                    query::body_clearance_m(&first_body.end_shape(), &second_body.end_shape());
+                // The signed clearance of two convex bodies under relative translation
+                // is 1-Lipschitz, so a pair clear of a band by more than the tick's
+                // relative displacement was never inside it this tick. That certificate
+                // skips the cast for the pairs that cannot be close.
+                let relative_m = (second_body.displacement_m - first_body.displacement_m).length();
+                let near_hit = clearance_m <= NEAR_MISS_THRESHOLD_M
+                    || (clearance_m <= NEAR_MISS_THRESHOLD_M + relative_m
+                        && band_entry(&first_body, &second_body, NEAR_MISS_THRESHOLD_M).is_some());
+                // The contact band sits inside the near-miss band, so a pair the
+                // certificate excluded from the wider band cannot have touched either.
+                // Contact takes precedence in the reporting: the near-miss state is
+                // `false` for exactly the ticks the pair is in contact, which is why the
+                // two records are two nested per-tick predicates rather than a special
+                // case in the emission below.
+                let contact = near_hit
+                    && (clearance_m <= 0.0 || time_of_impact(&first_body, &second_body).is_some());
+                let near = near_hit && !contact;
+                (contact, near, clearance_m, None, None)
+            };
 
         let was_contact = self.contact.contains(&key);
         if contact != was_contact {
@@ -288,12 +325,23 @@ impl SafetyMonitor {
             } else {
                 self.contact.remove(&key);
             }
-            events.push(Event::Collision {
-                agent: first,
-                other: second,
-                clearance_m,
-                contacting: contact,
-            });
+            if first_is_chain || second_is_chain {
+                events.push(Event::ArticulatedSegmentContact {
+                    agent: first,
+                    agent_segment: first_segment,
+                    other: second,
+                    other_segment: second_segment,
+                    clearance_m,
+                    contacting: contact,
+                });
+            } else {
+                events.push(Event::Collision {
+                    agent: first,
+                    other: second,
+                    clearance_m,
+                    contacting: contact,
+                });
+            }
         }
         let was_near = self.near.contains(&key);
         if near != was_near {
@@ -316,7 +364,7 @@ impl SafetyMonitor {
     /// A pair inside a reporting band is always a broad-phase candidate, so this
     /// is a completeness guard rather than the common path: it guarantees that
     /// no open state can outlive the candidate window without its end record.
-    fn close_stale_pairs(&mut self, events: &mut Vec<Event>) {
+    fn close_stale_pairs(&mut self, agents: &AgentStore, events: &mut Vec<Event>) {
         let pairs = &self.pairs;
         self.stale.clear();
         self.stale.extend(
@@ -333,17 +381,44 @@ impl SafetyMonitor {
         );
         for key in &self.stale {
             let (first, second) = *key;
-            let clearance_m = query::body_clearance_m(
-                &self.body_of(first).end_shape(),
-                &self.body_of(second).end_shape(),
-            );
-            if self.contact.remove(key) {
-                events.push(Event::Collision {
-                    agent: first,
-                    other: second,
+            let first_is_chain = agents.articulated[first.index()].is_some();
+            let second_is_chain = agents.articulated[second.index()].is_some();
+            let (clearance_m, first_segment, second_segment) = if first_is_chain || second_is_chain
+            {
+                let first_segments = agent_segments(agents, first.index());
+                let second_segments = agent_segments(agents, second.index());
+                let (clearance_m, first_index, second_index) =
+                    min_segment_clearance(&first_segments, &second_segments);
+                (
                     clearance_m,
-                    contacting: false,
-                });
+                    first_is_chain.then_some(first_index),
+                    second_is_chain.then_some(second_index),
+                )
+            } else {
+                let clearance_m = query::body_clearance_m(
+                    &self.body_of(first).end_shape(),
+                    &self.body_of(second).end_shape(),
+                );
+                (clearance_m, None, None)
+            };
+            if self.contact.remove(key) {
+                if first_is_chain || second_is_chain {
+                    events.push(Event::ArticulatedSegmentContact {
+                        agent: first,
+                        agent_segment: first_segment,
+                        other: second,
+                        other_segment: second_segment,
+                        clearance_m,
+                        contacting: false,
+                    });
+                } else {
+                    events.push(Event::Collision {
+                        agent: first,
+                        other: second,
+                        clearance_m,
+                        contacting: false,
+                    });
+                }
             }
             if self.near.remove(key) {
                 events.push(Event::NearMiss {
@@ -480,6 +555,71 @@ impl SafetyMonitor {
     }
 }
 
+/// Every exact body shape of one agent's own segments, in chain order,
+/// segment `0` first. A non-chain agent has exactly one: its own body.
+fn agent_segments(agents: &AgentStore, index: usize) -> Vec<(u32, BodyShape)> {
+    let lead = query::agent_body(agents, index);
+    let Some(state) = &agents.articulated[index] else {
+        return vec![(0, lead)];
+    };
+    let mut shapes = vec![(0, lead)];
+    for (offset, (geometry, pose)) in state.segments()[1..]
+        .iter()
+        .zip(state.trailers())
+        .enumerate()
+    {
+        shapes.push((
+            (offset + 1) as u32,
+            BodyShape::Box {
+                centre: pose.position,
+                heading_rad: pose.heading_rad,
+                length_m: geometry.length_m,
+                width_m: geometry.width_m,
+            },
+        ));
+    }
+    shapes
+}
+
+/// The broad-phase indexing proxy for one agent: exactly its own body for a
+/// non-chain agent, so every existing box/circle/capsule scenario is
+/// byte-for-byte unaffected, or one circle enclosing every segment's box for
+/// an `ArticulatedWheeled` chain, so the swept broad phase can never miss a
+/// contact any segment of the chain could make.
+fn agent_broad_phase_shape(agents: &AgentStore, index: usize) -> BodyShape {
+    if agents.articulated[index].is_none() {
+        return query::agent_body(agents, index);
+    }
+    let segments = agent_segments(agents, index);
+    let mut bounds = segments[0].1.bounds();
+    for (_, shape) in &segments[1..] {
+        let next = shape.bounds();
+        bounds = query::Aabb::new(bounds.min.min(next.min), bounds.max.max(next.max));
+    }
+    BodyShape::Circle {
+        centre: bounds.centre(),
+        radius_m: bounds.half_extent().length(),
+    }
+}
+
+/// The minimum exact clearance between any segment of `first` and any
+/// segment of `second`, and the two segment indices that achieve it.
+fn min_segment_clearance(
+    first: &[(u32, BodyShape)],
+    second: &[(u32, BodyShape)],
+) -> (f64, u32, u32) {
+    let mut best = (f64::INFINITY, 0u32, 0u32);
+    for (first_index, first_shape) in first {
+        for (second_index, second_shape) in second {
+            let clearance_m = query::body_clearance_m(first_shape, second_shape);
+            if clearance_m < best.0 {
+                best = (clearance_m, *first_index, *second_index);
+            }
+        }
+    }
+    best
+}
+
 /// Which controller state a mode's recorded decision reports.
 const fn control_kind(mode: AgentMode) -> ControlTransitionKind {
     match mode {
@@ -515,6 +655,7 @@ fn pedestrian_crossing_violation(agents: &AgentStore, index: usize) -> Option<Vi
 mod tests {
     use super::*;
     use crate::agent::AgentInit;
+    use crate::articulated::{ArticulatedSegmentGeometry, ArticulatedState};
     use crate::compliance::{ComplianceDecision, ComplianceReason};
     use crate::pedestrian_compliance::{PedestrianComplianceDecision, PedestrianComplianceReason};
     use crate::query::CONTACT_EPSILON_M;
@@ -833,8 +974,9 @@ mod tests {
 
     #[test]
     fn an_open_pair_outside_the_candidate_window_is_closed() {
-        let first = AgentId::from_index(0);
-        let second = AgentId::from_index(1);
+        let mut store = AgentStore::default();
+        let first = push_pedestrian(&mut store, DVec2::ZERO, 0.0, 0.25);
+        let second = push_pedestrian(&mut store, DVec2::new(-0.6, 0.0), 0.0, 0.25);
         let mut monitor = SafetyMonitor {
             indexed: vec![
                 (
@@ -856,7 +998,7 @@ mod tests {
         };
         monitor.near.insert((first, second));
         let mut events = Vec::new();
-        monitor.close_stale_pairs(&mut events);
+        monitor.close_stale_pairs(&store, &mut events);
         assert_same_events(
             &events,
             &[Event::NearMiss {
@@ -867,6 +1009,98 @@ mod tests {
             }],
         );
         assert!(monitor.near.is_empty());
+    }
+
+    /// A non-lead (trailer) segment of an articulated chain can contact a
+    /// body the lead segment's own box never reaches. The old lead-only
+    /// proxy misses this contact entirely; the fix names the touching
+    /// trailer segment through a segment-precise `Event::ArticulatedSegmentContact`
+    /// instead of a plain `Event::Collision`.
+    #[test]
+    fn a_trailer_segment_contact_is_detected_and_named() {
+        let scenario = no_region_scenario();
+        let mut store = AgentStore::default();
+        let chain = push_vehicle(&mut store, DVec2::ZERO, 0.0);
+        let segments = vec![
+            ArticulatedSegmentGeometry {
+                length_m: 6.0,
+                width_m: 2.5,
+                hitch_offset_m: None,
+            },
+            ArticulatedSegmentGeometry {
+                length_m: 13.6,
+                width_m: 2.55,
+                hitch_offset_m: Some(1.2),
+            },
+        ];
+        store.articulated[chain.index()] =
+            Some(ArticulatedState::spawn(segments, 0.9, DVec2::ZERO, 0.0));
+
+        // Recompute the trailer's spawn layout from the actual state rather
+        // than trusting hand arithmetic: kingpin trailer, 1.2 m setback,
+        // ends up centred 8.6 m behind the tractor's own centre.
+        let trailer_position = store.articulated[chain.index()]
+            .as_ref()
+            .expect("chain state")
+            .trailers()[0]
+            .position;
+        assert!((trailer_position.x - (-8.6)).abs() < 1e-9);
+        assert!(trailer_position.y.abs() < 1e-9);
+
+        // A 2 m square obstacle centred at (-10, 0): inside the trailer's
+        // x in [-15.4, -1.8] span, clear outside the tractor's x in [-3, 3].
+        let obstacle = push_vehicle(&mut store, DVec2::new(-10.0, 0.0), 0.0);
+        store.body_length_m[obstacle.index()] = 2.0;
+        store.body_width_m[obstacle.index()] = 2.0;
+
+        // Sanity check proving the necessity of this fix: the old lead-only
+        // proxy never sees this contact.
+        assert!(
+            !query::bodies_intersect(
+                &query::agent_body(&store, chain.index()),
+                &query::agent_body(&store, obstacle.index()),
+            ),
+            "the lead-only proxy must miss the trailer's contact"
+        );
+
+        let mut monitor = SafetyMonitor::default();
+        let events = tick(&mut monitor, &mut store, &scenario, |_| {});
+
+        let contact = events
+            .iter()
+            .find(|event| {
+                matches!(
+                    event,
+                    Event::ArticulatedSegmentContact {
+                        contacting: true,
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("expected an articulated segment contact: {events:?}"));
+        let Event::ArticulatedSegmentContact {
+            agent,
+            agent_segment,
+            other,
+            other_segment,
+            contacting,
+            ..
+        } = contact
+        else {
+            unreachable!("matched above");
+        };
+        assert_eq!(*agent, chain);
+        assert_eq!(*agent_segment, Some(1), "segment 1 is the trailer");
+        assert_eq!(*other, obstacle);
+        assert_eq!(*other_segment, None, "the obstacle is not a chain");
+        assert!(*contacting);
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::Collision { .. })),
+            "a chain-involved contact must not also emit a plain Collision: {events:?}"
+        );
     }
 
     /// A despawn ends the agent's pair and region states without a further

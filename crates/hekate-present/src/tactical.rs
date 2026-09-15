@@ -166,7 +166,8 @@ impl TacticalOverlay {
                 | Event::ControlTransition { .. }
                 | Event::FacilityTransition { .. }
                 | Event::ClosePass { .. }
-                | Event::ArticulationLimitExceeded { .. } => {}
+                | Event::ArticulationLimitExceeded { .. }
+                | Event::ArticulatedSegmentContact { .. } => {}
             }
         }
     }

@@ -177,7 +177,8 @@ fn benchmark_demand_generates_routed_vehicles() {
                     | Event::FacilityTransition { .. }
                     | Event::OpposingTraversal { .. }
                     | Event::ClosePass { .. }
-                    | Event::ArticulationLimitExceeded { .. } => None,
+                    | Event::ArticulationLimitExceeded { .. }
+                    | Event::ArticulatedSegmentContact { .. } => None,
                 })
                 .collect();
             for agent in arrivals {

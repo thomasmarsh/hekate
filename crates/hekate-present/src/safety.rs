@@ -42,6 +42,7 @@ pub const fn is_safety_record(kind: EventKind) -> bool {
             | EventKind::ControlTransition
             | EventKind::ClosePass
             | EventKind::ArticulationLimitExceeded
+            | EventKind::ArticulatedSegmentContact
     )
 }
 
@@ -91,7 +92,9 @@ impl EventParticipants {
     /// The participants of `event`.
     pub fn of(event: &Event) -> Self {
         let agents = match event {
-            Event::Collision { agent, other, .. } | Event::NearMiss { agent, other, .. } => {
+            Event::Collision { agent, other, .. }
+            | Event::NearMiss { agent, other, .. }
+            | Event::ArticulatedSegmentContact { agent, other, .. } => {
                 // The canonical pair spelling already ascends.
                 vec![agent.get() as usize, other.get() as usize]
             }
@@ -363,6 +366,19 @@ pub fn event_summary(record: &FrameEvent) -> String {
             if *exceeding { "began" } else { "ended" },
             body(agent.get() as usize)
         ),
+        Event::ArticulatedSegmentContact {
+            agent,
+            agent_segment,
+            other,
+            other_segment,
+            clearance_m,
+            contacting,
+        } => format!(
+            "{ticket} contact {}  {}seg{agent_segment:?} + {}seg{other_segment:?}  clearance {clearance_m:.2} m",
+            if *contacting { "began" } else { "ended" },
+            body(agent.get() as usize),
+            body(other.get() as usize)
+        ),
     }
 }
 
@@ -504,7 +520,8 @@ impl SafetyOverlay {
                 | Event::FacilityTransition { .. }
                 | Event::OpposingTraversal { .. }
                 | Event::ClosePass { .. }
-                | Event::ArticulationLimitExceeded { .. } => {}
+                | Event::ArticulationLimitExceeded { .. }
+                | Event::ArticulatedSegmentContact { .. } => {}
             }
         }
         self.prune(tick);
@@ -650,6 +667,7 @@ impl SceneFrame {
         for record in self.safety.events() {
             let candidate = match record.kind() {
                 EventKind::Collision => Some(BodyEmphasis::Collision),
+                EventKind::ArticulatedSegmentContact => Some(BodyEmphasis::Collision),
                 EventKind::NearMiss => Some(BodyEmphasis::NearMiss),
                 EventKind::Violation => Some(BodyEmphasis::Violation),
                 _ => None,

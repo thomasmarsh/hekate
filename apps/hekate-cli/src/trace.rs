@@ -354,6 +354,12 @@ struct EventRecord {
     limit_rad: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exceeding: Option<bool>,
+    // The articulated-segment-contact record appends its own fields last, for
+    // the same reason: no earlier variant's line changes byte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_segment: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    other_segment: Option<u32>,
 }
 
 /// One clearance band of a `ClosePass` record: its stable id and the seconds
@@ -432,6 +438,8 @@ impl EventRecord {
             angle_rad: None,
             limit_rad: None,
             exceeding: None,
+            agent_segment: None,
+            other_segment: None,
         }
     }
 
@@ -624,6 +632,21 @@ impl EventRecord {
                 exceeding: Some(exceeding),
                 ..Self::empty(tick, "articulation_limit_exceeded", agent.get())
             },
+            Event::ArticulatedSegmentContact {
+                agent,
+                agent_segment,
+                other,
+                other_segment,
+                clearance_m,
+                contacting,
+            } => Self {
+                other: Some(other.get()),
+                clearance_m: Some(clearance_m),
+                contacting: Some(contacting),
+                agent_segment,
+                other_segment,
+                ..Self::empty(tick, "articulated_segment_contact", agent.get())
+            },
         }
     }
 }
@@ -773,7 +796,7 @@ mod tests {
 
         let agent = AgentId::from_index(3);
         let partner = AgentId::from_index(7);
-        let cases: [(&str, Event); 15] = [
+        let cases: [(&str, Event); 16] = [
             (
                 "spawned",
                 Event::Spawned {
@@ -927,6 +950,17 @@ mod tests {
                     exceeding: true,
                 },
             ),
+            (
+                "articulated_segment_contact",
+                Event::ArticulatedSegmentContact {
+                    agent,
+                    agent_segment: Some(1),
+                    other: partner,
+                    other_segment: None,
+                    clearance_m: -0.1,
+                    contacting: true,
+                },
+            ),
         ];
 
         for (name, event) in cases {
@@ -967,6 +1001,9 @@ mod tests {
                 ),
                 "articulation_limit_exceeded" => {
                     Some(r#""hitch_index":1,"angle_rad":0.95,"limit_rad":0.9,"exceeding":true"#)
+                }
+                "articulated_segment_contact" => {
+                    Some(r#""other":7,"clearance_m":-0.1,"contacting":true,"agent_segment":1"#)
                 }
                 _ => None,
             };

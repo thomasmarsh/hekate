@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 status: proposed
-updated: 2026-09-15T22:59:44Z
+updated: 2026-09-15T23:33:11Z
 summary: Add hitch integration, runtime dispatch, and swept collision for articulated-wheeled.
-next: "[[tas-4peekhnhww1s36pbyb5rx0td8s-segment-level-broad-narrow-phase-collision-for]]"
+next: "[[tas-78ney4232et57z60w345873x43-swept-collision-queries-for-multi-segment]]"
 ---
 
 Parent [[TAS-021-phase-2-increment-3-heavy-articulated-vehicles]].

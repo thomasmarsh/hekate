@@ -324,7 +324,8 @@ impl<B: SessionBackend> TuiSession<B> {
                 | Event::FacilityTransition { .. }
                 | Event::OpposingTraversal { .. }
                 | Event::ClosePass { .. }
-                | Event::ArticulationLimitExceeded { .. } => {}
+                | Event::ArticulationLimitExceeded { .. }
+                | Event::ArticulatedSegmentContact { .. } => {}
             }
         }
         self.curr = self.sim.snapshot(SnapshotDetail::Full);
