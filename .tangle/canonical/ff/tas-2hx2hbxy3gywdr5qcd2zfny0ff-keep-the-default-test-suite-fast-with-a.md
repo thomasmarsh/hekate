@@ -2,9 +2,9 @@
 context_rev: 1
 priority: P1
 status: proposed
-updated: 2026-09-15T17:51:56Z
+updated: 2026-09-15T18:03:50Z
 summary: Keep the default test suite fast with a separate harness for expensive tests.
-next: "[[tas-5mdwpgdngga2whqe4h4fckydxg-remove-the-dominated-determinism-tests-and]]"
+next: "[[tas-5syjgmtrwvgqe66yn9w1j5v0p4-make-the-expensive-behavior-tests-fast-and]]"
 ---
 
 Area [[IDX-001-hekate]].
