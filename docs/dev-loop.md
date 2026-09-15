@@ -5,6 +5,10 @@ nextest runs one process per test, so it parallelizes without cargo's
 shared-process `--test-threads` and no test can leak state into another. The
 configuration is `.config/nextest.toml`.
 
+Install it once with `cargo install cargo-nextest --locked` (CI does the same
+with `taiki-e/install-action`); without it every command below fails with
+`error: no such command: nextest`.
+
 nextest does not run doctests, so they keep the `cargo test --doc` path below.
 
 ## Fast path: one crate
@@ -48,13 +52,18 @@ run this after the workspace gate. CI runs it as its own step.
 
 ## Ignored harnesses
 
-The workspace keeps three `#[ignore]`d harnesses out of the normal run:
-`release_benchmark` (`hekate-cli`), `increment_2_profile_frame_time`
-(`hekate-present`), and `increment_2_profile_counters` (`hekate-sim`). Run one
-explicitly with nextest's ignored-only switch:
+The workspace keeps three `#[ignore]`d harnesses out of the normal run. All three
+are release-mode wall-clock harnesses, and each test function's name differs from
+the name of the test binary that contains it:
+`release_benchmark_writes_the_checked_in_artifact` in `hekate-cli`'s
+`release_benchmark`, `increment_2_profile_frame_time` in `hekate-present`'s
+`presenter_frame_time`, and `increment_2_profile_counters` in `hekate-sim`'s
+`performance_counters`. Run one explicitly with nextest's ignored-only switch:
 
 ```sh
-cargo nextest run --run-ignored ignored-only -p <crate> --test <name> --no-capture
+cargo nextest run --release --run-ignored ignored-only -p hekate-present --test presenter_frame_time --no-capture
+cargo nextest run --release --run-ignored ignored-only -p hekate-sim --test performance_counters --no-capture
+cargo nextest run --release --run-ignored ignored-only -p hekate-cli --test release_benchmark --no-capture
 ```
 
 `--no-capture` passes the harness's output through, and nextest runs that one

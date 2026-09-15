@@ -54,13 +54,13 @@ scripts/bench-release.sh
 ```
 
 The harness is an ignored test, so the five gates never pay for a wall-clock
-measurement; the script builds the release profile and runs it with
-`--ignored --nocapture`. Per scenario it warms up 2 000 ticks, measures three
-independent passes of the same fixed-step loop with `std::time::Instant` around
-the loop only, then runs the recording path once to size the output. Scenario
-load, warm-up, artifact writing, and process start-up are outside the measured
-interval; the ratios are derived from the **median** pass. Agent steps are live
-agents summed over the run, the same quantity
+measurement; the script builds the release profile and runs it with nextest's
+`--run-ignored ignored-only --no-capture`. Per scenario it warms up 2 000 ticks,
+measures three independent passes of the same fixed-step loop with
+`std::time::Instant` around the loop only, then runs the recording path once to
+size the output. Scenario load, warm-up, artifact writing, and process start-up
+are outside the measured interval; the ratios are derived from the **median**
+pass. Agent steps are live agents summed over the run, the same quantity
 `baselines/phase1/performance.json` reports. Output bytes are the canonical JSON
 Lines trace and the immutable run directory the default sampling policy writes
 (every event, trajectories sampled at stride 10 ticks up to 100 000 rows), each

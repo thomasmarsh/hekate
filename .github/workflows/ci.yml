@@ -41,7 +41,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9.144
 
@@ -52,7 +52,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo nextest run --workspace --all-features
+        run: cargo nextest run --profile ci --workspace --all-features
 
       - name: Test doctests
         # nextest runs no doctests; crates/hekate-sim/src/lib.rs has a real compiled doctest.
