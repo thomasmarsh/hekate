@@ -168,10 +168,11 @@ pub fn canonical_run_sampled(
 /// run the trace records.
 ///
 /// The run ends at a close boundary: before the metric capture, the run's
-/// still-open close-pass intervals are closed, so a pass in progress at the
-/// final tick is reported with the evidence a completed one carries rather than
-/// dropped. The closure emits no event — no tick remains to carry one — so the
-/// recorded trace bytes stay the canonical ones.
+/// still-open close-pass intervals and opposing-traversal intervals are closed,
+/// so a pass or an opposing traversal in progress at the final tick is reported
+/// with the evidence a completed one carries rather than dropped. The closure
+/// emits no event — no tick remains to carry one — so the recorded trace bytes
+/// stay the canonical ones.
 pub fn canonical_run_captured(
     scenario: CompiledScenario,
     config: RunConfig,
@@ -187,8 +188,10 @@ pub fn canonical_run_captured(
         let output = sim.step();
         recorder.record(&output);
         metrics.record(&output);
-        // The step's borrow ends with its last use, so the trajectory recorder
-        // observes the same completed tick through an immutable borrow.
+        // The step's borrow ends with its last use, so the trajectory and
+        // metric recorders observe the same completed tick through immutable
+        // borrows.
+        metrics.observe(&sim);
         trajectories.observe(&sim);
     }
 
@@ -197,6 +200,7 @@ pub fn canonical_run_captured(
     // closure emits no event — no tick remains to carry one — so the recorded
     // trace bytes are unchanged.
     sim.close_open_close_passes();
+    sim.close_open_opposing_traversals();
 
     // The metric capture reads the live simulation, so it closes before
     // `finish` consumes the simulation.

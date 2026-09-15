@@ -23,13 +23,14 @@ use flate2::read::GzDecoder;
 use hekate_cli::{
     EVENT_STREAM_FILE, MANIFEST_FILE, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus,
     MetricValue, OperationalValues, RunDirectoryRequest, RunMetrics, RunMetricsArtifact,
-    RunMetricsRecorder, SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, canonical_run_captured,
-    load_scenario_provenance, replay_run_directory, write_run_directory,
+    RunMetricsRecorder, SUMMARY_FILE, SamplingPolicy, ScenarioProvenance, WrongWayValues,
+    canonical_run_captured, load_scenario_provenance, replay_run_directory, write_run_directory,
 };
-use hekate_model::{CompiledScenario, TacticKind, parse_scenario_source_v2};
+use hekate_model::{CompiledScenario, PermissionEffect, TacticKind, parse_scenario_source_v2};
 use hekate_sim::{
     AgentId, AgentMode, Event, ManeuverEdge, ManeuverState, MetricMinimum, ModePair, MovementKey,
-    OperationValues, OvertakeObservation, PostEncroachment, RunConfig, Simulation,
+    OperationValues, OvertakeObservation, PostEncroachment, RunConfig, Simulation, SnapshotDetail,
+    wrong_way::OpposingTraversalObservation,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1716,4 +1717,801 @@ fn the_run_artifact_serializes_and_round_trips_the_close_pass_families() {
     // a run the directory holds the evidence for.
     let replayed = replay_run_directory(&run_dir, true).expect("the recorded run reproduces");
     assert_eq!(replayed.bytes(), trace.bytes());
+}
+
+// ---------------------------------------------------------------------------
+// The wrong-way families (TAS-124)
+// ---------------------------------------------------------------------------
+
+/// Steps a single-rider wrong-way run keeps recording after its entry request,
+/// long enough for the traversal on `a` to close and its successor on `left` to
+/// still be open at the run end.
+const TICKS_AFTER_ENTRY: u32 = 200;
+
+/// The wrong-way fixture: a forward-nominal facility `a` whose reverse
+/// traversal is connected through `a_back_to_left` to the reverse continuance
+/// `left`, so a reverse-capable rider that requests the entry travels `a`
+/// against its rule direction and completes its route.
+///
+/// `policy` authors the `maneuver_policy.wrong_way` block, `permission` authors
+/// the `permit` statement that makes the opposing traversal legal, `capable`
+/// gives the mode the `reverse_direction` tactic, and `direction` is `a`'s
+/// authored nominal direction, so a test can make the run inapplicable or the
+/// facility `either`.
+fn opposing_scenario_source(
+    rate_per_hour: f64,
+    policy: bool,
+    permission: bool,
+    capable: bool,
+    direction: &str,
+) -> String {
+    let tactics = match capable {
+        true => "'follow', 'stop', 'yield', 'reverse_direction'",
+        false => "'follow', 'stop', 'yield'",
+    };
+    let wrong_way = match policy {
+        true => {
+            "  maneuver_policy: {\n    wrong_way: { min_time_saving_s: 0.0,\n      max_opposing_density_per_km: 100.0, urgency: 1.0 },\n  },\n"
+        }
+        false => "",
+    };
+    let permissions = match permission {
+        true => {
+            "  permissions: [ { id: 'contraflow_a', kind: 'nominal_direction', holder: 'rider', target: 'a', effect: 'permit' } ],\n"
+        }
+        false => "",
+    };
+    format!(
+        r#"{{
+  schema_version: 2,
+  id: 'wrong_way_metrics',
+  coordinate_system: {{ x: 'east_m', y: 'north_m' }},
+  paths: [
+    {{ id: 'guide_a', points: [ {{ x: 0.0, y: 0.0 }}, {{ x: 100.0, y: 0.0 }} ] }},
+    {{ id: 'guide_left', points: [ {{ x: -100.0, y: 0.0 }}, {{ x: 0.0, y: 0.0 }} ] }},
+  ],
+  portals: [
+    {{ id: 'a_entry', path: 'guide_a', end: 'start', width_m: 3.0 }},
+    {{ id: 'a_exit', path: 'guide_a', end: 'end', width_m: 3.0 }},
+  ],
+  boundaries: [
+    {{ id: 'world', points: [
+      {{ x: -110.0, y: -10.0 }}, {{ x: 110.0, y: -10.0 }},
+      {{ x: 110.0, y: 10.0 }}, {{ x: -110.0, y: 10.0 }},
+    ] }},
+  ],
+  regions: [
+    {{ id: 'band_a', points: [
+      {{ x: 0.0, y: -1.5 }}, {{ x: 100.0, y: -1.5 }},
+      {{ x: 100.0, y: 1.5 }}, {{ x: 0.0, y: 1.5 }},
+    ] }},
+    {{ id: 'band_left', points: [
+      {{ x: -100.0, y: -1.5 }}, {{ x: 0.0, y: -1.5 }},
+      {{ x: 0.0, y: 1.5 }}, {{ x: -100.0, y: 1.5 }},
+    ] }},
+  ],
+  facilities: [
+    {{ id: 'a', region: 'band_a', reference_path: 'guide_a',
+      width_m: 3.0, nominal_direction: '{direction}',
+      access: {{ modes: [ 'rider' ] }}, lateral_use: 'shared',
+      speed_policy: {{ limit_mps: null }} }},
+    {{ id: 'left', region: 'band_left', reference_path: 'guide_left',
+      width_m: 3.0, nominal_direction: 'forward',
+      access: {{ modes: [ 'rider' ] }}, lateral_use: 'shared',
+      speed_policy: {{ limit_mps: null }} }},
+  ],
+  facility_connectors: [
+    {{ id: 'left_into_a',
+      from: {{ facility: 'left', direction: 'forward' }},
+      to: {{ facility: 'a', direction: 'forward' }} }},
+    {{ id: 'a_back_to_left',
+      from: {{ facility: 'a', direction: 'reverse' }},
+      to: {{ facility: 'left', direction: 'reverse' }} }},
+  ],
+{permissions}  movements: [
+    {{ id: 'through', from: 'a_entry', to: 'a_exit', path: 'guide_a', priority: 0,
+      direction: 'forward' }},
+  ],
+  mode_templates: [
+    {{
+      id: 'rider',
+      body: {{ kind: 'capsule', length_m: {{ min: 1.8, max: 1.8 }},
+        radius_m: {{ min: 0.35, max: 0.35 }} }},
+      motion: 'single_body_wheeled',
+      tactics: [ {tactics} ],
+      access: {{ facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: {{ limit_mps: null }} }},
+      occupancy: 'operator_only',
+      profiles: {{
+        speed_mps: {{ min: 6.0, max: 6.0 }},
+        max_accel_mps2: {{ min: 1.2, max: 1.2 }},
+        comfortable_brake_mps2: {{ min: 2.0, max: 2.0 }},
+        time_gap_s: {{ min: 1.0, max: 1.0 }},
+        steering_rate_max_rad_s: {{ min: 0.9, max: 0.9 }},
+        lateral_clearance_m: {{ min: 0.3, max: 0.3 }},
+        compliance: {{ min: 0.0, max: 0.0 }},
+      }},
+    }},
+  ],
+{wrong_way}  demand: [
+    {{ id: 'rider_inflow', mode: 'rider',
+      spawn: {{ rate: {{
+        portal: 'a_entry',
+        rate_per_hour: {rate_per_hour:?},
+        interval_s: {{ start_s: 0.0, end_s: null }},
+        choice: {{ movements: [ {{ movement: 'through', weight: 1.0 }} ] }},
+      }} }} }},
+  ],
+}}
+"#
+    )
+}
+
+fn opposing_scenario(
+    rate_per_hour: f64,
+    policy: bool,
+    permission: bool,
+    capable: bool,
+    direction: &str,
+) -> CompiledScenario {
+    let source = parse_scenario_source_v2(&opposing_scenario_source(
+        rate_per_hour,
+        policy,
+        permission,
+        capable,
+        direction,
+    ))
+    .expect("the document is version 2");
+    CompiledScenario::compile_v2(source).expect("the scenario compiles")
+}
+
+/// One live body on a compiled guide path: its stable id, arc-length position,
+/// and body length, the fields a bumper gap needs.
+#[derive(Debug, Clone, Copy)]
+struct BodyPlacement {
+    id: AgentId,
+    s_m: f64,
+    body_length_m: f64,
+}
+
+/// Every live body on `path`, ascending by arc length.
+fn live_bodies(sim: &Simulation, path: usize) -> Vec<BodyPlacement> {
+    let mut bodies: Vec<BodyPlacement> = sim
+        .snapshot(SnapshotDetail::Full)
+        .agents()
+        .iter()
+        .filter_map(|sample| {
+            let motion = sample.motion.as_ref()?;
+            (motion.path.index() == path).then_some(BodyPlacement {
+                id: sample.id,
+                s_m: motion.path_distance_m,
+                body_length_m: motion.body_length_m,
+            })
+        })
+        .collect();
+    bodies.sort_by(|first, second| first.s_m.total_cmp(&second.s_m));
+    bodies
+}
+
+/// The bumper-to-bumper gap between two bodies on one path, in metres.
+fn bumper_gap_m(first: BodyPlacement, second: BodyPlacement) -> f64 {
+    (first.s_m - second.s_m).abs() - (first.body_length_m + second.body_length_m) * 0.5
+}
+
+/// Step until exactly two bodies ride `path`, the leading one lies inside
+/// `lead_window`, and its bumper gap to the other lies inside `gap_window`;
+/// return the leading body and the body it turns into.
+///
+/// The pair is deterministic for the fixture's fixed seed, and the helper
+/// mirrors the one the sim seam is tested with.
+fn leading_pair_on(
+    sim: &mut Simulation,
+    path: usize,
+    lead_window: std::ops::RangeInclusive<f64>,
+    gap_window: std::ops::RangeInclusive<f64>,
+) -> (BodyPlacement, BodyPlacement) {
+    for _ in 0..8000 {
+        sim.step();
+        let bodies = live_bodies(sim, path);
+        if let [occupancy, lead] = bodies[..] {
+            let gap_m = bumper_gap_m(lead, occupancy);
+            if lead_window.contains(&lead.s_m) && gap_window.contains(&gap_m) {
+                return (lead, occupancy);
+            }
+        }
+    }
+    panic!(
+        "two riders must ride path {path} with the leading one in {lead_window:?} \
+         and a bumper gap in {gap_window:?}"
+    );
+}
+
+/// The agents the snapshot observes on an opposing traversal.
+fn opposing_bodies(sim: &Simulation) -> Vec<AgentId> {
+    sim.snapshot(SnapshotDetail::Full)
+        .agents()
+        .iter()
+        .filter(|sample| {
+            sample
+                .motion
+                .as_ref()
+                .and_then(|motion| motion.route_state)
+                .is_some_and(|route| route.opposing_direction.is_some())
+        })
+        .map(|sample| sample.id)
+        .collect()
+}
+
+/// Whether a test lets the hand-driven run continue or stop after the step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drive {
+    Continue,
+    Stop,
+}
+
+/// One hand-driven wrong-way run: the metrics the recorder captured, the
+/// simulation that produced them, and every step's events.
+struct WrongWayRun {
+    metrics: RunMetrics,
+    sim: Simulation,
+    /// One entry per completed step, in step order, so a test can restate a
+    /// family from the stream without the writer's own bookkeeping.
+    steps: Vec<Vec<Event>>,
+    final_tick: u64,
+}
+
+/// Drive a wrong-way run by hand, exactly as the run loop does: record every
+/// step's events, observe the same completed tick, and close the run's open
+/// intervals before the capture.
+///
+/// `drive` runs after each step with the live simulation, so a test asks for
+/// the entry once its subject reaches the window it needs; the kernel evaluates
+/// the request at the start of the next step, exactly as it evaluates one a
+/// tactical leaf records.
+fn drive_wrong_way_run(
+    mut sim: Simulation,
+    max_ticks: u64,
+    mut drive: impl FnMut(&mut Simulation, u64) -> Drive,
+) -> WrongWayRun {
+    let mut recorder = RunMetricsRecorder::new();
+    let mut steps = Vec::new();
+    let mut final_tick = 0;
+    for tick in 0..max_ticks {
+        let output = sim.step();
+        recorder.record(&output);
+        steps.push(output.events().to_vec());
+        final_tick = output.time().tick();
+        recorder.observe(&sim);
+        if drive(&mut sim, tick) == Drive::Stop {
+            break;
+        }
+    }
+    sim.close_open_opposing_traversals();
+    let metrics = recorder.finish(&sim);
+    WrongWayRun {
+        metrics,
+        sim,
+        steps,
+        final_tick,
+    }
+}
+
+/// The rule key one interval is reported under: its perceived rule's stable
+/// label, or `none` when no statement binds it.
+fn rule_bucket_key(rule: Option<PermissionEffect>) -> String {
+    rule.map_or_else(|| "none".to_owned(), |rule| rule.label().to_owned())
+}
+
+/// The counted intervals one dimension's buckets report.
+fn bucket_intervals(slices: &BTreeMap<String, WrongWayValues>) -> u64 {
+    slices
+        .values()
+        .map(|values| values.wrong_way_intervals.value.unwrap_or(0.0) as u64)
+        .sum()
+}
+
+/// Assert every bucket of one dimension reports exactly the intervals the
+/// tracker recorded under that key, and that the buckets account for all of
+/// them.
+fn assert_bucket_counts(
+    slices: &BTreeMap<String, WrongWayValues>,
+    expected: &BTreeMap<String, u64>,
+) {
+    for (key, values) in slices {
+        assert_count(
+            &values.wrong_way_intervals,
+            expected.get(key).copied().unwrap_or(0),
+        );
+    }
+    assert_eq!(bucket_intervals(slices), expected.values().sum::<u64>());
+}
+
+/// The intervals the tracker closed, grouped by each dimension's own key,
+/// restated from the observations rather than from the writer's buckets.
+fn expected_bucket_counts(
+    sim: &Simulation,
+    intervals: &[OpposingTraversalObservation],
+    key: impl Fn(&Simulation, &OpposingTraversalObservation) -> String,
+) -> BTreeMap<String, u64> {
+    let mut expected: BTreeMap<String, u64> = BTreeMap::new();
+    for interval in intervals {
+        *expected.entry(key(sim, interval)).or_default() += 1;
+    }
+    expected
+}
+
+/// Every conflict the raw stream records, restated from its own
+/// [`Event::OpposingTraversal`] boundaries: a contacting collision or entering
+/// near miss whose pair has at least one participant on an opposing traversal
+/// on that step.
+fn streamed_wrong_way_conflicts(steps: &[Vec<Event>]) -> Vec<(u32, u32)> {
+    let mut open: BTreeSet<u32> = BTreeSet::new();
+    let mut conflicts = Vec::new();
+    for events in steps {
+        for event in events {
+            match event {
+                Event::OpposingTraversal {
+                    agent,
+                    entering: true,
+                    ..
+                } => {
+                    open.insert(agent.get());
+                }
+                Event::OpposingTraversal {
+                    agent,
+                    entering: false,
+                    ..
+                } => {
+                    open.remove(&agent.get());
+                }
+                _ => {}
+            }
+        }
+        for event in events {
+            let (Event::Collision {
+                agent,
+                other,
+                contacting: true,
+                ..
+            }
+            | Event::NearMiss {
+                agent,
+                other,
+                entering: true,
+                ..
+            }) = event
+            else {
+                continue;
+            };
+            if open.contains(&agent.get()) || open.contains(&other.get()) {
+                conflicts.push((agent.get(), other.get()));
+            }
+        }
+    }
+    conflicts
+}
+
+/// Every family the wrong-way block reports is a count or an explicit status,
+/// and each disaggregation dimension buckets the tracker's own intervals.
+#[test]
+fn wrong_way_families_accumulate_from_the_opposing_intervals() {
+    let mut requested = false;
+    let mut since_request = 0u32;
+    let run = drive_wrong_way_run(
+        Simulation::new(
+            opposing_scenario(72.0, true, false, true, "forward"),
+            RunConfig::new(0),
+        )
+        .expect("the simulation builds"),
+        4000,
+        |sim, _| {
+            if !requested {
+                if let [rider] = live_bodies(sim, 0)[..]
+                    && (20.0..=30.0).contains(&rider.s_m)
+                {
+                    assert!(
+                        sim.request_wrong_way_entry(rider.id),
+                        "a reverse-capable rider on a two-way facility can request the entry"
+                    );
+                    requested = true;
+                }
+                return Drive::Continue;
+            }
+            since_request += 1;
+            match since_request >= TICKS_AFTER_ENTRY {
+                true => Drive::Stop,
+                false => Drive::Continue,
+            }
+        },
+    );
+    assert!(requested, "the fixture's rider reaches the turn window");
+    let intervals: Vec<OpposingTraversalObservation> =
+        run.sim.opposing_traversal_tracker().intervals().to_vec();
+    assert!(
+        !intervals.is_empty(),
+        "the turned rider records at least one opposing-traversal interval"
+    );
+    let total = intervals.len() as u64;
+
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, total);
+
+    // The duration is the tracker's own closed intervals, so the two sources
+    // agree exactly rather than to a tolerance.
+    let duration: f64 = intervals
+        .iter()
+        .map(OpposingTraversalObservation::duration_s)
+        .sum();
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.status,
+        MetricStatus::Reported
+    );
+    assert_eq!(wrong_way.run.wrong_way_duration_s.value, Some(duration));
+
+    // The distance is the arc length travelled against the rule direction over
+    // whole steps, so it is positive and cannot exceed the fixture's 6 m/s.
+    assert_eq!(
+        wrong_way.run.wrong_way_distance_m.status,
+        MetricStatus::Reported
+    );
+    let distance = wrong_way
+        .run
+        .wrong_way_distance_m
+        .value
+        .expect("the recorded interval carries a distance");
+    assert!(
+        distance > 0.0,
+        "the turned rider travels its opposing traversal: {distance} m"
+    );
+    assert!(
+        distance <= 6.0 * duration,
+        "no whole step exceeds the fixture's 6 m/s: {distance} m over {duration} s"
+    );
+
+    // Each dimension buckets exactly the tracker's intervals: the mode pair of
+    // each traversing agent, the traversed facility, the single subject's own
+    // participant key, and the interval's perceived rule.
+    let by_mode_pair = expected_bucket_counts(&run.sim, &intervals, |sim, interval| {
+        let mode = sim
+            .agent_mode(interval.agent)
+            .expect("the traversing agent is live");
+        ModePair::of(mode, mode).label().to_owned()
+    });
+    let by_facility = expected_bucket_counts(&run.sim, &intervals, |sim, interval| {
+        let name = sim
+            .scenario()
+            .facility(interval.facility)
+            .expect("the traversed facility is compiled")
+            .name();
+        format!("facility:{name}")
+    });
+    let by_pair = expected_bucket_counts(&run.sim, &intervals, |_, interval| {
+        format!("agent:{}", interval.agent.get())
+    });
+    let by_rule = expected_bucket_counts(&run.sim, &intervals, |_, interval| {
+        rule_bucket_key(interval.perceived_rule)
+    });
+    assert_bucket_counts(&wrong_way.by_mode_pair, &by_mode_pair);
+    assert_bucket_counts(&wrong_way.by_facility, &by_facility);
+    assert_bucket_counts(&wrong_way.by_pair, &by_pair);
+    assert_bucket_counts(&wrong_way.by_rule, &by_rule);
+    assert_eq!(
+        wrong_way.by_facility.keys().collect::<Vec<_>>(),
+        vec!["facility:a", "facility:left"],
+        "every compiled facility is a bucket"
+    );
+    assert!(
+        bucket_intervals(&wrong_way.by_movement) <= total,
+        "a contribution names at most one movement bucket"
+    );
+
+    // One rider at this rate meets no one, so the value families are explicit:
+    // the co-present exposure is no observation, and the countable families are
+    // observed zeros.
+    assert_eq!(
+        wrong_way.run.wrong_way_exposure_agent_s.status,
+        MetricStatus::NotObserved
+    );
+    assert_count(&wrong_way.run.wrong_way_encounters, 0);
+    assert_count(&wrong_way.run.wrong_way_conflicts, 0);
+}
+
+/// A legal (permitted) opposing traversal is reported under its rule rather
+/// than under `none`.
+#[test]
+fn a_permitted_opposing_traversal_is_reported_under_its_rule() {
+    let mut requested = false;
+    let mut since_request = 0u32;
+    let run = drive_wrong_way_run(
+        Simulation::new(
+            opposing_scenario(72.0, true, true, true, "forward"),
+            RunConfig::new(0),
+        )
+        .expect("the simulation builds"),
+        4000,
+        |sim, _| {
+            if !requested {
+                if let [rider] = live_bodies(sim, 0)[..]
+                    && (5.0..=20.0).contains(&rider.s_m)
+                {
+                    assert!(sim.request_wrong_way_entry(rider.id));
+                    requested = true;
+                }
+                return Drive::Continue;
+            }
+            since_request += 1;
+            match since_request >= TICKS_AFTER_ENTRY {
+                true => Drive::Stop,
+                false => Drive::Continue,
+            }
+        },
+    );
+    let intervals: Vec<OpposingTraversalObservation> =
+        run.sim.opposing_traversal_tracker().intervals().to_vec();
+    let permitted = intervals
+        .iter()
+        .find(|interval| interval.perceived_rule.is_some())
+        .expect("the permitted fixture records the rule on its interval");
+    assert_eq!(permitted.perceived_rule, Some(PermissionEffect::Permit));
+    assert!(!permitted.violating, "a permitted traversal is legal");
+
+    let wrong_way = &run.metrics.wrong_way;
+    let by_rule = expected_bucket_counts(&run.sim, &intervals, |_, interval| {
+        rule_bucket_key(interval.perceived_rule)
+    });
+    assert!(
+        by_rule.contains_key("permit"),
+        "the fixture records a permitted interval"
+    );
+    assert_bucket_counts(&wrong_way.by_rule, &by_rule);
+}
+
+/// A scenario that cannot host an opposing traversal reports the explicit
+/// inapplicable status rather than a zero: no `reverse_direction` capability
+/// makes the whole run inapplicable, and an `either` facility makes its own
+/// bucket inapplicable while the run reports no observation.
+#[test]
+fn an_inapplicable_wrong_way_scenario_reports_no_family() {
+    // The mode carries no `reverse_direction` and the scenario authors no
+    // wrong-way policy, so no entry can be requested and the value families are
+    // inapplicable.
+    let mut attempted = false;
+    let run = drive_wrong_way_run(
+        Simulation::new(
+            opposing_scenario(72.0, false, false, false, "forward"),
+            RunConfig::new(0),
+        )
+        .expect("the simulation builds"),
+        4000,
+        |sim, _| {
+            if !attempted && let Some(rider) = live_bodies(sim, 0).first() {
+                assert!(
+                    !sim.request_wrong_way_entry(rider.id),
+                    "no policy and no capability means no entry"
+                );
+                attempted = true;
+                return Drive::Stop;
+            }
+            Drive::Continue
+        },
+    );
+    assert!(attempted, "the fixture places a rider");
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, 0);
+    for value in [
+        &wrong_way.run.wrong_way_distance_m,
+        &wrong_way.run.wrong_way_duration_s,
+        &wrong_way.run.wrong_way_exposure_agent_s,
+    ] {
+        assert_eq!(value.status, MetricStatus::NotApplicable);
+        assert_eq!(value.value, None);
+    }
+    for values in wrong_way.by_mode_pair.values() {
+        assert_eq!(
+            values.wrong_way_distance_m.status,
+            MetricStatus::NotApplicable
+        );
+    }
+
+    // An `either` facility has no rule direction to oppose, so the rider's
+    // turn is recorded as no opposing traversal at all: the facility bucket is
+    // inapplicable while the policy-authored run could still host one and
+    // reports no observation.
+    let mut requested = false;
+    let mut since_request = 0u32;
+    let run = drive_wrong_way_run(
+        Simulation::new(
+            opposing_scenario(72.0, true, false, true, "either"),
+            RunConfig::new(0),
+        )
+        .expect("the simulation builds"),
+        4000,
+        |sim, _| {
+            if !requested {
+                if let Some(rider) = live_bodies(sim, 0).first() {
+                    assert!(
+                        sim.request_wrong_way_entry(rider.id),
+                        "the connected opposing traversal is physically possible"
+                    );
+                    requested = true;
+                }
+                return Drive::Continue;
+            }
+            since_request += 1;
+            match since_request >= 60 {
+                true => Drive::Stop,
+                false => Drive::Continue,
+            }
+        },
+    );
+    assert!(requested, "the fixture places a rider");
+    assert!(
+        run.sim.opposing_traversal_tracker().intervals().is_empty(),
+        "an `either` facility has no rule direction to oppose"
+    );
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, 0);
+    assert_eq!(
+        wrong_way.by_facility["facility:a"]
+            .wrong_way_distance_m
+            .status,
+        MetricStatus::NotApplicable
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_distance_m.status,
+        MetricStatus::NotObserved,
+        "the policy could host a traversal, so the run reports no observation"
+    );
+}
+
+/// A contacting collision and an entering near miss whose pair carries an
+/// opposing participant are the conflict family, and the pairs that meet the
+/// opposing rider are its encounters.
+#[test]
+fn wrong_way_conflicts_link_contacts_and_near_misses_to_the_traversal() {
+    let mut sim = Simulation::new(
+        opposing_scenario(720.0, true, false, true, "forward"),
+        RunConfig::new(0),
+    )
+    .expect("the simulation builds");
+    let (subject, occupancy) = leading_pair_on(&mut sim, 0, 30.0..=42.0, 8.0..=18.0);
+    assert!(
+        sim.request_wrong_way_entry(subject.id),
+        "the entry is decided before any occupancy is read"
+    );
+    let run = drive_wrong_way_run(sim, 300, |_, _| Drive::Continue);
+
+    let conflicts = streamed_wrong_way_conflicts(&run.steps);
+    let contacts = run
+        .steps
+        .iter()
+        .flatten()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::Collision {
+                    contacting: true,
+                    ..
+                }
+            )
+        })
+        .count();
+    let near_misses = run
+        .steps
+        .iter()
+        .flatten()
+        .filter(|event| matches!(event, Event::NearMiss { entering: true, .. }))
+        .count();
+    assert!(
+        contacts >= 1,
+        "the unavoidable encounter opens the collision scan's contact band"
+    );
+    assert!(
+        near_misses >= 1,
+        "the unavoidable encounter opens the collision scan's near-miss band"
+    );
+    assert!(
+        !conflicts.is_empty(),
+        "the encounter is linked to the opposing participant"
+    );
+    assert_count(
+        &run.metrics.wrong_way.run.wrong_way_conflicts,
+        conflicts.len() as u64,
+    );
+
+    // The opposing rider met the body it turned into, and the pair carries the
+    // conflict the run attributed to it.
+    let wrong_way = &run.metrics.wrong_way;
+    let pair_key = format!(
+        "agent:{}|agent:{}",
+        subject.id.get().min(occupancy.id.get()),
+        subject.id.get().max(occupancy.id.get())
+    );
+    assert!(
+        wrong_way.by_pair.contains_key(&pair_key),
+        "the encounter is keyed by the participant pair: {:?}",
+        wrong_way.by_pair.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        wrong_way.run.wrong_way_encounters.value.expect("a count") >= 1.0,
+        "the opposing rider's encounters include the body it met"
+    );
+    assert!(
+        wrong_way.by_pair[&pair_key]
+            .wrong_way_conflicts
+            .value
+            .expect("a count")
+            >= 1.0
+    );
+}
+
+/// The run ending is a close boundary: an interval still open on the final step
+/// is closed by the capture and counted, and its close time is the run's final
+/// simulation time.
+#[test]
+fn an_interval_open_at_the_run_end_is_counted() {
+    let mut requested = false;
+    let mut opposing_ticks = 0u32;
+    let run = drive_wrong_way_run(
+        Simulation::new(
+            opposing_scenario(72.0, true, false, true, "forward"),
+            RunConfig::new(0),
+        )
+        .expect("the simulation builds"),
+        4000,
+        |sim, _| {
+            if !requested {
+                if let [rider] = live_bodies(sim, 0)[..]
+                    && (20.0..=30.0).contains(&rider.s_m)
+                {
+                    assert!(sim.request_wrong_way_entry(rider.id));
+                    requested = true;
+                }
+                return Drive::Continue;
+            }
+            if !opposing_bodies(sim).is_empty() {
+                opposing_ticks += 1;
+                if opposing_ticks >= 40 {
+                    return Drive::Stop;
+                }
+            }
+            Drive::Continue
+        },
+    );
+    assert!(requested, "the rider reaches the turn window");
+
+    // The interval is still open at the final tick: the run-end closure is the
+    // only producer of the tracker record, and the capture counts it.
+    let intervals = run.sim.opposing_traversal_tracker().intervals();
+    assert_eq!(
+        intervals.len(),
+        1,
+        "the run ends inside the rider's opposing traversal"
+    );
+    assert_eq!(
+        intervals[0].end_tick, run.final_tick,
+        "the run-end closure's close time is the final simulation tick"
+    );
+    assert!(
+        intervals[0].duration_s() > 0.0,
+        "the interval spans whole steps"
+    );
+    let wrong_way = &run.metrics.wrong_way;
+    assert_count(&wrong_way.run.wrong_way_intervals, 1);
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.status,
+        MetricStatus::Reported
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_duration_s.value,
+        Some(intervals[0].duration_s())
+    );
+    assert_eq!(
+        wrong_way.run.wrong_way_distance_m.status,
+        MetricStatus::Reported
+    );
+
+    // The version decision of this slice: the families land under the existing
+    // metric definition v3, so the definition declares no new revision.
+    assert_eq!(METRIC_DEFINITION_VERSION, 3);
 }

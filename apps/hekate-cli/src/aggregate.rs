@@ -130,6 +130,7 @@ use crate::run_dir::MANIFEST_FILE;
 use crate::run_metrics::{
     ClosePassMinimum, ClosePassValues, EVENT_FAMILY_LABELS, EventCounts, METRIC_DEFINITION_VERSION,
     METRICS_FILE, MetricStatus, MetricValue, MovementMinima, OperationalValues, RunMetricsArtifact,
+    WrongWayValues,
 };
 use crate::trace::sha256_hex;
 
@@ -219,6 +220,18 @@ pub(crate) const CLOSE_PASS_RUN_PREFIX: &str = "close_pass.run.";
 /// The metric-key prefix one declared clearance band's duration series carries
 /// inside its bucket, keyed by the band's stable `ClearanceBandId`.
 pub(crate) const CLEARANCE_BAND_PREFIX: &str = "clearance_band_durations_s.";
+
+/// The metric-key prefix the run-level wrong-way families carry: the artifact
+/// block they are read from, exactly as a close-pass run metric is keyed
+/// `close_pass.run.<name>`.
+pub(crate) const WRONG_WAY_RUN_PREFIX: &str = "wrong_way.run.";
+
+/// The unit of a wrong-way interval count, as metric definition v3 fixes it.
+const INTERVALS: &str = "intervals";
+
+/// The unit of the exposure family, as metric definition v3 fixes it: agent
+/// seconds of co-present exposure.
+const AGENT_SECONDS: &str = "agent_seconds";
 
 /// The unit of a throughput metric, as metric definition v2 fixes it.
 const AGENTS_PER_SECOND: &str = "agents_per_second";
@@ -560,6 +573,19 @@ pub struct Aggregation {
     /// The close-pass facility slices, keyed by `facility:<name>`, each holding
     /// the same families for that facility.
     pub close_pass_facility_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The wrong-way mode-pair slices, keyed by `ModePair` label, each holding
+    /// the wrong-way families of metric definition v3 for that pair.
+    pub wrong_way_mode_pair_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The wrong-way movement slices, keyed by the artifact's own movement key,
+    /// each holding the same families for that bucket.
+    pub wrong_way_movement_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The wrong-way facility slices, keyed by `facility:<name>`.
+    pub wrong_way_facility_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The wrong-way participant-pair slices, keyed by the sorted stable agent
+    /// ids of the pair.
+    pub wrong_way_pair_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
+    /// The wrong-way perceived-rule slices, keyed by the rule label or `none`.
+    pub wrong_way_rule_slices: BTreeMap<String, BTreeMap<String, MetricDistribution>>,
 }
 
 /// Aggregate a completed batch: read its manifest and every seed's metrics, and
@@ -772,6 +798,14 @@ pub(crate) fn run_level_readings(
     for (name, unit, reading) in close_pass_readings(&artifact.close_pass.run) {
         readings.push((format!("{CLOSE_PASS_RUN_PREFIX}{name}"), unit, reading));
     }
+    // The run-level wrong-way families, under their own artifact block.
+    for (name, unit, value) in wrong_way_readings(&artifact.wrong_way.run) {
+        readings.push((
+            format!("{WRONG_WAY_RUN_PREFIX}{name}"),
+            unit,
+            Reading::Value(value),
+        ));
+    }
     for (name, unit, value) in operational_readings(&artifact.operational.run) {
         readings.push((
             format!("operational.run.{name}"),
@@ -900,6 +934,43 @@ pub(crate) fn close_pass_readings(
         ));
     }
     readings
+}
+
+/// The wrong-way families one bucket reports, each with its unit and the reading
+/// a consumer aggregates.
+///
+/// The three countable families (intervals, encounters, and conflicts) are
+/// counts, so a bucket that recorded none reports the observed `0` metric
+/// definition v3 fixes; the distance, duration, and exposure families carry the
+/// bucket's explicit applicability. All six are [`MetricValue`]s, so a consumer
+/// reads them exactly like a run-level value.
+pub(crate) fn wrong_way_readings(
+    values: &WrongWayValues,
+) -> [(&'static str, &'static str, &MetricValue); 6] {
+    [
+        (
+            "wrong_way_intervals",
+            INTERVALS,
+            &values.wrong_way_intervals,
+        ),
+        ("wrong_way_distance_m", METRES, &values.wrong_way_distance_m),
+        (
+            "wrong_way_duration_s",
+            SECONDS,
+            &values.wrong_way_duration_s,
+        ),
+        (
+            "wrong_way_exposure_agent_s",
+            AGENT_SECONDS,
+            &values.wrong_way_exposure_agent_s,
+        ),
+        ("wrong_way_encounters", AGENTS, &values.wrong_way_encounters),
+        (
+            "wrong_way_conflicts",
+            OBSERVATIONS,
+            &values.wrong_way_conflicts,
+        ),
+    ]
 }
 
 /// The three metrics one movement bucket reports, each with its unit.
@@ -1166,6 +1237,16 @@ struct Accumulation {
     close_pass_movements: BTreeMap<String, SliceAccumulation>,
     /// The close-pass facility slices, keyed by `facility:<name>`.
     close_pass_facilities: BTreeMap<String, SliceAccumulation>,
+    /// The wrong-way mode-pair slices, keyed by `ModePair` label.
+    wrong_way_mode_pairs: BTreeMap<String, SliceAccumulation>,
+    /// The wrong-way movement slices, keyed by the artifact's own movement key.
+    wrong_way_movements: BTreeMap<String, SliceAccumulation>,
+    /// The wrong-way facility slices, keyed by `facility:<name>`.
+    wrong_way_facilities: BTreeMap<String, SliceAccumulation>,
+    /// The wrong-way participant-pair slices.
+    wrong_way_pairs: BTreeMap<String, SliceAccumulation>,
+    /// The wrong-way perceived-rule slices.
+    wrong_way_rules: BTreeMap<String, SliceAccumulation>,
 }
 
 /// Read one close-pass bucket into its slice's accumulators.
@@ -1183,6 +1264,25 @@ fn accumulate_close_pass_slice(
             .entry(key.clone())
             .or_insert_with(|| Accumulator::new(unit))
             .record(seed, manifest, &key, reading, path)?;
+    }
+    Ok(())
+}
+
+/// Read one wrong-way bucket into its slice's accumulators.
+fn accumulate_wrong_way_slice(
+    slices: &mut BTreeMap<String, SliceAccumulation>,
+    bucket: &str,
+    values: &WrongWayValues,
+    seed: u64,
+    manifest: &str,
+    path: &Path,
+) -> Result<(), AggregateError> {
+    let slice = slices.entry(bucket.to_owned()).or_default();
+    for (key, unit, value) in wrong_way_readings(values) {
+        slice
+            .entry(key.to_owned())
+            .or_insert_with(|| Accumulator::new(unit))
+            .record(seed, manifest, key, Reading::Value(value), path)?;
     }
     Ok(())
 }
@@ -1269,6 +1369,61 @@ impl Accumulation {
         for (bucket, values) in &artifact.close_pass.by_facility {
             accumulate_close_pass_slice(
                 &mut self.close_pass_facilities,
+                bucket,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
+        }
+
+        // The wrong-way families: the mode-pair buckets and every compiled
+        // facility exist in each artifact with their explicit applicability, and
+        // the movement, participant-pair, and rule buckets exist once a run
+        // attributes a recorded interval to them, so those dimensions are sparse.
+        for (label, values) in &artifact.wrong_way.by_mode_pair {
+            accumulate_wrong_way_slice(
+                &mut self.wrong_way_mode_pairs,
+                label,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
+        }
+        for (bucket, values) in &artifact.wrong_way.by_movement {
+            accumulate_wrong_way_slice(
+                &mut self.wrong_way_movements,
+                bucket,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
+        }
+        for (bucket, values) in &artifact.wrong_way.by_facility {
+            accumulate_wrong_way_slice(
+                &mut self.wrong_way_facilities,
+                bucket,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
+        }
+        for (bucket, values) in &artifact.wrong_way.by_pair {
+            accumulate_wrong_way_slice(
+                &mut self.wrong_way_pairs,
+                bucket,
+                values,
+                seed,
+                manifest,
+                path,
+            )?;
+        }
+        for (bucket, values) in &artifact.wrong_way.by_rule {
+            accumulate_wrong_way_slice(
+                &mut self.wrong_way_rules,
                 bucket,
                 values,
                 seed,
@@ -1380,6 +1535,11 @@ impl Accumulation {
             close_pass_mode_pair_slices: finish_slices(self.close_pass_mode_pairs, seeds),
             close_pass_movement_slices: finish_slices(self.close_pass_movements, seeds),
             close_pass_facility_slices: finish_slices(self.close_pass_facilities, seeds),
+            wrong_way_mode_pair_slices: finish_slices(self.wrong_way_mode_pairs, seeds),
+            wrong_way_movement_slices: finish_slices(self.wrong_way_movements, seeds),
+            wrong_way_facility_slices: finish_slices(self.wrong_way_facilities, seeds),
+            wrong_way_pair_slices: finish_slices(self.wrong_way_pairs, seeds),
+            wrong_way_rule_slices: finish_slices(self.wrong_way_rules, seeds),
         })
     }
 }

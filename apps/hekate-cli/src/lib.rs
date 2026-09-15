@@ -81,6 +81,7 @@ pub use run_metrics::{
     ClosePassMetrics, ClosePassMinimum, ClosePassValues, EVENT_FAMILY_LABELS, EventCounts,
     METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue, MovementMinima,
     OperationalMetrics, OperationalValues, RunMetrics, RunMetricsArtifact, RunMetricsRecorder,
+    WrongWayMetrics, WrongWayValues,
 };
 pub use seed_bank::{
     LoadedSeedBank, SEED_BANK_VERSION, SeedBank, SeedBankError, SeedBankReference, read_seed_bank,

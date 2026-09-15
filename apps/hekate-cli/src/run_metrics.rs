@@ -92,13 +92,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use glam::DVec2;
 use hekate_model::{
-    AgentFamily, CompiledClearanceBand, FacilityId, LateralUse, TacticKind, TacticalCapability,
+    AgentFamily, CompiledClearanceBand, CompiledFacility, FacilityId, LateralUse, NominalDirection,
+    PermissionEffect, TacticKind, TacticalCapability,
 };
 use hekate_sim::{
     AgentId, AgentMode, Event, InteractionMetrics, ManeuverEdge, ManeuverState, MetricMinimum,
     ModePair, MovementKey, OperationValues as ObservedValues, OvertakeObservation, Simulation,
-    StepOutput,
+    SnapshotDetail, StepOutput,
 };
 use serde::{Deserialize, Serialize};
 
@@ -673,6 +675,9 @@ pub struct RunMetrics {
     /// families survive the immutable run directory and a later aggregation or
     /// comparison reads them from there.
     pub close_pass: ClosePassMetrics,
+    /// The wrong-way families over the run, disaggregated by mode pair,
+    /// movement, facility, participant pair, and perceived rule.
+    pub wrong_way: WrongWayMetrics,
 }
 
 /// `metrics.json`: the metric values of one run, linked to its metric
@@ -702,6 +707,9 @@ pub struct RunMetricsArtifact {
     /// The overtaking and close-pass families over the run, per mode pair,
     /// movement, and facility.
     pub close_pass: ClosePassMetrics,
+    /// The wrong-way families over the run, disaggregated by mode pair,
+    /// movement, facility, participant pair, and perceived rule.
+    pub wrong_way: WrongWayMetrics,
 }
 
 impl RunMetricsArtifact {
@@ -719,6 +727,7 @@ impl RunMetricsArtifact {
             event_counts: metrics.event_counts.clone(),
             operational: metrics.operational.clone(),
             close_pass: metrics.close_pass.clone(),
+            wrong_way: metrics.wrong_way.clone(),
         }
     }
 }
@@ -744,6 +753,17 @@ pub struct RunMetricsRecorder {
     /// Counted overtaking maneuver records, before their mode, movement, and
     /// facility keys are resolved at finish.
     overtaking: BTreeMap<OvertakingRecord, u64>,
+    /// Open opposing-traversal intervals, keyed by subject agent, fed from the
+    /// `OpposingTraversal` boundary events and read per tick by [`Self::observe`].
+    wrong_way_open: BTreeMap<u32, WrongWayOpenInterval>,
+    /// Evidence of intervals the event stream closed; bucketed at finish.
+    wrong_way_closed: Vec<WrongWayIntervalEvidence>,
+    /// Conflicts (contacting collisions and entering near misses) resolved
+    /// against the per-tick opposing set in [`Self::observe`].
+    wrong_way_conflicts: Vec<WrongWayConflictEvidence>,
+    /// The current tick's collision and near-miss candidates, buffered by
+    /// [`Self::record`] and resolved by the next [`Self::observe`].
+    pending_conflicts: Vec<(u32, u32)>,
 }
 
 impl RunMetricsRecorder {
@@ -759,8 +779,148 @@ impl RunMetricsRecorder {
         }
     }
 
+    /// Observe one completed tick's integrated state.
+    ///
+    /// Call once per tick, after [`Self::record`] for the same step, so the
+    /// per-tick snapshot the wrong-way distance, exposure, and encounter
+    /// families read agrees with the boundary events that tick produced. The
+    /// interval count and duration are not read here: they come from the
+    /// opposing-traversal tracker at [`Self::finish`], so the two sources share
+    /// one interval set.
+    pub fn observe(&mut self, sim: &Simulation) {
+        let step_s = sim.config().step().as_secs();
+        let snapshot = sim.snapshot(SnapshotDetail::Full);
+        let mut samples: BTreeMap<u32, &hekate_sim::AgentSample> = BTreeMap::new();
+        for sample in snapshot.agents() {
+            samples.insert(sample.id.get(), sample);
+        }
+
+        // Distance: accumulate the absolute arc-length step of every still-open
+        // interval, skipping the opening tick's step so the entry discontinuity
+        // contributes nothing.
+        for (agent, open) in &mut self.wrong_way_open {
+            let Some(route) = samples
+                .get(agent)
+                .and_then(|sample| sample.motion.as_ref())
+                .and_then(|motion| motion.route_state.as_ref())
+            else {
+                continue;
+            };
+            if route.opposing_direction.is_none() {
+                continue;
+            }
+            if let Some(previous) = open.prev_s_m {
+                open.evidence.distance_m += (route.s_m - previous).abs();
+            }
+            open.prev_s_m = Some(route.s_m);
+        }
+
+        // Exposure and encounters: for each open subject, every other live body
+        // whose centre lies inside the subject's facility corridor is co-present
+        // for this step. A pair of two opposing bodies is attributed once, to
+        // the lower-id opposing subject.
+        let mut co_present: Vec<(u32, u32)> = Vec::new();
+        for (subject, open) in &self.wrong_way_open {
+            for (other_id, other) in &samples {
+                if *other_id == *subject {
+                    continue;
+                }
+                if self.wrong_way_open.contains_key(other_id) && *other_id < *subject {
+                    continue;
+                }
+                if co_present_on_facility(sim, open.evidence.facility, other.position) {
+                    co_present.push((*subject, *other_id));
+                }
+            }
+        }
+        for (subject, partner) in co_present {
+            let Some(open) = self.wrong_way_open.get_mut(&subject) else {
+                continue;
+            };
+            *open
+                .evidence
+                .exposure_by_partner
+                .entry(partner)
+                .or_insert(0.0) += step_s;
+            open.evidence.encounters.insert(partner);
+        }
+
+        // Conflicts: a contacting collision or an entering near miss whose pair
+        // has at least one participant on an opposing traversal this tick, with
+        // the lower-id opposing participant as the attributed subject.
+        for (agent, other) in std::mem::take(&mut self.pending_conflicts) {
+            let agent_opposing = self.wrong_way_open.contains_key(&agent);
+            let other_opposing = self.wrong_way_open.contains_key(&other);
+            if !agent_opposing && !other_opposing {
+                continue;
+            }
+            let (subject, partner) = if agent_opposing && other_opposing {
+                (agent.min(other), agent.max(other))
+            } else if agent_opposing {
+                (agent, other)
+            } else {
+                (other, agent)
+            };
+            let Some(open) = self.wrong_way_open.get(&subject) else {
+                continue;
+            };
+            self.wrong_way_conflicts.push(WrongWayConflictEvidence {
+                subject,
+                partner,
+                facility: open.evidence.facility,
+                perceived_rule: open.evidence.perceived_rule,
+            });
+        }
+    }
+
     /// Count one event and remember its subject agent.
     fn record_event(&mut self, event: &Event) {
+        // The wrong-way interval bookkeeping is read by [`Self::observe`]: an
+        // open boundary starts an inline evidence accumulator and a close
+        // boundary parks it for finish-time bucketing. The contact events are
+        // buffered and resolved against the next tick's opposing set.
+        match event {
+            Event::OpposingTraversal {
+                agent,
+                facility,
+                perceived_rule,
+                entering,
+                ..
+            } => {
+                if *entering {
+                    self.wrong_way_open.insert(
+                        agent.get(),
+                        WrongWayOpenInterval {
+                            evidence: WrongWayIntervalEvidence {
+                                agent: agent.get(),
+                                facility: *facility,
+                                perceived_rule: *perceived_rule,
+                                distance_m: 0.0,
+                                exposure_by_partner: BTreeMap::new(),
+                                encounters: BTreeSet::new(),
+                            },
+                            prev_s_m: None,
+                        },
+                    );
+                } else if let Some(open) = self.wrong_way_open.remove(&agent.get()) {
+                    self.wrong_way_closed.push(open.evidence);
+                }
+            }
+            Event::Collision {
+                agent,
+                other,
+                contacting: true,
+                ..
+            } => self.pending_conflicts.push((agent.get(), other.get())),
+            Event::NearMiss {
+                agent,
+                other,
+                entering: true,
+                ..
+            } => self.pending_conflicts.push((agent.get(), other.get())),
+            _ => {}
+        }
+
         if let Some(record) = overtaking_record(event) {
             *self.overtaking.entry(record).or_insert(0) += 1;
         }
@@ -823,6 +983,7 @@ impl RunMetricsRecorder {
             event_counts: self.event_counts(sim),
             operational: operational_metrics(sim, operation),
             close_pass: self.close_pass_metrics(sim),
+            wrong_way: self.wrong_way_metrics(sim),
         }
     }
 
@@ -961,6 +1122,163 @@ impl RunMetricsRecorder {
                     let applicable = facility_applicability.get(&key).copied().unwrap_or(false);
                     (key, bucket.finish(applicable, bands))
                 })
+                .collect(),
+        }
+    }
+
+    /// The wrong-way families: the interval count and duration off the tracker,
+    /// and the distance, exposure, encounters, and conflicts off the inline
+    /// evidence [`Self::observe`] accumulated, each disaggregated with explicit
+    /// applicability.
+    fn wrong_way_metrics(&self, sim: &Simulation) -> WrongWayMetrics {
+        let scenario = sim.scenario();
+        let capability = wrong_way_capability(scenario);
+        let mut buckets = WrongWayBuckets::default();
+        let mut facility_applicability: BTreeMap<String, bool> = BTreeMap::new();
+
+        // The mode pairs and facilities a scenario declares are the buckets that
+        // could host an opposing traversal, so each exists with its explicit
+        // applicability even when nothing was recorded in it; the movement,
+        // participant-pair, and rule buckets are named by a recorded interval
+        // and stay sparse.
+        for pair in [
+            ModePair::VehicleVehicle,
+            ModePair::VehiclePedestrian,
+            ModePair::PedestrianPedestrian,
+        ] {
+            buckets
+                .by_mode_pair
+                .entry(pair.label().to_owned())
+                .or_default();
+        }
+        for facility in scenario.facilities() {
+            let Some(key) = facility_key(sim, facility.id()) else {
+                continue;
+            };
+            buckets.by_facility.entry(key.clone()).or_default();
+            facility_applicability.insert(key, facility_hosts_opposing_traversal(facility));
+        }
+
+        // The interval count and duration are the tracker's closed records,
+        // which share one interval set with the inline evidence.
+        for interval in sim.opposing_traversal_tracker().intervals() {
+            let keys = wrong_way_keys(
+                sim,
+                interval.agent,
+                None,
+                interval.facility,
+                interval.perceived_rule,
+            );
+            buckets.apply(&keys, |bucket| {
+                bucket.intervals += 1.0;
+                bucket.duration_s += interval.duration_s();
+                bucket.observed_interval = true;
+            });
+        }
+
+        // Distance, exposure, and encounters come from the inline evidence: the
+        // intervals the event stream closed and the ones still open at run end
+        // (closed by the caller's `close_open_opposing_traversals` before
+        // finish, but never carrying a close event).
+        for evidence in self
+            .wrong_way_closed
+            .iter()
+            .chain(self.wrong_way_open.values().map(|open| &open.evidence))
+        {
+            let agent = AgentId::from_index(evidence.agent as usize);
+            let distance_keys =
+                wrong_way_keys(sim, agent, None, evidence.facility, evidence.perceived_rule);
+            buckets.apply(&distance_keys, |bucket| {
+                bucket.distance_m += evidence.distance_m;
+                bucket.observed_interval = true;
+            });
+
+            for (partner_id, seconds) in &evidence.exposure_by_partner {
+                let partner = AgentId::from_index(*partner_id as usize);
+                let keys = wrong_way_keys(
+                    sim,
+                    agent,
+                    Some(partner),
+                    evidence.facility,
+                    evidence.perceived_rule,
+                );
+                buckets.apply(&keys, |bucket| {
+                    bucket.exposure_agent_s += *seconds;
+                    bucket.observed_exposure = true;
+                });
+            }
+            for partner_id in &evidence.encounters {
+                let partner = AgentId::from_index(*partner_id as usize);
+                let keys = wrong_way_keys(
+                    sim,
+                    agent,
+                    Some(partner),
+                    evidence.facility,
+                    evidence.perceived_rule,
+                );
+                buckets.apply(&keys, |bucket| {
+                    bucket.encounters.insert((evidence.agent, *partner_id));
+                });
+            }
+        }
+
+        // Conflicts are the contact events linked to an opposing participant in
+        // [`Self::observe`].
+        for conflict in &self.wrong_way_conflicts {
+            let subject = AgentId::from_index(conflict.subject as usize);
+            let partner = AgentId::from_index(conflict.partner as usize);
+            let keys = wrong_way_keys(
+                sim,
+                subject,
+                Some(partner),
+                conflict.facility,
+                conflict.perceived_rule,
+            );
+            buckets.apply(&keys, |bucket| {
+                bucket.conflicts += 1;
+            });
+        }
+
+        WrongWayMetrics {
+            run: buckets.run.finish(capability.any()),
+            by_mode_pair: buckets
+                .by_mode_pair
+                .into_iter()
+                .map(|(label, bucket)| {
+                    let applicable = match label.as_str() {
+                        "vehicle_vehicle" => capability.vehicle,
+                        "vehicle_pedestrian" => capability.vehicle || capability.pedestrian,
+                        "pedestrian_pedestrian" => capability.pedestrian,
+                        _ => false,
+                    };
+                    (label, bucket.finish(applicable))
+                })
+                .collect(),
+            // A movement, participant-pair, or rule bucket carries no
+            // applicability predicate of its own: v3 names none, so a bucket
+            // that recorded nothing reports the no-observation status.
+            by_movement: buckets
+                .by_movement
+                .into_iter()
+                .map(|(key, bucket)| (key, bucket.finish(true)))
+                .collect(),
+            by_facility: buckets
+                .by_facility
+                .into_iter()
+                .map(|(key, bucket)| {
+                    let applicable = facility_applicability.get(&key).copied().unwrap_or(false);
+                    (key, bucket.finish(applicable))
+                })
+                .collect(),
+            by_pair: buckets
+                .by_pair
+                .into_iter()
+                .map(|(key, bucket)| (key, bucket.finish(true)))
+                .collect(),
+            by_rule: buckets
+                .by_rule
+                .into_iter()
+                .map(|(key, bucket)| (key, bucket.finish(true)))
                 .collect(),
         }
     }
@@ -1603,6 +1921,339 @@ const fn event_agent(event: &Event) -> AgentId {
     }
 }
 
+/// The wrong-way families of one bucket of metric definition v3.
+///
+/// The three countable families ([`Self::wrong_way_intervals`],
+/// [`Self::wrong_way_encounters`], and [`Self::wrong_way_conflicts`]) are always
+/// a count — `0` when the bucket recorded none, never an absent value — which
+/// is v3's countable-family rule. The three value families carry the bucket's
+/// applicability: a bucket that cannot host an opposing traversal reports
+/// `not_applicable`, one that could host one but recorded no interval reports
+/// `not_observed`, and one that recorded an interval reports its value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WrongWayValues {
+    /// Count of the closed opposing-traversal intervals in the bucket.
+    pub wrong_way_intervals: MetricValue,
+    /// Metres travelled against the rule direction over the bucket's intervals,
+    /// accumulated whole steps with the entry/exit step's discontinuity
+    /// ignored.
+    pub wrong_way_distance_m: MetricValue,
+    /// Seconds the bucket's intervals were open.
+    pub wrong_way_duration_s: MetricValue,
+    /// Agent-seconds of co-present exposure over the bucket's participant pairs:
+    /// for each opposing subject and each other live body whose centre lies
+    /// inside the subject's facility corridor, one `step_s` per co-present tick,
+    /// summed over partners and ticks.
+    pub wrong_way_exposure_agent_s: MetricValue,
+    /// Distinct other agents meeting the co-presence predicate during any of
+    /// the subject's opposing intervals, deduped by partner across intervals.
+    pub wrong_way_encounters: MetricValue,
+    /// Count of contacting collisions and entering near misses whose pair has at
+    /// least one participant on an opposing traversal.
+    pub wrong_way_conflicts: MetricValue,
+}
+
+/// The wrong-way metric families of metric definition v3: over the run and per
+/// bucket of each disaggregation dimension.
+///
+/// The five slice maps are the dimensions the contract names — mode (spelled in
+/// the [`ModePair`] key space shared with the close-pass families: a
+/// single-subject family reports under its subject's diagonal pair), movement,
+/// facility, participant pair, and perceived rule. The three mode-pair buckets
+/// always exist and the facility map holds every compiled facility, so a bucket
+/// that could host an opposing traversal reports its explicit no-observation
+/// status rather than vanishing; the movement, pair, and rule buckets exist once
+/// a recorded interval names them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WrongWayMetrics {
+    /// The values over the whole run.
+    pub run: WrongWayValues,
+    /// The values per [`ModePair`] label.
+    pub by_mode_pair: BTreeMap<String, WrongWayValues>,
+    /// The values per movement key (subject's own for a single-subject family,
+    /// the pair's two keys for a participant-pair family).
+    pub by_movement: BTreeMap<String, WrongWayValues>,
+    /// The values per facility key (`facility:<name>`).
+    pub by_facility: BTreeMap<String, WrongWayValues>,
+    /// The values per participant pair (`agent:<lower>|agent:<higher>`, or the
+    /// singleton `agent:<id>` for a single-subject family).
+    pub by_pair: BTreeMap<String, WrongWayValues>,
+    /// The values per perceived rule (`permit`, `prohibit`, `obligate`, or
+    /// `none` when no statement binds the subject).
+    pub by_rule: BTreeMap<String, WrongWayValues>,
+}
+
+impl WrongWayMetrics {
+    /// The families of a run that closed no interval: every countable family is
+    /// `0` and every value family carries the no-observation status.
+    pub fn not_observed() -> Self {
+        let values = || WrongWayAccumulator::default().finish(true);
+        Self {
+            run: values(),
+            by_mode_pair: [
+                ModePair::VehicleVehicle,
+                ModePair::VehiclePedestrian,
+                ModePair::PedestrianPedestrian,
+            ]
+            .into_iter()
+            .map(|pair| (pair.label().to_owned(), values()))
+            .collect(),
+            by_movement: BTreeMap::new(),
+            by_facility: BTreeMap::new(),
+            by_pair: BTreeMap::new(),
+            by_rule: BTreeMap::new(),
+        }
+    }
+}
+
+/// The inline evidence of one opposing-traversal interval, read by
+/// [`RunMetricsRecorder::observe`] and bucketed at finish.
+#[derive(Debug)]
+struct WrongWayIntervalEvidence {
+    /// The traversing (subject) agent.
+    agent: u32,
+    /// The facility traversed against its rule direction.
+    facility: FacilityId,
+    /// The permission statement the subject acted under, absent when none binds.
+    perceived_rule: Option<PermissionEffect>,
+    /// Whole-step arc length accumulated while the interval was open.
+    distance_m: f64,
+    /// Co-present agent-seconds per partner, accumulated over the interval.
+    exposure_by_partner: BTreeMap<u32, f64>,
+    /// Distinct co-present partners, deduped within the interval.
+    encounters: BTreeSet<u32>,
+}
+
+/// An open interval plus the arc length it last observed, for the distance
+/// delta.
+#[derive(Debug)]
+struct WrongWayOpenInterval {
+    evidence: WrongWayIntervalEvidence,
+    prev_s_m: Option<f64>,
+}
+
+/// One conflict linked to an opposing participant in [`RunMetricsRecorder::observe`].
+#[derive(Debug)]
+struct WrongWayConflictEvidence {
+    subject: u32,
+    partner: u32,
+    facility: FacilityId,
+    perceived_rule: Option<PermissionEffect>,
+}
+
+/// The disaggregation keys one wrong-way contribution maps to.
+#[derive(Debug, Clone, Default)]
+struct WrongWayKeys {
+    mode_pair: Option<ModePair>,
+    movement: Option<String>,
+    facility: Option<String>,
+    pair: Option<String>,
+    rule: Option<String>,
+}
+
+/// One bucket's accumulated wrong-way evidence, before its statuses resolve.
+#[derive(Debug, Default)]
+struct WrongWayAccumulator {
+    intervals: f64,
+    distance_m: f64,
+    duration_s: f64,
+    exposure_agent_s: f64,
+    /// Distinct participant pairs, so encounters dedupe a partner across the
+    /// subject's intervals within one bucket.
+    encounters: BTreeSet<(u32, u32)>,
+    conflicts: u64,
+    /// Whether the bucket recorded an interval (drives distance and duration).
+    observed_interval: bool,
+    /// Whether the bucket recorded a co-present pair (drives exposure).
+    observed_exposure: bool,
+}
+
+impl WrongWayAccumulator {
+    /// The bucket's reported families: every count as a count, and the three
+    /// value families with the status the bucket's applicability and observation
+    /// give them.
+    fn finish(self, applicable: bool) -> WrongWayValues {
+        let value = |observed: bool, total: f64| {
+            if observed {
+                MetricValue::reported_run(total)
+            } else if applicable {
+                MetricValue::not_observed()
+            } else {
+                MetricValue::not_applicable()
+            }
+        };
+        WrongWayValues {
+            wrong_way_intervals: MetricValue::reported_run(self.intervals),
+            wrong_way_distance_m: value(self.observed_interval, self.distance_m),
+            wrong_way_duration_s: value(self.observed_interval, self.duration_s),
+            wrong_way_exposure_agent_s: value(self.observed_exposure, self.exposure_agent_s),
+            wrong_way_encounters: MetricValue::reported_run(self.encounters.len() as f64),
+            wrong_way_conflicts: MetricValue::reported_run(self.conflicts as f64),
+        }
+    }
+}
+
+/// The wrong-way accumulators: one over the run and one per bucket of each
+/// disaggregation dimension.
+#[derive(Debug, Default)]
+struct WrongWayBuckets {
+    run: WrongWayAccumulator,
+    by_mode_pair: BTreeMap<String, WrongWayAccumulator>,
+    by_movement: BTreeMap<String, WrongWayAccumulator>,
+    by_facility: BTreeMap<String, WrongWayAccumulator>,
+    by_pair: BTreeMap<String, WrongWayAccumulator>,
+    by_rule: BTreeMap<String, WrongWayAccumulator>,
+}
+
+impl WrongWayBuckets {
+    /// Apply one contribution to the run bucket and to every bucket its keys
+    /// name.
+    fn apply(&mut self, keys: &WrongWayKeys, update: impl Fn(&mut WrongWayAccumulator)) {
+        update(&mut self.run);
+        if let Some(pair) = keys.mode_pair {
+            update(
+                self.by_mode_pair
+                    .entry(pair.label().to_owned())
+                    .or_default(),
+            );
+        }
+        if let Some(movement) = &keys.movement {
+            update(self.by_movement.entry(movement.clone()).or_default());
+        }
+        if let Some(facility) = &keys.facility {
+            update(self.by_facility.entry(facility.clone()).or_default());
+        }
+        if let Some(pair) = &keys.pair {
+            update(self.by_pair.entry(pair.clone()).or_default());
+        }
+        if let Some(rule) = &keys.rule {
+            update(self.by_rule.entry(rule.clone()).or_default());
+        }
+    }
+}
+
+/// Whether the compiled scenario can host an opposing traversal at all, per
+/// mode class.
+#[derive(Debug, Clone, Copy, Default)]
+struct WrongWayCapability {
+    vehicle: bool,
+    pedestrian: bool,
+    policy: bool,
+}
+
+impl WrongWayCapability {
+    /// Whether a whole run can host an opposing traversal.
+    const fn any(self) -> bool {
+        self.policy && (self.vehicle || self.pedestrian)
+    }
+}
+
+/// The opposing-traversal capability the compiled scenario's mode templates and
+/// wrong-way policy declare.
+///
+/// The class of a template is the one the kernel already derives it from: a
+/// holonomic circle is a pedestrian body, and every wheeled family is a vehicle.
+fn wrong_way_capability(scenario: &hekate_model::CompiledScenario) -> WrongWayCapability {
+    let mut capability = WrongWayCapability {
+        policy: scenario.wrong_way_policy().is_some(),
+        ..WrongWayCapability::default()
+    };
+    for template in scenario.mode_templates() {
+        if !template
+            .tactics()
+            .supports(TacticalCapability::ReverseNominalDirection)
+        {
+            continue;
+        }
+        if template.family() == Some(AgentFamily::HolonomicCircle) {
+            capability.pedestrian = true;
+        } else {
+            capability.vehicle = true;
+        }
+    }
+    capability
+}
+
+/// Whether a compiled facility offers the rule direction an opposing traversal
+/// needs.
+///
+/// Metric definition v3 makes an `either` facility — one with no rule direction
+/// — and a facility without a reference path buckets that cannot host an
+/// opposing traversal.
+fn facility_hosts_opposing_traversal(facility: &CompiledFacility) -> bool {
+    facility.nominal_direction() != NominalDirection::Either && facility.reference().is_some()
+}
+
+/// The disaggregation keys of one wrong-way contribution.
+///
+/// `partner` is `None` for a single-subject family (intervals, distance,
+/// duration), which keys the mode pair by the subject's own diagonal pair and
+/// the participant pair by the subject's singleton key.
+fn wrong_way_keys(
+    sim: &Simulation,
+    agent: AgentId,
+    partner: Option<AgentId>,
+    facility: FacilityId,
+    perceived_rule: Option<PermissionEffect>,
+) -> WrongWayKeys {
+    let mode_pair = match partner {
+        Some(partner) => pair_mode_pair(sim, agent, partner),
+        None => sim.agent_mode(agent).map(|mode| ModePair::of(mode, mode)),
+    };
+    WrongWayKeys {
+        mode_pair,
+        movement: match partner {
+            Some(partner) => pair_movement_key(sim, agent, partner),
+            None => movement_key(sim, agent),
+        },
+        facility: facility_key(sim, facility),
+        pair: Some(match partner {
+            Some(partner) => pair_agent_key(agent.get(), partner.get()),
+            None => agent_key(agent.get()),
+        }),
+        rule: Some(rule_key(perceived_rule)),
+    }
+}
+
+/// The participant-pair spelling of one subject alone: `agent:<id>`.
+fn agent_key(agent: u32) -> String {
+    format!("agent:{agent}")
+}
+
+/// The participant-pair spelling of two bodies: sorted stable ids joined, so a
+/// pair and its mirror share one bucket.
+fn pair_agent_key(first: u32, second: u32) -> String {
+    let (lower, higher) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    format!("agent:{lower}|agent:{higher}")
+}
+
+/// The report spelling of a perceived rule: its stable label, or `none` when no
+/// statement binds the subject, so `None` stays distinct from every effect.
+fn rule_key(rule: Option<PermissionEffect>) -> String {
+    rule.map_or_else(|| "none".to_owned(), |rule| rule.label().to_owned())
+}
+
+/// Whether another live body's centre lies inside the subject facility's
+/// corridor: its world position projects onto the facility reference within the
+/// reference extent and within half the facility's compiled width.
+fn co_present_on_facility(sim: &Simulation, facility: FacilityId, position: DVec2) -> bool {
+    let Some(facility) = sim.scenario().facility(facility) else {
+        return false;
+    };
+    let Some(reference) = facility.reference() else {
+        return false;
+    };
+    let geometry = reference.geometry();
+    let coordinate = geometry.project(position);
+    coordinate.s() >= 0.0
+        && coordinate.s() <= geometry.length()
+        && coordinate.d().abs() <= facility.width_m() * 0.5
+}
+
 #[cfg(test)]
 mod tests {
     use hekate_model::CrossingId;
@@ -1766,9 +2417,14 @@ mod tests {
                 by_movement: BTreeMap::new(),
             },
             close_pass: ClosePassMetrics::not_observed(),
+            wrong_way: WrongWayMetrics::not_observed(),
         };
         let json = serde_json::to_string_pretty(&artifact).expect("artifact serializes");
         assert!(json.contains("\"status\": \"not_applicable\""));
+        assert!(
+            json.contains("\"wrong_way_intervals\"") && json.contains("\"by_mode_pair\""),
+            "the wrong-way block is serialized with its dimensions"
+        );
         assert!(
             !json.contains("\"value\": null"),
             "an absent value is omitted"

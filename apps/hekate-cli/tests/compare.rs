@@ -25,7 +25,7 @@ use hekate_cli::{
     MetricStatus, MetricValue, MovementMinima, OperationalMetrics, OperationalValues,
     PAIRED_DIFFERENCE, PAIRED_INTERVAL_METHOD, PairedDistribution, RunMetricsArtifact,
     SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, Side, T_CRITICAL_975,
-    compare_batches, read_seed_bank,
+    WrongWayMetrics, compare_batches, read_seed_bank,
 };
 use sha2::{Digest, Sha256};
 
@@ -513,6 +513,7 @@ fn write_side(
                     by_movement: values.operational_by_movement.clone(),
                 },
                 close_pass: values.close_pass.clone(),
+                wrong_way: WrongWayMetrics::not_observed(),
             },
         );
         runs.push(BatchRun {
@@ -1577,7 +1578,9 @@ fn every_comparison_links_to_both_manifests_and_the_definition_version() {
                 "records",
                 "observations",
                 "agents_per_second",
-                "agents"
+                "agents",
+                "intervals",
+                "agent_seconds"
             ]
             .contains(&distribution.unit.as_str()),
             "'{key}' reports the unit {}",
@@ -2150,6 +2153,44 @@ fn the_compare_command_pairs_real_batches_and_mutates_no_run_artifact() {
             .any(|(_, distribution)| !distribution.unpaired.is_empty()),
         "a comparison of two scenarios must count unpaired seeds"
     );
+
+    // The wrong-way families and their dimensions reach the comparison: the
+    // three mode-pair slices carry the six families of metric definition v3,
+    // and the run bucket is paired under the artifact block it is read from.
+    assert_eq!(
+        comparison
+            .wrong_way_mode_pair_slices
+            .keys()
+            .collect::<Vec<_>>(),
+        vec![
+            "pedestrian_pedestrian",
+            "vehicle_pedestrian",
+            "vehicle_vehicle"
+        ]
+    );
+    let wrong_way_intervals = &comparison.metrics["wrong_way.run.wrong_way_intervals"];
+    assert_eq!(wrong_way_intervals.unit, "intervals");
+    assert_eq!(
+        wrong_way_intervals.metric_definition_version,
+        METRIC_DEFINITION_VERSION
+    );
+    assert_eq!(
+        comparison.metrics["wrong_way.run.wrong_way_exposure_agent_s"].unit,
+        "agent_seconds"
+    );
+    for slice in comparison.wrong_way_mode_pair_slices.values() {
+        assert_eq!(
+            slice.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "wrong_way_conflicts",
+                "wrong_way_distance_m",
+                "wrong_way_duration_s",
+                "wrong_way_encounters",
+                "wrong_way_exposure_agent_s",
+                "wrong_way_intervals",
+            ]
+        );
+    }
 
     // Neither batch root changed, and neither gained a file.
     assert_eq!(before.0, tree_hashes(&a_root));

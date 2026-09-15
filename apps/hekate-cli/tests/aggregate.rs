@@ -24,8 +24,8 @@ use hekate_cli::{
     LARGEST_TABULATED_DEGREES_OF_FREEDOM, LEAST_INTERVAL_SEEDS, MANIFEST_FILE,
     METRIC_DEFINITION_VERSION, METRICS_FILE, MetricDistribution, MetricStatus, MetricValue,
     MovementMinima, NORMAL_CRITICAL_975, OperationalMetrics, OperationalValues, RunMetricsArtifact,
-    SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, aggregate_batch, load_scenario_provenance,
-    run_batch,
+    SamplingPolicy, ScenarioProvenance, T_CRITICAL_975, WrongWayMetrics, aggregate_batch,
+    load_scenario_provenance, run_batch,
 };
 use hekate_sim::RunConfig;
 use sha2::{Digest, Sha256};
@@ -397,6 +397,7 @@ fn write_synthetic_batch(root: &Path, seeds: &[(u64, SyntheticSeed)]) {
                     by_movement: values.operational_by_movement.clone(),
                 },
                 close_pass: values.close_pass.clone(),
+                wrong_way: WrongWayMetrics::not_observed(),
             },
         );
         runs.push(BatchRun {
@@ -532,6 +533,20 @@ fn expected_metric_keys(artifact: &RunMetricsArtifact) -> Vec<String> {
             .clearance_band_durations_s
             .keys()
             .map(|band| format!("close_pass.run.clearance_band_durations_s.{band}")),
+    );
+    // The run bucket's wrong-way families, restated from metric definition v3
+    // rather than from the aggregation.
+    keys.extend(
+        [
+            "wrong_way_intervals",
+            "wrong_way_distance_m",
+            "wrong_way_duration_s",
+            "wrong_way_exposure_agent_s",
+            "wrong_way_encounters",
+            "wrong_way_conflicts",
+        ]
+        .into_iter()
+        .map(|family| format!("wrong_way.run.{family}")),
     );
     assert_eq!(
         artifact.operational.by_mode.keys().collect::<Vec<_>>(),
@@ -1565,6 +1580,75 @@ fn a_real_batch_aggregates_its_mode_and_movement_slices() {
     assert_eq!(close_passes.unit, "observations");
     assert_eq!(close_passes.count, 3);
     assert_eq!(close_passes.mean, Some(0.0));
+
+    // The wrong-way families of a real artifact aggregate like any other: the
+    // benchmark authors no wrong-way policy, so the countable families are the
+    // observed zero and the value families carry the inapplicable status
+    // rather than a zero.
+    let wrong_way_intervals = &aggregation.metrics["wrong_way.run.wrong_way_intervals"];
+    assert_eq!(wrong_way_intervals.unit, "intervals");
+    assert_eq!(wrong_way_intervals.count, 3);
+    assert_eq!(wrong_way_intervals.mean, Some(0.0));
+    assert_eq!(
+        aggregation.metrics["wrong_way.run.wrong_way_distance_m"].not_applicable_seeds,
+        vec![0, 1, 2]
+    );
+    assert_eq!(
+        aggregation.metrics["wrong_way.run.wrong_way_exposure_agent_s"].unit,
+        "agent_seconds"
+    );
+
+    // The wrong-way dimensions: the three mode pairs and every compiled
+    // facility carry the six families, and each accounts for every seed.
+    assert_eq!(
+        aggregation
+            .wrong_way_mode_pair_slices
+            .keys()
+            .collect::<Vec<_>>(),
+        vec![
+            "pedestrian_pedestrian",
+            "vehicle_pedestrian",
+            "vehicle_vehicle"
+        ]
+    );
+    // The sparse dimensions hold exactly the buckets the artifact declares: the
+    // benchmark carries no facility, participant pair, or rule bucket, so each
+    // slice mirrors the artifact's own map.
+    assert_eq!(
+        aggregation
+            .wrong_way_facility_slices
+            .keys()
+            .collect::<Vec<_>>(),
+        artifact.wrong_way.by_facility.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        aggregation.wrong_way_pair_slices.keys().collect::<Vec<_>>(),
+        artifact.wrong_way.by_pair.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        aggregation.wrong_way_rule_slices.keys().collect::<Vec<_>>(),
+        artifact.wrong_way.by_rule.keys().collect::<Vec<_>>()
+    );
+    for slice in aggregation
+        .wrong_way_mode_pair_slices
+        .values()
+        .chain(aggregation.wrong_way_facility_slices.values())
+    {
+        assert_eq!(
+            slice.keys().collect::<Vec<_>>(),
+            vec![
+                "wrong_way_conflicts",
+                "wrong_way_distance_m",
+                "wrong_way_duration_s",
+                "wrong_way_encounters",
+                "wrong_way_exposure_agent_s",
+                "wrong_way_intervals",
+            ]
+        );
+        for (key, distribution) in slice {
+            assert_statuses_account_for_every_seed(key, distribution, 3);
+        }
+    }
 
     // The mode slice: all three mode pairs, each reporting the separation
     // minimum, each accounting for every seed.

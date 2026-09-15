@@ -29,8 +29,8 @@ use hekate_cli::{
     MetricSensitivity, MetricStatus, MetricTolerance, MetricValue, MovementMinima,
     OperationalMetrics, OperationalValues, PRESETS, Preset, RunMetricsArtifact, SLICE_FAMILIES,
     SLICE_KEY_RUN, SamplingPolicy, ScenarioProvenance, SeedBank, SeedBankReference, SliceFamily,
-    TOLERANCE_MEASURE, TOLERANCE_RULE, VERDICT_REFINEMENT, converge_batches, fidelity_ticks,
-    read_seed_bank,
+    TOLERANCE_MEASURE, TOLERANCE_RULE, VERDICT_REFINEMENT, WrongWayMetrics, converge_batches,
+    fidelity_ticks, read_seed_bank,
 };
 use sha2::{Digest, Sha256};
 
@@ -385,6 +385,7 @@ fn write_side(
                     by_movement: values.movement_operational.clone(),
                 },
                 close_pass: ClosePassMetrics::not_observed(),
+                wrong_way: WrongWayMetrics::not_observed(),
             },
         );
         runs.push(BatchRun {

@@ -114,12 +114,13 @@ use crate::aggregate::{
     LEAST_INTERVAL_SEEDS, METRES, MODE_PAIR_METRIC, NORMAL_CRITICAL_975, Reading, Spread,
     agent_movement_event_readings, close_pass_readings, mode_event_readings, movement_readings,
     operational_readings, recorded_movement_keys, run_level_readings, sample_mean, sample_variance,
+    wrong_way_readings,
 };
 use crate::batch::{BATCH_MANIFEST_FILE, BatchManifest, BatchRun};
 use crate::run_dir::MANIFEST_FILE;
 use crate::run_metrics::{
     ClosePassValues, METRIC_DEFINITION_VERSION, METRICS_FILE, MetricStatus, MetricValue,
-    RunMetricsArtifact,
+    RunMetricsArtifact, WrongWayValues,
 };
 use crate::seed_bank::{SeedBankError, SeedBankReference, read_seed_bank};
 use crate::trace::sha256_hex;
@@ -549,6 +550,17 @@ pub struct Comparison {
     /// The close-pass facility slices, keyed by `facility:<name>`, each holding
     /// the same families for that facility.
     pub close_pass_facility_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The wrong-way mode-pair slices, keyed by `ModePair` label, each holding
+    /// the wrong-way families of metric definition v3 for that pair.
+    pub wrong_way_mode_pair_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The wrong-way movement slices, keyed by the artifact's own movement key.
+    pub wrong_way_movement_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The wrong-way facility slices, keyed by `facility:<name>`.
+    pub wrong_way_facility_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The wrong-way participant-pair slices.
+    pub wrong_way_pair_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
+    /// The wrong-way perceived-rule slices.
+    pub wrong_way_rule_slices: BTreeMap<String, BTreeMap<String, PairedDistribution>>,
 }
 
 /// Compare two batches run from one common-random-number seed bank.
@@ -600,6 +612,11 @@ pub fn compare_batches(
     let mut close_pass_mode_pairs: BTreeMap<String, SlicePairing> = BTreeMap::new();
     let mut close_pass_movements: BTreeMap<String, SlicePairing> = BTreeMap::new();
     let mut close_pass_facilities: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut wrong_way_mode_pairs: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut wrong_way_movements: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut wrong_way_facilities: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut wrong_way_pairs: BTreeMap<String, SlicePairing> = BTreeMap::new();
+    let mut wrong_way_rules: BTreeMap<String, SlicePairing> = BTreeMap::new();
     let mut metric_set: Option<BTreeSet<String>> = None;
 
     for seed in &seeds {
@@ -803,6 +820,45 @@ pub fn compare_batches(
             );
         }
 
+        // The wrong-way buckets of the five disaggregation dimensions, paired
+        // like every other slice.
+        for (accumulators, a_side, b_side) in [
+            (
+                &mut wrong_way_mode_pairs,
+                &a_readings.wrong_way_mode_pairs,
+                &b_readings.wrong_way_mode_pairs,
+            ),
+            (
+                &mut wrong_way_movements,
+                &a_readings.wrong_way_movements,
+                &b_readings.wrong_way_movements,
+            ),
+            (
+                &mut wrong_way_facilities,
+                &a_readings.wrong_way_facilities,
+                &b_readings.wrong_way_facilities,
+            ),
+            (
+                &mut wrong_way_pairs,
+                &a_readings.wrong_way_pairs,
+                &b_readings.wrong_way_pairs,
+            ),
+            (
+                &mut wrong_way_rules,
+                &a_readings.wrong_way_rules,
+                &b_readings.wrong_way_rules,
+            ),
+        ] {
+            pair_wrong_way_buckets(
+                accumulators,
+                *seed,
+                a_side,
+                b_side,
+                &a_run.link.manifest_sha256,
+                &b_run.link.manifest_sha256,
+            );
+        }
+
         compared_seeds.push(ComparedPair {
             seed: *seed,
             a: a_run.link,
@@ -852,6 +908,11 @@ pub fn compare_batches(
         close_pass_mode_pair_slices: finish_slice_pairings(close_pass_mode_pairs, &seeds),
         close_pass_movement_slices: finish_slice_pairings(close_pass_movements, &seeds),
         close_pass_facility_slices: finish_slice_pairings(close_pass_facilities, &seeds),
+        wrong_way_mode_pair_slices: finish_slice_pairings(wrong_way_mode_pairs, &seeds),
+        wrong_way_movement_slices: finish_slice_pairings(wrong_way_movements, &seeds),
+        wrong_way_facility_slices: finish_slice_pairings(wrong_way_facilities, &seeds),
+        wrong_way_pair_slices: finish_slice_pairings(wrong_way_pairs, &seeds),
+        wrong_way_rule_slices: finish_slice_pairings(wrong_way_rules, &seeds),
     })
 }
 
@@ -1190,6 +1251,16 @@ struct SeedReadings {
     close_pass_movements: BTreeMap<String, SliceReadings>,
     /// The close-pass facility buckets, keyed by `facility:<name>`.
     close_pass_facilities: BTreeMap<String, SliceReadings>,
+    /// The wrong-way mode-pair buckets, keyed by `ModePair` label.
+    wrong_way_mode_pairs: BTreeMap<String, SliceReadings>,
+    /// The wrong-way movement buckets, keyed by the artifact's own movement key.
+    wrong_way_movements: BTreeMap<String, SliceReadings>,
+    /// The wrong-way facility buckets, keyed by `facility:<name>`.
+    wrong_way_facilities: BTreeMap<String, SliceReadings>,
+    /// The wrong-way participant-pair buckets.
+    wrong_way_pairs: BTreeMap<String, SliceReadings>,
+    /// The wrong-way perceived-rule buckets.
+    wrong_way_rules: BTreeMap<String, SliceReadings>,
 }
 
 /// One side's close-pass buckets of one dimension, each with the families the
@@ -1203,6 +1274,26 @@ fn close_pass_slice_readings(
         let mut readings: BTreeMap<String, (&'static str, PairReading)> = BTreeMap::new();
         for (key, unit, reading) in close_pass_readings(values) {
             readings.insert(key.clone(), (unit, pair_reading(side, &key, reading)?));
+        }
+        slices.insert(bucket.clone(), SliceReadings::of(readings));
+    }
+    Ok(slices)
+}
+
+/// One side's wrong-way buckets of one dimension, each with the families the
+/// bucket reports and their units.
+fn wrong_way_slice_readings(
+    side: SeedSide<'_>,
+    values: &BTreeMap<String, WrongWayValues>,
+) -> Result<BTreeMap<String, SliceReadings>, CompareError> {
+    let mut slices = BTreeMap::new();
+    for (bucket, values) in values {
+        let mut readings: BTreeMap<String, (&'static str, PairReading)> = BTreeMap::new();
+        for (key, unit, value) in wrong_way_readings(values) {
+            readings.insert(
+                key.to_owned(),
+                (unit, pair_reading(side, key, Reading::Value(value))?),
+            );
         }
         slices.insert(bucket.clone(), SliceReadings::of(readings));
     }
@@ -1283,6 +1374,11 @@ fn read_readings(
         close_pass_mode_pairs: close_pass_slice_readings(side, &artifact.close_pass.by_mode_pair)?,
         close_pass_movements: close_pass_slice_readings(side, &artifact.close_pass.by_movement)?,
         close_pass_facilities: close_pass_slice_readings(side, &artifact.close_pass.by_facility)?,
+        wrong_way_mode_pairs: wrong_way_slice_readings(side, &artifact.wrong_way.by_mode_pair)?,
+        wrong_way_movements: wrong_way_slice_readings(side, &artifact.wrong_way.by_movement)?,
+        wrong_way_facilities: wrong_way_slice_readings(side, &artifact.wrong_way.by_facility)?,
+        wrong_way_pairs: wrong_way_slice_readings(side, &artifact.wrong_way.by_pair)?,
+        wrong_way_rules: wrong_way_slice_readings(side, &artifact.wrong_way.by_rule)?,
     })
 }
 
@@ -1306,6 +1402,41 @@ fn pair_close_pass_buckets(
         let source = a_slice
             .or(b_slice)
             .expect("a close-pass bucket belongs to at least one side");
+        let pairing = accumulators
+            .entry(bucket.clone())
+            .or_insert_with(|| SlicePairing::of(source));
+        pair_slice_metrics(
+            &mut pairing.metrics,
+            &pairing.units,
+            seed,
+            a_slice,
+            b_slice,
+            a_manifest,
+            b_manifest,
+        );
+    }
+}
+
+/// Pair every wrong-way bucket of one dimension for one seed.
+///
+/// The buckets are a slice like any other: a bucket one side does not carry at
+/// this seed is no observation on that side, and the bucket's family set is the
+/// one the side that carries it reports.
+fn pair_wrong_way_buckets(
+    accumulators: &mut BTreeMap<String, SlicePairing>,
+    seed: u64,
+    a: &BTreeMap<String, SliceReadings>,
+    b: &BTreeMap<String, SliceReadings>,
+    a_manifest: &str,
+    b_manifest: &str,
+) {
+    let buckets: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    for bucket in buckets {
+        let a_slice = a.get(bucket);
+        let b_slice = b.get(bucket);
+        let source = a_slice
+            .or(b_slice)
+            .expect("a wrong-way bucket belongs to at least one side");
         let pairing = accumulators
             .entry(bucket.clone())
             .or_insert_with(|| SlicePairing::of(source));
