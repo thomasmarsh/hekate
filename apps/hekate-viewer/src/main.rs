@@ -1023,13 +1023,13 @@ fn marker_color(marker: &SafetyMarker) -> Color {
         EventKind::Entry | EventKind::Exit => Color::srgb(0.98, 0.62, 0.18),
         EventKind::Queue => Color::srgb(0.35, 0.75, 0.95),
         EventKind::Yielded | EventKind::ControlTransition => Color::srgb(0.55, 0.85, 0.55),
+        EventKind::ClosePass => Color::srgb(1.0, 0.41, 0.71),
         EventKind::Spawned | EventKind::Despawned => Color::WHITE,
         // The increment-2 maneuver and rule records are not markers
         // ([`hekate_present::is_safety_record`] does not carry them).
-        EventKind::Maneuver
-        | EventKind::FacilityTransition
-        | EventKind::OpposingTraversal
-        | EventKind::ClosePass => Color::WHITE,
+        EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => {
+            Color::WHITE
+        }
     }
 }
 

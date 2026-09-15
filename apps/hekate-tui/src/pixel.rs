@@ -774,7 +774,8 @@ mod tests {
     };
 
     use crate::raster::{
-        COLLISION_COLOR, PREDICTED_GAP_MARGIN_COLOR, PREDICTED_GAP_SHORTFALL_COLOR, QUEUE_COLOR,
+        CLOSE_PASS_COLOR, COLLISION_COLOR, PREDICTED_GAP_MARGIN_COLOR,
+        PREDICTED_GAP_SHORTFALL_COLOR, QUEUE_COLOR,
     };
 
     fn scenario() -> CompiledScenario {
@@ -942,6 +943,49 @@ mod tests {
         assert!(!contains_color(&image, COLLISION_COLOR));
         assert!(!contains_color(&image, QUEUE_COLOR));
         assert!(contains_color(&image, BODY_COLOR));
+    }
+
+    /// A close pass is a pair record that enters the safety window as a marker
+    /// of its own, drawn where its two live bodies meet, and the safety overlay
+    /// flag governs it as it governs every other marker.
+    #[test]
+    fn a_close_pass_marker_is_drawn_and_flag_gated() {
+        let raster = PixelRasterizer::new(160, 80);
+        let mut frame = general_frame(Viewport::new(DVec2::ZERO, 0.4));
+        frame.bodies = vec![
+            vehicle(0, DVec2::new(-3.0, 0.0)),
+            vehicle(1, DVec2::new(3.0, 0.0)),
+        ];
+        frame.status.agents = frame.bodies.len();
+        let mut safety = SafetyOverlay::new(40);
+        safety.observe(
+            0,
+            &[Event::ClosePass {
+                agent: AgentId::from_index(1),
+                partner: AgentId::from_index(0),
+                facility: FacilityId::from_index(0),
+                side: PassSide::Left,
+                min_clearance_m: 0.4,
+                min_clearance_time_s: 0.6,
+                relative_speed_mps: 2.5,
+                bands: Vec::new(),
+                violating_bands: Vec::new(),
+                crossed_boundary: false,
+                entered_opposing: false,
+            }],
+        );
+        frame.safety = safety;
+
+        assert!(
+            contains_color(&raster.rasterize(&frame), CLOSE_PASS_COLOR),
+            "the close-pass marker was not drawn"
+        );
+
+        frame.overlays.safety = false;
+        assert!(
+            !contains_color(&raster.rasterize(&frame), CLOSE_PASS_COLOR),
+            "the safety flag did not gate the close-pass marker"
+        );
     }
 
     /// Overlays with every flag off except the one the caller turns on.

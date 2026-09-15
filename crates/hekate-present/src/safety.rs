@@ -40,6 +40,7 @@ pub const fn is_safety_record(kind: EventKind) -> bool {
             | EventKind::Exit
             | EventKind::Queue
             | EventKind::ControlTransition
+            | EventKind::ClosePass
     )
 }
 
@@ -720,9 +721,9 @@ mod tests {
     use std::sync::Arc;
 
     use hekate_model::{
-        CompiledScenario, ConflictRegionId, CrossingId, PathId, parse_scenario_source,
+        CompiledScenario, ConflictRegionId, CrossingId, FacilityId, PathId, parse_scenario_source,
     };
-    use hekate_sim::{AgentId, AgentMode, DespawnReason, ViolationKind};
+    use hekate_sim::{AgentId, AgentMode, DespawnReason, PassSide, ViolationKind};
 
     use crate::scene::{FrameStatus, Overlays, SceneBody, SceneGeometry, Viewport};
     use crate::tactical::TacticalOverlay;
@@ -1124,6 +1125,46 @@ mod tests {
             vec![pair(EventKind::NearMiss)],
         );
         assert_eq!(frame.safety_markers()[0].position(), DVec2::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn a_close_pass_record_becomes_a_midpoint_safety_marker() {
+        // A close pass is a pair record with no region, so it must enter the
+        // safety window and anchor on the midpoint of its two live bodies,
+        // exactly as a collision or near miss does.
+        assert!(is_safety_record(EventKind::ClosePass));
+        let record = Event::ClosePass {
+            // The passing agent is the larger id, so the participant list must
+            // still ascend.
+            agent: AgentId::from_index(1),
+            partner: AgentId::from_index(0),
+            facility: FacilityId::from_index(0),
+            side: PassSide::Left,
+            min_clearance_m: 0.4,
+            min_clearance_time_s: 0.6,
+            relative_speed_mps: 2.5,
+            bands: Vec::new(),
+            violating_bands: Vec::new(),
+            crossed_boundary: false,
+            entered_opposing: false,
+        };
+        let participants = EventParticipants::of(&record);
+        assert_eq!(participants.agents(), &[0, 1]);
+        assert_eq!(participants.region(), None);
+
+        let frame = projected_frame(
+            20,
+            vec![
+                body(0, DVec2::new(4.0, 0.0), AgentMode::Vehicle),
+                body(1, DVec2::new(10.0, 0.0), AgentMode::Vehicle),
+            ],
+            vec![record],
+        );
+        let markers = frame.safety_markers();
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].kind(), EventKind::ClosePass);
+        assert_eq!(markers[0].participants().agents(), &[0, 1]);
+        assert_eq!(markers[0].position(), DVec2::new(7.0, 0.0));
     }
 
     #[test]

@@ -65,6 +65,8 @@ pub const QUEUE_COLOR: Rgb = Rgb::new(89, 191, 242);
 pub const CONTROL_COLOR: Rgb = Rgb::new(140, 217, 140);
 /// Occupied-region overlay color.
 pub const OCCUPIED_COLOR: Rgb = Rgb::new(250, 158, 46);
+/// Close-pass marker color.
+pub const CLOSE_PASS_COLOR: Rgb = Rgb::new(255, 105, 180);
 /// Usable-corridor segment color.
 pub const CORRIDOR_COLOR: Rgb = Rgb::new(89, 219, 171);
 /// Target-offset segment color.
@@ -110,13 +112,13 @@ pub const fn marker_glyph(kind: EventKind) -> Option<char> {
         EventKind::Entry | EventKind::Exit => Some('x'),
         EventKind::Queue => Some('q'),
         EventKind::Yielded | EventKind::ControlTransition => Some('c'),
+        // A close pass is a pair record that enters the safety window, so it
+        // draws its own marker rather than the bare-body style.
+        EventKind::ClosePass => Some('P'),
         EventKind::Spawned | EventKind::Despawned => None,
         // The increment-2 maneuver and rule records are not markers
         // ([`is_safety_record`] does not carry them), so they draw none.
-        EventKind::Maneuver
-        | EventKind::FacilityTransition
-        | EventKind::OpposingTraversal
-        | EventKind::ClosePass => None,
+        EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => None,
     }
 }
 
@@ -129,11 +131,11 @@ pub const fn marker_color(kind: EventKind) -> Rgb {
         EventKind::Entry | EventKind::Exit => OCCUPIED_COLOR,
         EventKind::Queue => QUEUE_COLOR,
         EventKind::Yielded | EventKind::ControlTransition => CONTROL_COLOR,
+        EventKind::ClosePass => CLOSE_PASS_COLOR,
         EventKind::Spawned | EventKind::Despawned => BODY_COLOR,
-        EventKind::Maneuver
-        | EventKind::FacilityTransition
-        | EventKind::OpposingTraversal
-        | EventKind::ClosePass => BODY_COLOR,
+        EventKind::Maneuver | EventKind::FacilityTransition | EventKind::OpposingTraversal => {
+            BODY_COLOR
+        }
     }
 }
 
@@ -1262,6 +1264,48 @@ mod tests {
         assert!(
             cells.contains(&(BODY_GLYPH, BODY_COLOR)),
             "a body must still draw unemphasized"
+        );
+    }
+
+    /// A close pass is a pair record that enters the safety window as a marker
+    /// of its own, drawn where its two live bodies meet, and the safety overlay
+    /// flag governs it as it governs every other marker.
+    #[test]
+    fn a_close_pass_marker_is_rasterized_and_flag_gated() {
+        let mut frame = general_frame(Viewport::new(DVec2::ZERO, 0.4));
+        frame.bodies = vec![
+            body(0, BodyKind::Box, DVec2::new(-3.0, 0.0), 4.5, 1.8),
+            body(1, BodyKind::Box, DVec2::new(3.0, 0.0), 4.5, 1.8),
+        ];
+        frame.status.agents = frame.bodies.len();
+        let mut safety = SafetyOverlay::new(40);
+        safety.observe(
+            0,
+            &[Event::ClosePass {
+                agent: AgentId::from_index(1),
+                partner: AgentId::from_index(0),
+                facility: FacilityId::from_index(0),
+                side: PassSide::Left,
+                min_clearance_m: 0.4,
+                min_clearance_time_s: 0.6,
+                relative_speed_mps: 2.5,
+                bands: Vec::new(),
+                violating_bands: Vec::new(),
+                crossed_boundary: false,
+                entered_opposing: false,
+            }],
+        );
+        frame.safety = safety;
+
+        assert!(
+            raster_cells(&frame).contains(&('P', CLOSE_PASS_COLOR)),
+            "the close-pass marker was not rasterized"
+        );
+
+        frame.overlays.safety = false;
+        assert!(
+            !raster_cells(&frame).contains(&('P', CLOSE_PASS_COLOR)),
+            "the safety flag did not gate the close-pass marker"
         );
     }
 

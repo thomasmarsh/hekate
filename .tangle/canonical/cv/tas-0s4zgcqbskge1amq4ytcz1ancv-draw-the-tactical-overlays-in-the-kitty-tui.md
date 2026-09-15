@@ -1,9 +1,9 @@
 ---
 context_rev: 1
 status: active
-updated: 2026-09-15T12:53:59Z
-summary: Draw the tactical overlays in the Kitty TUI path and open a wrong-way key
-next: Wire the close-pass visibility into both TUI backends and the safety overlay.
+updated: 2026-09-15T13:00:43Z
+summary: Draw the tactical overlays and close-pass evidence in every backend, and open a wrong-way key
+next: Run the five-gate validation and resolve.
 ---
 
 Area [[IDX-001-hekate]].
@@ -73,3 +73,41 @@ golden truncates the footer row before the new legend key.
 
 Left in scope for the next slice: close-pass visibility (Gap 2), which is a
 shared-presenter change (`is_safety_record`) plus a marker arm in each backend.
+
+## Close-pass visibility (Gap 2)
+
+`EventKind::ClosePass` is now a safety record, so a close pass enters the shared
+`SceneFrame` and every backend can draw it. No `SCENE_FORMAT_VERSION`,
+`EVENT_VERSION`, or simulation change was needed, and no golden changed.
+
+- `crates/hekate-present/src/safety.rs`: `is_safety_record` carries
+  `EventKind::ClosePass`. `EventParticipants` already sorted its passing agent
+  and passed body to ascend, and `marker_anchor` already falls through to the
+  midpoint of the participants alive in the frame, so a two-agent close pass
+  needs no new arm there. New test
+  `a_close_pass_record_becomes_a_midpoint_safety_marker` drives a close pass
+  whose passing agent is the larger id and asserts ascending participants, no
+  region, and the midpoint anchor.
+- `apps/hekate-tui/src/raster.rs`: `marker_glyph` returns `P` and `marker_color`
+  returns a new `CLOSE_PASS_COLOR` (`Rgb::new(255, 105, 180)`). The pixel
+  backend shares both helpers, so it needed only a test. No footer legend
+  change: the marker is governed by the existing `b safety` toggle the legend
+  already names.
+- `apps/hekate-viewer/src/main.rs`: the Bevy safety-shape pass already draws
+  every `frame.safety_markers()` entry generically; the minimal additive change
+  is a `ClosePass` color arm in `marker_color`, which previously fell into the
+  white non-marker group whose comment was then false.
+
+Tests: pixel `a_close_pass_marker_is_drawn_and_flag_gated` and raster
+`a_close_pass_marker_is_rasterized_and_flag_gated` build a two-body frame with
+only a close-pass record, assert the marker draws, and assert it vanishes with
+the safety flag off. Falsified: removing the `is_safety_record` arm fails the
+presenter test and both backend tests.
+
+Verified: `cargo fmt --all`; `cargo test -p hekate-present` (53 lib + the
+integration binaries); `cargo test -p hekate-tui` (86 lib + the integration
+binaries); `cargo test -p hekate-viewer`; `cargo clippy -p hekate-present -p
+hekate-tui -p hekate-viewer --all-targets -- -D warnings`;
+`./scripts/check-dependency-direction.sh`. Goldens unchanged: the walking
+fixture is Phase 1 with no facilities, so no `ClosePass` is produced and every
+checked-in golden stays byte-identical.
