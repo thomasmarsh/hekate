@@ -9,22 +9,21 @@
 //!   the matrix's `F`/`S`/`f` presets (0.1/0.05/0.02 s) — the "recorded trace
 //!   hash is stable across the checked-in presets tested" clause;
 //! - a batch over the checked-in seed bank
-//!   `scenarios/phase2/inc1/narrow_isolated_seed_bank.json` reproduces every
-//!   per-seed trace hash and its compressed event stream byte for byte.
+//!   `scenarios/phase2/inc1/narrow_isolated_seed_bank.json` records every
+//!   per-seed trace hash, cross-checks each against the canonical trace hash of
+//!   the same run, and pins each run manifest's stream hash to that batch hash.
 //!
 //! The batch runs through the same `run_batch`/`write_run_directory` path the
 //! `batch` command uses, and each per-seed hash is cross-checked against
 //! [`canonical_trace`] at the same seed, so the manifest's link to a run is the
 //! canonical trace hash rather than a second hashing scheme.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use flate2::read::GzDecoder;
 use hekate_cli::{
-    BATCH_MANIFEST_FILE, BatchManifest, BatchRequest, EVENT_STREAM_FILE, EventRetention,
-    RunManifest, SamplingPolicy, SeedBankReference, TrajectorySampling, canonical_trace,
-    load_scenario_provenance, read_seed_bank, run_batch,
+    BATCH_MANIFEST_FILE, BatchManifest, BatchRequest, EventRetention, RunManifest, SamplingPolicy,
+    SeedBankReference, TrajectorySampling, canonical_trace, load_scenario_provenance,
+    read_seed_bank, run_batch,
 };
 use hekate_sim::{Event, RunConfig, Seconds};
 
@@ -173,17 +172,6 @@ fn assert_batch_hash_is_canonical(manifest: &BatchManifest, path: &str) {
     }
 }
 
-/// The decompressed canonical event stream of a run directory.
-fn event_stream(directory: &Path) -> Vec<u8> {
-    let compressed =
-        std::fs::read(directory.join(EVENT_STREAM_FILE)).expect("the event stream is written");
-    let mut decoded = Vec::new();
-    GzDecoder::new(&compressed[..])
-        .read_to_end(&mut decoded)
-        .expect("the event stream decompresses");
-    decoded
-}
-
 fn batch_request(
     root: &Path,
     path: &str,
@@ -220,8 +208,9 @@ fn read_run_manifest(directory: &Path) -> RunManifest {
     serde_json::from_str(&json).expect("manifest.json is JSON")
 }
 
-/// A batch over the declared seed bank reproduces every per-seed trace hash and
-/// event stream.
+/// A batch over the declared seed bank records every per-seed trace hash, pins
+/// each run manifest's stream hash to that hash, and cross-checks each against
+/// the canonical trace hash of the same run.
 #[test]
 fn the_narrow_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
     let scratch = Scratch::new("seed-bank-batch");
@@ -238,54 +227,36 @@ fn the_narrow_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() 
     );
 
     for (id, path) in FIXTURES {
-        let left_root = scratch.path(&format!("{id}-left"));
-        let right_root = scratch.path(&format!("{id}-right"));
-        let left = run_batch(batch_request(&left_root, path, &seeds, &reference))
-            .unwrap_or_else(|error| panic!("{id} left batch failed: {error}"));
-        let right = run_batch(batch_request(&right_root, path, &seeds, &reference))
-            .unwrap_or_else(|error| panic!("{id} right batch failed: {error}"));
+        let root = scratch.path(id);
+        let batch = run_batch(batch_request(&root, path, &seeds, &reference))
+            .unwrap_or_else(|error| panic!("{id} batch failed: {error}"));
 
-        for manifest in [&left, &right] {
-            assert_eq!(
-                manifest.seeds, seeds,
-                "{id}: the batch ran the bank's seeds"
-            );
-            assert_eq!(
-                manifest
-                    .seed_bank
-                    .as_ref()
-                    .map(|bank| bank.content_sha256.as_str()),
-                Some(loaded.content_sha256.as_str()),
-                "{id}: the batch must name the declared bank"
-            );
-        }
-        assert_batch_hash_is_canonical(&left, path);
+        assert_eq!(batch.seeds, seeds, "{id}: the batch ran the bank's seeds");
+        assert_eq!(
+            batch
+                .seed_bank
+                .as_ref()
+                .map(|bank| bank.content_sha256.as_str()),
+            Some(loaded.content_sha256.as_str()),
+            "{id}: the batch must name the declared bank"
+        );
+        assert_batch_hash_is_canonical(&batch, path);
 
-        assert_eq!(left.runs.len(), seeds.len());
+        assert_eq!(batch.runs.len(), seeds.len());
         let mut recorded = Vec::new();
-        for (l, r) in left.runs.iter().zip(&right.runs) {
-            assert_eq!(l.seed, r.seed, "{id}: per-seed pairing must line up");
+        for batch_run in &batch.runs {
+            // The stream pin: the run manifest records the hash of the
+            // uncompressed stream the batch wrote, and it is the batch's own
+            // trace hash.
             assert_eq!(
-                l.trace_sha256, r.trace_sha256,
-                "{id} seed {}: two batches disagreed on the trace hash",
-                l.seed
-            );
-            let left_event = event_stream(&left_root.join(&l.directory));
-            let right_event = event_stream(&right_root.join(&r.directory));
-            assert_eq!(
-                left_event, right_event,
-                "{id} seed {}: two batches disagreed on the event stream",
-                l.seed
-            );
-            assert_eq!(
-                read_run_manifest(&left_root.join(&l.directory))
+                read_run_manifest(&root.join(&batch_run.directory))
                     .stream
                     .uncompressed_sha256,
-                l.trace_sha256,
+                batch_run.trace_sha256,
                 "{id} seed {}: the run manifest's stream hash must be the batch's trace hash",
-                l.seed
+                batch_run.seed
             );
-            recorded.push(format!("{}={}", l.seed, l.trace_sha256));
+            recorded.push(format!("{}={}", batch_run.seed, batch_run.trace_sha256));
         }
         println!("{id}: {recorded:?}");
     }

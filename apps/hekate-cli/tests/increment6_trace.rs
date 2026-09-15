@@ -127,11 +127,16 @@ fn golden_run(scratch: &Scratch, index: usize) -> PathBuf {
 }
 
 /// Each variant's declared run writes exactly its checked-in golden bytes and
-/// hash, and the manifest records the parameters the golden declares.
+/// hash into a fresh run directory, its manifest records the parameters the
+/// golden declares, and `replay --verify` reproduces that same golden stream
+/// from the manifest the run wrote.
+///
+/// The golden is therefore the canonical stream of a run the determinism
+/// contract still reproduces, and each variant's CLI run happens once.
 #[test]
-fn the_increment6_variant_traces_match_their_golden_bytes_and_hashes() {
+fn the_increment6_variant_goldens_match_and_replay_verifies_them() {
     for (index, id) in IDS.iter().enumerate() {
-        let scratch = Scratch::new(&format!("golden-{id}"));
+        let scratch = Scratch::new(id);
         let run_dir = golden_run(&scratch, index);
         let written = std::fs::read(scratch.path("trace.jsonl")).expect("the trace is written");
 
@@ -174,18 +179,9 @@ fn the_increment6_variant_traces_match_their_golden_bytes_and_hashes() {
             golden(id, "sha256").trim(),
             "'{id}'s manifest records the golden hash"
         );
-    }
-}
 
-/// `replay --verify` reproduces each variant's golden event stream from the same
-/// manifest, so the checked-in golden is the canonical stream of a run the
-/// determinism contract still reproduces.
-#[test]
-fn replay_verifies_the_increment6_golden_manifests() {
-    for (index, id) in IDS.iter().enumerate() {
-        let scratch = Scratch::new(&format!("replay-{id}"));
-        let run_dir = golden_run(&scratch, index);
-
+        // Replay the same run directory the assertions above read, so the CLI
+        // run happens once per variant.
         let verified = Command::new(CLI)
             .arg("replay")
             .arg(&run_dir)

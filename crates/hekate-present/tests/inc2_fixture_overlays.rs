@@ -17,14 +17,14 @@
 //!   TAS-131 driver records, because a checked-in scenario authors none.
 //!
 //! Three properties are asserted here. First, the five primitives are present
-//! with the identifiers the contract names, across the two runs. Second, the
-//! projection is deterministic: the same fixture stepped twice projects a
-//! byte-identical overlay stream. Third, a Phase 1 run carries none of the five,
-//! and an Increment 1 run carries none of the four the sparse or interval
-//! families need. (An Increment 1 version-2 body does carry route state on a
-//! compiled band, so the corridor derived from that sample is present; that is
-//! the corridor primitive's own contract, not a leak, and its inspector carries
-//! no target, gap, maneuver, or rule field.)
+//! with the identifiers the contract names, across the two runs. Second, each
+//! fixture's projection matches the checked-in golden frame for frame, so a
+//! replayed overlay stream is byte-identical to the recorded one. Third, a
+//! Phase 1 run carries none of the five, and an Increment 1 run carries none of
+//! the four the sparse or interval families need. (An Increment 1 version-2 body
+//! does carry route state on a compiled band, so the corridor derived from that
+//! sample is present; that is the corridor primitive's own contract, not a leak,
+//! and its inspector carries no target, gap, maneuver, or rule field.)
 //!
 //! The exact ticks and inspector text are pinned by
 //! `tests/golden/present/inc2_tactical_fixtures.seed0.txt`, which this suite
@@ -594,42 +594,12 @@ fn both_increment_2_fixtures_carry_the_five_route_relative_overlays() {
     );
 }
 
-/// Replaying either fixture projects a byte-identical overlay stream.
-#[test]
-fn replaying_a_fixture_projects_an_identical_overlay_stream() {
-    for (name, drive) in [
-        ("narrow_passing_v2", drive_passing as fn() -> DrivenRun),
-        ("narrow_wrong_way_v2", drive_occupied_corridor),
-    ] {
-        let first = drive();
-        let second = drive();
-        assert_eq!(
-            first.ticks, second.ticks,
-            "{name} replayed a different number of ticks"
-        );
-        assert_eq!(
-            first.stream.len(),
-            second.stream.len(),
-            "{name} replayed a different number of overlay frames"
-        );
-        for (index, (line, replay)) in first.stream.iter().zip(&second.stream).enumerate() {
-            assert_eq!(line, replay, "{name} diverged in overlay frame {index}");
-        }
-        assert_eq!(
-            first
-                .first
-                .iter()
-                .map(|(family, landmark)| (*family, landmark.tick, landmark.agent))
-                .collect::<Vec<_>>(),
-            second
-                .first
-                .iter()
-                .map(|(family, landmark)| (*family, landmark.tick, landmark.agent))
-                .collect::<Vec<_>>(),
-            "{name} replayed different overlay milestones"
-        );
-    }
-}
+// The same-fixture determinism this suite used to re-drive
+// (`replaying_a_fixture_projects_an_identical_overlay_stream`) is owned by
+// `the_fixture_overlays_match_the_checked_in_golden`: it pins every overlay
+// frame's exact text against
+// `tests/golden/present/inc2_tactical_fixtures.seed0.txt`, which is strictly
+// stronger than comparing two in-process projections of the same fixture.
 
 /// A Phase 1 run carries none of the five overlays, and an Increment 1 run
 /// carries none of the four a target offset, prediction, or open interval

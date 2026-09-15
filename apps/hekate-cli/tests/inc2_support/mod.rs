@@ -19,8 +19,9 @@
 //! therefore driven in-process here through [`TraceRecorder`], which the trace
 //! contract documents as producing exactly the canonical trace bytes and hash of
 //! the direct run. [`drive`] uses `TraceRecorder` for every fixture, and
-//! `inc2_determinism.rs` asserts that for the three autonomous fixtures those
-//! bytes equal [`canonical_trace`]'s.
+//! `inc2_trace.rs` asserts that for the three autonomous fixtures those bytes
+//! equal [`canonical_trace`]'s — its `assert_matches_golden` pins the checked-in
+//! artifact and its CLI run/replay test proves `hekate-cli run` writes it.
 //!
 //! ## Per-preset occurrence
 //!
@@ -32,9 +33,9 @@
 //! intended pair on the facility at Fine. Each fixture in [`FIXTURES`] therefore
 //! names a *pinned bank seed*, and [`maneuver_occurs`] is the predicate that
 //! seed satisfies at both presets. `scenarios/phase2/inc2/inc2_seed_bank.json`
-//! declares those seeds, and `inc2_determinism.rs` re-proves the occurrence at
-//! every preset before comparing hashes, so reproduction is reproduction of a
-//! maneuver rather than of an empty run.
+//! declares those seeds, and `inc2_trace.rs`'s `declared_run` proves the
+//! occurrence at every preset before comparing hashes, so reproduction is
+//! reproduction of a maneuver rather than of an empty run.
 
 #![allow(dead_code)]
 
@@ -205,18 +206,19 @@ pub const FIXTURES: [Fixture; 6] = [
     },
 ];
 
-// The determinism and golden suites hand-maintain one `#[test]` per
-// fixture+preset, so growing either table without adding its cases would
-// silently leave the new entry untested. These guards turn that into a build
-// failure that points the author at the per-case lists in `inc2_determinism.rs`
-// and `inc2_trace.rs`.
+// The determinism and golden suites hand-maintain per-case lists over the
+// fixture table (`inc2_determinism.rs`'s different-seed cases and
+// `inc2_trace.rs`'s per-fixture+preset golden cases), and `inc2_trace.rs`
+// hand-maintains one per preset. Growing either table without adding its cases
+// would silently leave the new entry untested. These guards turn that into a
+// build failure that points the author at those per-case lists.
 const _: () = assert!(
     FIXTURES.len() == 6,
     "a new fixture needs its per-case tests added to inc2_determinism.rs and inc2_trace.rs"
 );
 const _: () = assert!(
     PRESETS.len() == 2,
-    "a new preset needs its per-case tests added to inc2_determinism.rs and inc2_trace.rs"
+    "a new preset needs its per-case tests added to inc2_trace.rs"
 );
 
 /// A repository-root-relative path resolved against the test binary's crate.

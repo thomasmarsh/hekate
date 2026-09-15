@@ -6,26 +6,30 @@
 //! streams". This suite is that gate for the six checked-in fixtures under
 //! `scenarios/phase2/inc2/`:
 //!
-//! - every fixture repeats its canonical trace hash and bytes at its declared
-//!   bank seed at both required presets, Standard 50 ms and Fine 20 ms — the
-//!   `CC-OVERTAKE`/`CC-OPPOSE` cells' declared presets — with the Fine run kept
-//!   at the same simulated horizon by `converge::fidelity_ticks`;
+//! - one canary fixture repeats its canonical trace hash and bytes at its
+//!   declared bank seed at Standard 50 ms, one of the `CC-OVERTAKE`/`CC-OPPOSE`
+//!   cells' required presets; the per-fixture, per-preset reproduction, the Fine
+//!   preset (whose runs are kept at the same simulated horizon by
+//!   `converge::fidelity_ticks`), and the pinned bytes themselves belong to the
+//!   golden suite in `inc2_trace.rs`;
 //! - a seed outside the bank produces a different trace, so the stability above
 //!   is not a constant;
 //! - the checked-in bank `scenarios/phase2/inc2/inc2_seed_bank.json` declares
-//!   exactly the pinned seeds, and each pinned seed admits its fixture's
-//!   intended maneuver at *both* presets, so the reproduction is a reproduction
-//!   of a maneuver and not of an empty run;
-//! - a batch over the bank reproduces every per-seed trace hash and its
-//!   compressed event stream byte for byte, and each recorded hash is the
-//!   canonical trace hash of the same run.
+//!   exactly the pinned seeds; that each pinned seed admits its fixture's
+//!   intended maneuver at *both* presets — so a reproduction is of a maneuver
+//!   and not of an empty run — is `assert_maneuver_occurs`, which
+//!   `inc2_trace.rs`'s `declared_run` runs for every fixture and preset before it
+//!   compares hashes;
+//! - a batch over the bank records every per-seed trace hash, cross-checks each
+//!   against the canonical trace hash of the same run, and pins each run
+//!   manifest's stream hash to that batch hash.
 //!
 //! The batch runs through the same `run_batch`/`write_run_directory` path the
 //! `batch --seed-bank` command uses, and each per-seed hash is cross-checked
 //! against [`canonical_trace`], so the manifest's link to a run is the canonical
 //! trace hash rather than a second hashing scheme. The batch command only runs
 //! the Standard step, so the bank batch is the Standard one; the Fine preset's
-//! reproduction is the in-process half above.
+//! reproduction is pinned by `inc2_trace.rs`'s Fine goldens.
 //!
 //! Arrivals are a per-tick Bernoulli thinning of a Poisson process, so the
 //! Standard and Fine grids realise different arrival series from one root seed.
@@ -36,22 +40,17 @@
 
 mod inc2_support;
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use flate2::read::GzDecoder;
 use hekate_cli::{
-    BATCH_MANIFEST_FILE, BatchManifest, BatchRequest, EVENT_STREAM_FILE, EventRetention,
-    RunManifest, SAMPLING_POLICY_VERSION, SamplingPolicy, SeedBankReference, Trace, TraceRecorder,
+    BATCH_MANIFEST_FILE, BatchManifest, BatchRequest, EventRetention, RunManifest,
+    SAMPLING_POLICY_VERSION, SamplingPolicy, SeedBankReference, Trace, TraceRecorder,
     TrajectorySampling, load_scenario_provenance, read_seed_bank, run_batch,
 };
 use hekate_model::{CompiledScenario, parse_scenario_source_v2};
-use hekate_sim::{
-    AgentId, Event, ManeuverState, RunConfig, Seconds, Simulation, SnapshotDetail, maneuver_draw,
-};
+use hekate_sim::{AgentId, Event, RunConfig, Seconds, Simulation, SnapshotDetail, maneuver_draw};
 use inc2_support::{
-    FIXTURES, Fixture, PRESETS, SEED_BANK, STANDARD_STEP_S, assert_maneuver_occurs, canonical,
-    repo_path, run,
+    FIXTURES, Fixture, PRESETS, SEED_BANK, STANDARD_STEP_S, canonical, repo_path, run,
 };
 
 /// A seed that is not banked, used only to prove a trace hash is not constant.
@@ -84,24 +83,23 @@ impl Drop for Scratch {
     }
 }
 
-// Every checked-in Increment 2 fixture repeats its canonical trace bytes and
-// hash at the fixed pinned seed at both required presets, and a different seed
-// changes the trace.
+// The in-process driver's reproducibility is the canary below: one fixture's
+// Standard run repeats its canonical trace bytes and hash at its pinned bank
+// seed. The per-fixture, per-preset reproduction, the pinned bytes themselves,
+// and the fact that the three autonomous fixtures' bytes are exactly the
+// `canonical_trace` bytes `hekate-cli run` writes all belong to the golden suite
+// in `inc2_trace.rs`, whose `assert_matches_golden` pins the checked-in artifact
+// and whose CLI run/replay test proves `hekate-cli run` writes it.
 //
-// The driven runs are `TraceRecorder` runs, and for the three fixtures whose
-// maneuver needs no request they are asserted to be exactly the
-// `canonical_trace` bytes `hekate-cli run` writes, so the Standard half of the
-// reproducibility claim is CLI-reproducible for those three.
-//
-// The claim is one `#[test]` per fixture+preset, plus one per fixture for the
-// different-seed check and one per autonomous fixture for the canonical-trace
-// check, so nextest runs every case in its own process. Each case's assertions
-// live in `assert_reproduces_trace`, `assert_other_seed_changes_trace`, and
-// `assert_standard_run_is_canonical`; the macros below only name the cases.
+// A seed outside the bank changes the trace, one `#[test]` per fixture, so the
+// Standard reproducibility is not a constant.
 
-/// One fixture+preset reproduction case: the same pinned seed and step twice
+/// The canary reproduction case: the same pinned seed and Standard step twice
 /// produce the same canonical trace bytes and hash.
-fn assert_reproduces_trace(fixture: &Fixture, preset: &str, step_s: f64) {
+#[test]
+fn narrow_passing_v2_reproduces_its_trace_hash_at_standard() {
+    let (preset, step_s) = PRESETS[0];
+    let fixture = &FIXTURES[0];
     let first = run(fixture, fixture.pinned_seed, step_s);
     let second = run(fixture, fixture.pinned_seed, step_s);
     assert_eq!(
@@ -138,33 +136,6 @@ fn assert_other_seed_changes_trace(fixture: &Fixture) {
     );
 }
 
-/// One autonomous fixture's CLI-reproducibility case: its Standard run is
-/// exactly the [`canonical_trace`] bytes `hekate-cli run` writes.
-fn assert_standard_run_is_canonical(fixture: &Fixture) {
-    let standard = run(fixture, fixture.pinned_seed, STANDARD_STEP_S);
-    let direct = canonical(fixture, fixture.pinned_seed, STANDARD_STEP_S);
-    assert_eq!(
-        standard.trace.bytes(),
-        direct.bytes(),
-        "{}: a run with no request must be the canonical trace `hekate-cli run` writes",
-        fixture.id
-    );
-}
-
-/// Generate the per-fixture+preset reproduction tests, one `#[test]` per case,
-/// over the `FIXTURES` and `PRESETS` indices `inc2_support` declares.
-macro_rules! reproduction_cases {
-    ($(($name:ident, $fixture_index:literal, $preset_index:literal)),+ $(,)?) => {
-        $(
-            #[test]
-            fn $name() {
-                let (preset, step_s) = PRESETS[$preset_index];
-                assert_reproduces_trace(&FIXTURES[$fixture_index], preset, step_s);
-            }
-        )+
-    };
-}
-
 /// Generate the per-fixture different-seed tests, one `#[test]` per fixture.
 macro_rules! other_seed_cases {
     ($(($name:ident, $fixture_index:literal)),+ $(,)?) => {
@@ -176,70 +147,6 @@ macro_rules! other_seed_cases {
         )+
     };
 }
-
-/// Generate the per-autonomous-fixture canonical-trace tests, one `#[test]` per
-/// autonomous fixture.
-macro_rules! canonical_trace_cases {
-    ($(($name:ident, $fixture_index:literal)),+ $(,)?) => {
-        $(
-            #[test]
-            fn $name() {
-                assert_standard_run_is_canonical(&FIXTURES[$fixture_index]);
-            }
-        )+
-    };
-}
-
-reproduction_cases!(
-    (
-        narrow_passing_v2_reproduces_its_trace_hash_at_standard,
-        0,
-        0
-    ),
-    (narrow_passing_v2_reproduces_its_trace_hash_at_fine, 0, 1),
-    (
-        motor_passing_narrow_v2_reproduces_its_trace_hash_at_standard,
-        1,
-        0
-    ),
-    (
-        motor_passing_narrow_v2_reproduces_its_trace_hash_at_fine,
-        1,
-        1
-    ),
-    (
-        motor_lane_change_v2_reproduces_its_trace_hash_at_standard,
-        2,
-        0
-    ),
-    (motor_lane_change_v2_reproduces_its_trace_hash_at_fine, 2, 1),
-    (
-        narrow_passing_unsafe_v2_reproduces_its_trace_hash_at_standard,
-        3,
-        0
-    ),
-    (
-        narrow_passing_unsafe_v2_reproduces_its_trace_hash_at_fine,
-        3,
-        1
-    ),
-    (
-        motor_lane_change_boundary_v2_reproduces_its_trace_hash_at_standard,
-        4,
-        0
-    ),
-    (
-        motor_lane_change_boundary_v2_reproduces_its_trace_hash_at_fine,
-        4,
-        1
-    ),
-    (
-        narrow_wrong_way_v2_reproduces_its_trace_hash_at_standard,
-        5,
-        0
-    ),
-    (narrow_wrong_way_v2_reproduces_its_trace_hash_at_fine, 5, 1),
-);
 
 other_seed_cases!(
     (
@@ -268,25 +175,14 @@ other_seed_cases!(
     ),
 );
 
-canonical_trace_cases!(
-    (narrow_passing_v2_standard_run_is_the_canonical_cli_trace, 0),
-    (
-        motor_passing_narrow_v2_standard_run_is_the_canonical_cli_trace,
-        1
-    ),
-    (
-        narrow_passing_unsafe_v2_standard_run_is_the_canonical_cli_trace,
-        3
-    ),
-);
-
 /// The checked-in bank declares exactly the pinned seeds.
 ///
 /// This is what makes the hash stability above meaningful: a hash comparison
 /// over a run that never admits the fixture's pair proves only that an empty run
 /// is empty. That every declared seed admits its fixture's maneuver at both
-/// required presets is the generated `*_admits_its_maneuver_at_*` cases, one
-/// `#[test]` per fixture+preset; this test asserts only the declaration.
+/// required presets is `assert_maneuver_occurs`, which `inc2_trace.rs`'s
+/// `declared_run` runs for every fixture and preset; this test asserts only the
+/// declaration.
 #[test]
 fn the_declared_seed_bank_declares_exactly_the_pinned_seeds() {
     let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");
@@ -297,91 +193,6 @@ fn the_declared_seed_bank_declares_exactly_the_pinned_seeds() {
         loaded.bank.seeds, pinned,
         "the declared bank is exactly the fixtures' pinned seeds"
     );
-}
-
-/// One fixture+preset bank-admission case: the pinned seed is a declared bank
-/// seed and its run admits the fixture's intended maneuver without aborting.
-fn assert_seed_bank_admits_maneuver(fixture: &Fixture, preset: &str, step_s: f64) {
-    let loaded = read_seed_bank(&repo_path(SEED_BANK)).expect("the declared seed bank reads");
-    assert!(
-        loaded.bank.seeds.contains(&fixture.pinned_seed),
-        "{}: pinned seed {} is not a declared bank seed",
-        fixture.id,
-        fixture.pinned_seed
-    );
-    let run = run(fixture, fixture.pinned_seed, step_s);
-    assert_maneuver_occurs(fixture, preset, &run);
-    assert!(
-        run.observation
-            .edges
-            .values()
-            .all(|edges| edges.iter().all(|(_, to, _)| *to != ManeuverState::Aborted)),
-        "{} [{preset}]: the fixture's maneuver must not abort",
-        fixture.id
-    );
-    println!(
-        "{} [{preset}] seed {} admits its maneuver: {} overtaking interval(s), {} handoff(s), {} wrong-way entr(ies)",
-        fixture.id,
-        fixture.pinned_seed,
-        run.observation.overtakes.len(),
-        run.observation.facility_transitions,
-        run.observation.wrong_way.len()
-    );
-}
-
-/// Generate the per-fixture+preset bank-admission tests, one `#[test]` per case.
-macro_rules! seed_bank_admission_cases {
-    ($(($name:ident, $fixture_index:literal, $preset_index:literal)),+ $(,)?) => {
-        $(
-            #[test]
-            fn $name() {
-                let (preset, step_s) = PRESETS[$preset_index];
-                assert_seed_bank_admits_maneuver(&FIXTURES[$fixture_index], preset, step_s);
-            }
-        )+
-    };
-}
-
-seed_bank_admission_cases!(
-    (narrow_passing_v2_admits_its_maneuver_at_standard, 0, 0),
-    (narrow_passing_v2_admits_its_maneuver_at_fine, 0, 1),
-    (
-        motor_passing_narrow_v2_admits_its_maneuver_at_standard,
-        1,
-        0
-    ),
-    (motor_passing_narrow_v2_admits_its_maneuver_at_fine, 1, 1),
-    (motor_lane_change_v2_admits_its_maneuver_at_standard, 2, 0),
-    (motor_lane_change_v2_admits_its_maneuver_at_fine, 2, 1),
-    (
-        narrow_passing_unsafe_v2_admits_its_maneuver_at_standard,
-        3,
-        0
-    ),
-    (narrow_passing_unsafe_v2_admits_its_maneuver_at_fine, 3, 1),
-    (
-        motor_lane_change_boundary_v2_admits_its_maneuver_at_standard,
-        4,
-        0
-    ),
-    (
-        motor_lane_change_boundary_v2_admits_its_maneuver_at_fine,
-        4,
-        1
-    ),
-    (narrow_wrong_way_v2_admits_its_maneuver_at_standard, 5, 0),
-    (narrow_wrong_way_v2_admits_its_maneuver_at_fine, 5, 1),
-);
-
-/// The decompressed canonical event stream of a run directory.
-fn event_stream(directory: &Path) -> Vec<u8> {
-    let compressed =
-        std::fs::read(directory.join(EVENT_STREAM_FILE)).expect("the event stream is written");
-    let mut decoded = Vec::new();
-    GzDecoder::new(&compressed[..])
-        .read_to_end(&mut decoded)
-        .expect("the event stream decompresses");
-    decoded
 }
 
 fn batch_request(
@@ -436,8 +247,10 @@ fn assert_batch_hash_is_canonical(manifest: &BatchManifest, fixture: &Fixture) {
     }
 }
 
-/// A batch over the declared seed bank reproduces every per-seed trace hash and
-/// event stream across two runs, and the manifest names the declared bank.
+/// A batch over the declared seed bank records every per-seed trace hash, the
+/// manifest names the declared bank, each run manifest's stream hash equals the
+/// batch's trace hash, and every recorded hash is the canonical trace hash of
+/// the same run.
 #[test]
 fn the_inc2_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
     let scratch = Scratch::new("seed-bank-batch");
@@ -454,78 +267,59 @@ fn the_inc2_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream() {
     );
 
     for fixture in FIXTURES {
-        let left_root = scratch.path(&format!("{}-left", fixture.id));
-        let right_root = scratch.path(&format!("{}-right", fixture.id));
-        let left = run_batch(batch_request(&left_root, &fixture, &seeds, &reference))
-            .unwrap_or_else(|error| panic!("{} left batch failed: {error}", fixture.id));
-        let right = run_batch(batch_request(&right_root, &fixture, &seeds, &reference))
-            .unwrap_or_else(|error| panic!("{} right batch failed: {error}", fixture.id));
+        let root = scratch.path(fixture.id);
+        let batch = run_batch(batch_request(&root, &fixture, &seeds, &reference))
+            .unwrap_or_else(|error| panic!("{} batch failed: {error}", fixture.id));
 
-        for manifest in [&left, &right] {
-            assert_eq!(
-                manifest.seeds, seeds,
-                "{}: the batch ran the bank's seeds",
-                fixture.id
-            );
-            assert_eq!(
-                manifest
-                    .seed_bank
-                    .as_ref()
-                    .map(|bank| bank.content_sha256.as_str()),
-                Some(loaded.content_sha256.as_str()),
-                "{}: the batch must name the declared bank",
-                fixture.id
-            );
-            assert_eq!(
-                manifest.spec.ticks, fixture.standard_ticks,
-                "{}: the batch runs the fixture's declared horizon",
-                fixture.id
-            );
-            assert_eq!(manifest.spec.step_s, STANDARD_STEP_S, "{}", fixture.id);
-        }
-        assert_batch_hash_is_canonical(&left, &fixture);
+        assert_eq!(
+            batch.seeds, seeds,
+            "{}: the batch ran the bank's seeds",
+            fixture.id
+        );
+        assert_eq!(
+            batch
+                .seed_bank
+                .as_ref()
+                .map(|bank| bank.content_sha256.as_str()),
+            Some(loaded.content_sha256.as_str()),
+            "{}: the batch must name the declared bank",
+            fixture.id
+        );
+        assert_eq!(
+            batch.spec.ticks, fixture.standard_ticks,
+            "{}: the batch runs the fixture's declared horizon",
+            fixture.id
+        );
+        assert_eq!(batch.spec.step_s, STANDARD_STEP_S, "{}", fixture.id);
+        assert_batch_hash_is_canonical(&batch, &fixture);
 
-        assert_eq!(left.runs.len(), seeds.len());
+        assert_eq!(batch.runs.len(), seeds.len());
         let mut recorded = Vec::new();
-        for (left_run, right_run) in left.runs.iter().zip(&right.runs) {
+        for batch_run in &batch.runs {
+            // The stream pin: the run manifest records the hash of the
+            // uncompressed stream the batch wrote, and it is the batch's own
+            // trace hash.
             assert_eq!(
-                left_run.seed, right_run.seed,
-                "{}: per-seed pairing must line up",
-                fixture.id
-            );
-            assert_eq!(
-                left_run.trace_sha256, right_run.trace_sha256,
-                "{} seed {}: two batches disagreed on the trace hash",
-                fixture.id, left_run.seed
-            );
-            let left_event = event_stream(&left_root.join(&left_run.directory));
-            let right_event = event_stream(&right_root.join(&right_run.directory));
-            assert_eq!(
-                left_event, right_event,
-                "{} seed {}: two batches disagreed on the event stream",
-                fixture.id, left_run.seed
-            );
-            assert_eq!(
-                read_run_manifest(&left_root.join(&left_run.directory))
+                read_run_manifest(&root.join(&batch_run.directory))
                     .stream
                     .uncompressed_sha256,
-                left_run.trace_sha256,
+                batch_run.trace_sha256,
                 "{} seed {}: the run manifest's stream hash must be the batch's trace hash",
                 fixture.id,
-                left_run.seed
+                batch_run.seed
             );
-            recorded.push(format!("{}={}", left_run.seed, left_run.trace_sha256));
+            recorded.push(format!("{}={}", batch_run.seed, batch_run.trace_sha256));
         }
 
         // The stored batch manifest is the one the API returned, so a consumer
         // reading batch.json sees the same pairing.
-        let stored = read_batch_manifest(&left_root);
+        let stored = read_batch_manifest(&root);
         let stored_hashes: Vec<&str> = stored
             .runs
             .iter()
             .map(|recorded| recorded.trace_sha256.as_str())
             .collect();
-        let expected_hashes: Vec<&str> = left
+        let expected_hashes: Vec<&str> = batch
             .runs
             .iter()
             .map(|recorded| recorded.trace_sha256.as_str())
@@ -586,29 +380,11 @@ fn the_declared_seed_bank_runs_the_same_traces_as_an_explicit_seed_list() {
     assert_eq!(hashes, explicit_hashes, "the bank must not change the runs");
 }
 
-/// The banked seeds really run the fixtures, so the batch evidence above is not
-/// an artifact of empty runs: each fixture's canonical trace admits agents.
-#[test]
-fn the_inc2_seed_bank_batch_runs_every_fixture() {
-    for fixture in FIXTURES {
-        let run = run(&fixture, fixture.pinned_seed, STANDARD_STEP_S);
-        let spawned = std::str::from_utf8(run.trace.bytes())
-            .expect("a trace is UTF-8")
-            .lines()
-            .filter(|line| line.contains("\"event\":\"spawned\""))
-            .count();
-        assert!(
-            spawned > 0,
-            "{}: its canonical trace records no spawn event",
-            fixture.id
-        );
-        assert!(
-            spawned as usize == run.observation.spawned.len(),
-            "{}: every agent the trace admits is an observed spawn",
-            fixture.id
-        );
-    }
-}
+// The per-fixture "the banked seeds really run the fixtures" guard lives in
+// `inc2_trace.rs`: `assert_golden_covers_its_maneuvers` requires every fixture's
+// checked-in golden bytes to record a spawn event at both presets, and
+// `assert_matches_golden` pins those bytes to a live run, so a fixture that
+// stopped admitting agents fails there rather than here.
 
 // ---------------------------------------------------------------------------
 // TAS-134: stream isolation of the Increment 2 maneuver draws
