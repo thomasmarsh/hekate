@@ -132,3 +132,95 @@ data. It supersedes nothing above; the Increment 0 change stands as recorded.
   `a_capsule_body_is_drawn_as_a_capsule`; and `hekate-viewer`'s
   `a_capsule_body_draws_its_straight_part_and_both_caps` and
   `a_version_2_frame_carries_each_facility_band_and_reference_path`.
+
+# Route-relative tactical overlays (scene format version 3)
+
+This section is the versioned explanation for the third scene-shape change:
+`[[TAS-111-present-increment-2-corridor-gap-and-rule-overlays]]` adds the
+Increment 2 route-relative tactical overlays to the shared `hekate-present`
+scene projection, so both presenters draw the usable corridor, target offset,
+predicted gap, maneuver state, and wrong-way rule state from scene data. It
+supersedes nothing above; the Increment 0 and Increment 1 changes stand as
+recorded.
+
+## What changed
+
+- **Bodies.** `SceneBody` carries `route_state`, the versioned
+  `hekate_sim::RouteStateSample` the snapshot already projects for a steering
+  body whose route lies on a compiled facility. It is `None` for a Phase 1 body
+  and for an Increment 1 body that carries no route coordinates, exactly as the
+  sample itself is absent there.
+- **Frame.** `SceneFrame` carries `tactical`, a `TacticalOverlay` folded from the
+  typed maneuver and opposing-traversal edge records exactly as `SafetyOverlay`
+  folds region occupancy: a maneuver interval opens on the edge that leaves
+  `ManeuverState::Following` and closes when an edge returns the agent to it, and
+  a wrong-way interval opens on its `entering: true` record and closes on its
+  `entering: false` record or on the traversing agent's despawn. The fold keeps
+  its intervals ascending by agent id and reads no time or randomness.
+- **Overlays.** `SceneFrame` exposes five pure accessors, each a function of the
+  frame alone: `corridors`, `target_offsets`, `predicted_gaps`,
+  `maneuver_overlays`, and `wrong_way_overlays`. The corridor, target offset, and
+  predicted gap primitives are read from each body's route-state sample; the
+  maneuver and wrong-way primitives join that sample to the folded interval and
+  name only identifiers — agent, partner, facility, movement, clearance, state,
+  and reason codes. A body with no route state and a frame with no open interval
+  draw nothing, so a Phase 1 or Increment 1 run still projects no tactical
+  overlay.
+- **Usable corridor derivation.** The corridor is the body's facility band inset
+  by the body's half width and its resolved target clearance, measured
+  perpendicular to the body's heading; the band is the projected facility whose
+  reference path is the body's guide path. The compiled `LateralCorridor` the
+  kernel steers within is not projected onto a snapshot, so the frame derives its
+  own from the band geometry it carries rather than reading simulation internals;
+  for a straight band the two agree wherever the mode's resolved target clearance
+  equals its compiled lateral clearance, and the inspector line reports the
+  clearance and horizon the derivation used.
+- **Inspector text.** `corridor_summary`, `target_offset_summary`,
+  `predicted_gap_summary`, `maneuver_summary`, and `wrong_way_summary` join
+  `intent_summary`, `profile_summary`, and `decision_summary`, so both backends
+  describe the same identifiers with the same wording.
+- **Overlay toggles.** `Overlay` gains `Corridor`, `TargetOffset`,
+  `PredictedGap`, `Maneuver`, and `WrongWay`, in that declaration order after
+  `Geometry`, `Vectors`, and `Safety`; that order is the draw order every backend
+  follows. `Overlays` gains the matching flags and toggle arms, all defaulting on
+  because each draws nothing on a body without the state.
+- **Untouched.** `RouteStateSample`, `MotionSample`, `Snapshot`, `Event`,
+  `EventKind`, and `EVENT_VERSION` are read-only here; no simulation or scenario
+  branch enters the shared projection.
+
+## Versioned bump
+
+- `SCENE_FORMAT_VERSION` 2 → 3 (`crates/hekate-present/src/scene.rs`). Version 2
+  was the facility and capsule projection; version 3 adds
+  `SceneBody::route_state`, `SceneFrame::tactical`, the five overlay accessors
+  and their inspector text, and the new overlay toggles. Nothing serializes a
+  scene, so no artifact records the version: it names the projection's shape, and
+  a change to that shape bumps it here.
+- `EVENT_VERSION` stays **3**, and no metric, trace, snapshot, trajectory, or
+  manifest format version changes. The scene projection is not part of any
+  artifact schema, and no Increment 0 or Increment 1 projection value changed.
+
+## Goldens and evidence
+
+- Regenerated: `tests/golden/present/walking_guide_v1.seed0.tick20.scene.txt`
+  — the Phase 1 walking projection gains exactly the declared additive fields:
+  `route_state: None` on each of its six bodies, the five new overlay flags, and
+  an empty `tactical` fold. Every other line, including every body, path, portal,
+  movement, rule, signal, and safety value, is byte-identical.
+- Unchanged: `tests/golden/present/view_commands.txt` (it records command effects
+  and viewport state, not the geometry dump), the renderer cell and Kitty goldens
+  (`tests/golden/renderer/**`), the canonical trace goldens, and
+  `baselines/phase1/**`.
+- The version-pinning test `the_declared_scene_format_version_is_the_facility_extension`
+  is renamed to `the_declared_scene_format_version_is_the_tactical_extension`,
+  because it now pins version 3.
+- Tests that pin the new output: `hekate-present`'s
+  `the_declared_scene_format_version_is_the_tactical_extension`,
+  `the_fold_opens_and_closes_maneuver_and_wrong_way_intervals`,
+  `a_maneuver_overlay_names_its_state_tactic_edge_and_reason`,
+  `a_corridor_is_the_band_inset_by_the_body_and_its_clearance`,
+  `a_target_offset_and_predicted_gap_project_from_the_route_sample`,
+  `a_wrong_way_overlay_names_its_open_interval_and_live_rule`,
+  `a_body_with_no_route_state_carries_no_tactical_overlay`,
+  `the_inspector_summaries_name_every_identifier`, and
+  `every_tactical_overlay_flag_toggles_independently`.

@@ -13,11 +13,13 @@ use hekate_model::{
     PathId, PortalId, RegionId, RuleId, RuleKind, SignalId,
 };
 use hekate_sim::{
-    AgentMode, AgentSample, BodySegmentSample, ComplianceDecision, RegionKey, VehicleProfile,
+    AgentMode, AgentSample, BodySegmentSample, ComplianceDecision, RegionKey, RouteStateSample,
+    VehicleProfile,
 };
 
 use crate::clock::Speed;
 use crate::safety::SafetyOverlay;
+use crate::tactical::TacticalOverlay;
 
 /// Declared shape version of the shared scene projection.
 ///
@@ -27,12 +29,16 @@ use crate::safety::SafetyOverlay;
 /// Version 2 adds the compiled facility list, each facility carrying the
 /// traversable region it occupies and its reference path, and the capsule body
 /// shape of the narrow wheeled modes.
+/// Version 3 adds the versioned route-relative tactical state to each body and
+/// the five Increment 2 overlay primitives it feeds — the usable corridor, the
+/// target offset, the predicted gap, the maneuver state, and the wrong-way rule
+/// state — together with the inspector text that names them.
 ///
 /// Nothing serializes a scene, so no artifact records this version; it is the
 /// declared name of the projection's shape, and a change to that shape bumps it
 /// and regenerates the scene golden under a declared explanation
 /// (`docs/body-kind-segment-output.md`).
-pub const SCENE_FORMAT_VERSION: u32 = 2;
+pub const SCENE_FORMAT_VERSION: u32 = 3;
 
 /// Default rendered body length when a snapshot carries no motion detail.
 pub const DEFAULT_BODY_LENGTH_M: f64 = 4.5;
@@ -822,6 +828,10 @@ pub struct SceneBody {
     /// signal-controlled. Carries only the small recorded reason, not the
     /// controller's internal state.
     pub decision: Option<ComplianceDecision>,
+    /// Versioned route-relative tactical state, present for a steering body
+    /// whose route lies on a compiled facility. `None` for a Phase 1 or
+    /// Increment 1 body, exactly as the sample itself is absent there.
+    pub route_state: Option<RouteStateSample>,
 }
 
 impl SceneBody {
@@ -848,6 +858,7 @@ impl SceneBody {
             route: motion.and_then(|motion| motion.route),
             profile: motion.and_then(|motion| motion.profile),
             decision: motion.and_then(|motion| motion.decision),
+            route_state: motion.and_then(|motion| motion.route_state),
         }
     }
 
@@ -1021,6 +1032,10 @@ pub fn decision_summary(decision: Option<ComplianceDecision>) -> String {
 }
 
 /// A debug overlay a backend may draw.
+///
+/// The declaration order is the draw order every backend follows: scenario
+/// geometry first, then the per-agent vectors, the safety set, and the
+/// route-relative tactical set in the order its primitives are declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     /// Scenario geometry: paths and portals.
@@ -1029,6 +1044,16 @@ pub enum Overlay {
     Vectors,
     /// Safety markers, body emphasis, and region occupancy.
     Safety,
+    /// Each body's usable corridor inside the facility band it follows.
+    Corridor,
+    /// Each body's fixed target offset.
+    TargetOffset,
+    /// Each body's predicted minimum clearance.
+    PredictedGap,
+    /// Each body's maneuver lifecycle state.
+    Maneuver,
+    /// Each body's wrong-way rule state.
+    WrongWay,
 }
 
 /// Which optional debug overlays are enabled.
@@ -1041,6 +1066,16 @@ pub struct Overlays {
     /// Draw the frame's safety overlays: event markers, emphasized bodies, and
     /// occupied regions.
     pub safety: bool,
+    /// Draw each body's usable corridor.
+    pub corridor: bool,
+    /// Draw each body's fixed target offset.
+    pub target_offset: bool,
+    /// Draw each body's predicted minimum clearance.
+    pub predicted_gap: bool,
+    /// Draw each body's maneuver state.
+    pub maneuver: bool,
+    /// Draw each body's wrong-way rule state.
+    pub wrong_way: bool,
 }
 
 impl Default for Overlays {
@@ -1051,6 +1086,15 @@ impl Default for Overlays {
             // Safety markers last a couple of simulated seconds, so a run has
             // them on by default: seeing a conflict is the point of watching.
             safety: true,
+            // The route-relative tactical overlays are the point of an
+            // Increment 2 run the same way, and each draws nothing on a body
+            // that carries no route state and no open interval, so a Phase 1 or
+            // Increment 1 run is unchanged by having them on.
+            corridor: true,
+            target_offset: true,
+            predicted_gap: true,
+            maneuver: true,
+            wrong_way: true,
         }
     }
 }
@@ -1062,6 +1106,11 @@ impl Overlays {
             Overlay::Geometry => self.geometry = !self.geometry,
             Overlay::Vectors => self.vectors = !self.vectors,
             Overlay::Safety => self.safety = !self.safety,
+            Overlay::Corridor => self.corridor = !self.corridor,
+            Overlay::TargetOffset => self.target_offset = !self.target_offset,
+            Overlay::PredictedGap => self.predicted_gap = !self.predicted_gap,
+            Overlay::Maneuver => self.maneuver = !self.maneuver,
+            Overlay::WrongWay => self.wrong_way = !self.wrong_way,
         }
     }
 }
@@ -1101,6 +1150,11 @@ pub struct SceneFrame {
     /// Safety records and folded states projected for this frame; every safety
     /// overlay is derived from this frame alone.
     pub safety: SafetyOverlay,
+    /// Route-relative tactical intervals folded for this frame; the corridor,
+    /// target offset, and predicted gap primitives are read from each body's
+    /// route state, and the maneuver and wrong-way primitives from these
+    /// intervals, so every tactical overlay is derived from this frame alone.
+    pub tactical: TacticalOverlay,
 }
 
 impl SceneFrame {
@@ -1551,8 +1605,8 @@ mod tests {
     /// produces; a change to the shape bumps it under a declared explanation
     /// (`docs/body-kind-segment-output.md`).
     #[test]
-    fn the_declared_scene_format_version_is_the_facility_extension() {
-        assert_eq!(SCENE_FORMAT_VERSION, 2);
+    fn the_declared_scene_format_version_is_the_tactical_extension() {
+        assert_eq!(SCENE_FORMAT_VERSION, 3);
     }
 
     /// A version-2 facility projects as the traversable region it occupies plus

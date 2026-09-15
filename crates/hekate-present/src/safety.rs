@@ -593,7 +593,7 @@ fn insert_ascending(values: &mut Vec<usize>, value: usize) {
 }
 
 /// Insert `value` into a list ordered by `compare` when it is absent.
-fn insert_ordered<T>(
+pub(crate) fn insert_ordered<T>(
     values: &mut Vec<T>,
     value: T,
     compare: impl Fn(&T, &T) -> std::cmp::Ordering,
@@ -725,6 +725,7 @@ mod tests {
     use hekate_sim::{AgentId, AgentMode, DespawnReason, ViolationKind};
 
     use crate::scene::{FrameStatus, Overlays, SceneBody, SceneGeometry, Viewport};
+    use crate::tactical::TacticalOverlay;
 
     const LIFETIME_TICKS: u64 = 4;
 
@@ -768,6 +769,7 @@ mod tests {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         }
     }
 
@@ -792,6 +794,7 @@ mod tests {
             bodies,
             overlays: Overlays::default(),
             safety,
+            tactical: TacticalOverlay::default(),
         }
     }
 

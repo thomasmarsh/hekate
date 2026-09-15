@@ -109,6 +109,7 @@ SceneFrame {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         },
         SceneBody {
             id: 1,
@@ -136,6 +137,7 @@ SceneFrame {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         },
         SceneBody {
             id: 2,
@@ -163,6 +165,7 @@ SceneFrame {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         },
         SceneBody {
             id: 3,
@@ -190,6 +193,7 @@ SceneFrame {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         },
         SceneBody {
             id: 4,
@@ -217,6 +221,7 @@ SceneFrame {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         },
         SceneBody {
             id: 5,
@@ -244,12 +249,18 @@ SceneFrame {
             route: None,
             profile: None,
             decision: None,
+            route_state: None,
         },
     ],
     overlays: Overlays {
         geometry: true,
         vectors: false,
         safety: true,
+        corridor: true,
+        target_offset: true,
+        predicted_gap: true,
+        maneuver: true,
+        wrong_way: true,
     },
     safety: SafetyOverlay {
         events: [],
@@ -257,5 +268,9 @@ SceneFrame {
         occupied: [],
         queued: [],
         controlling: [],
+    },
+    tactical: TacticalOverlay {
+        maneuvers: [],
+        wrong_way: [],
     },
 }

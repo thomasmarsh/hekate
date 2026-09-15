@@ -4,10 +4,11 @@
 //! owns everything between it and a renderer: reading a scenario from disk, the
 //! presentation clock, the viewport, selection and overlays, the fold of the
 //! typed safety-event stream into markers, body emphasis, and region occupancy,
-//! and the pure projection of kernel snapshots into a backend-agnostic
-//! [`SceneFrame`]. A renderer implements [`RendererBackend`] and consumes that
-//! frame; it never reads or mutates the simulation directly, so no backend can
-//! change which ticks the kernel visits.
+//! the fold of the maneuver and opposing-traversal edge records into the
+//! route-relative tactical intervals, and the pure projection of kernel
+//! snapshots into a backend-agnostic [`SceneFrame`]. A renderer implements
+//! [`RendererBackend`] and consumes that frame; it never reads or mutates the
+//! simulation directly, so no backend can change which ticks the kernel visits.
 //!
 //! The one-way dependency direction is enforced in CI by
 //! `scripts/check-dependency-direction.sh`: this crate must not depend on Bevy,
@@ -21,6 +22,7 @@ mod controller;
 mod safety;
 mod scenario;
 mod scene;
+mod tactical;
 
 pub use backend::{BackendCapabilities, BackendResult, RendererBackend};
 pub use clock::{MAX_TICKS_PER_FRAME, PresentationClock, Speed};
@@ -37,4 +39,9 @@ pub use scene::{
     SceneCrossing, SceneFacility, SceneFacilityReference, SceneFrame, SceneGeometry, SceneMovement,
     ScenePath, ScenePortal, SceneRegion, SceneRule, SceneSignal, SceneSignalHead, Viewport,
     decision_summary, intent_summary, profile_summary,
+};
+pub use tactical::{
+    CorridorOverlay, ManeuverInterval, ManeuverOverlay, PredictedGapOverlay, TacticalOverlay,
+    TargetOffsetOverlay, WrongWayInterval, WrongWayOverlay, corridor_summary, maneuver_summary,
+    predicted_gap_summary, target_offset_summary, wrong_way_summary,
 };

@@ -14,6 +14,7 @@ use crate::clock::PresentationClock;
 use crate::command::{RestartMode, ViewCommand};
 use crate::safety::{MARKER_LIFETIME_SECONDS, SafetyOverlay};
 use crate::scene::{FrameStatus, Overlays, SceneBody, SceneFrame, SceneGeometry, Viewport};
+use crate::tactical::TacticalOverlay;
 
 /// Outcome of applying a [`ViewCommand`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,7 @@ pub struct PresentationController {
     selection: Option<usize>,
     overlays: Overlays,
     safety: SafetyOverlay,
+    tactical: TacticalOverlay,
 }
 
 impl PresentationController {
@@ -46,6 +48,7 @@ impl PresentationController {
             selection: None,
             overlays: Overlays::default(),
             safety: SafetyOverlay::new(marker_lifetime_ticks(step_secs)),
+            tactical: TacticalOverlay::default(),
         }
     }
 
@@ -89,14 +92,22 @@ impl PresentationController {
         &self.safety
     }
 
-    /// Fold one completed step's records into the projected safety overlays.
+    /// The folded route-relative tactical intervals the next frame projects.
+    pub const fn tactical(&self) -> &TacticalOverlay {
+        &self.tactical
+    }
+
+    /// Fold one completed step's records into the projected safety and
+    /// tactical overlays.
     ///
     /// Call once per kernel step, with the tick that step produced, before
     /// projecting the frame for it. The fold is deterministic and reads only
     /// the records it is given, so the same run always projects the same
-    /// markers, emphasis, and occupancy.
+    /// markers, emphasis, occupancy, maneuver intervals, and wrong-way
+    /// intervals.
     pub fn observe_events(&mut self, tick: u64, events: &[Event]) {
         self.safety.observe(tick, events);
+        self.tactical.observe(tick, events);
     }
 
     /// Consume frame time and return the whole steps to take now.
@@ -107,8 +118,8 @@ impl PresentationController {
     /// Rebuild the clock after a restart, preserving speed and pause state.
     ///
     /// The event stream belongs to the run, so a restart also starts the
-    /// safety window and its folded states over; the marker lifetime follows
-    /// the new step.
+    /// safety window and its folded states, and the tactical intervals, over;
+    /// the marker lifetime follows the new step.
     pub fn reset_clock(&mut self, step_secs: f64) {
         let speed = self.clock.speed();
         let paused = self.clock.is_paused();
@@ -116,6 +127,7 @@ impl PresentationController {
         self.clock.set_speed(speed);
         self.clock.set_paused(paused);
         self.safety = SafetyOverlay::new(marker_lifetime_ticks(step_secs));
+        self.tactical = TacticalOverlay::default();
     }
 
     /// Clear the current selection.
@@ -147,8 +159,10 @@ impl PresentationController {
     /// interpolating bodies by the clock's current sub-step progress.
     ///
     /// The safety overlays come from the records the host folded in with
-    /// [`Self::observe_events`], windowed to this frame's tick, so the frame
-    /// alone describes everything a backend draws.
+    /// [`Self::observe_events`], windowed to this frame's tick; the tactical
+    /// intervals come from the same fold, and the corridor, target offset, and
+    /// predicted gap primitives from each body's own route state. The frame
+    /// alone therefore describes everything a backend draws.
     pub fn project(&self, previous: &Snapshot, current: &Snapshot) -> SceneFrame {
         let alpha = self.clock.alpha();
         let bodies: Vec<SceneBody> = current
@@ -172,6 +186,7 @@ impl PresentationController {
             bodies,
             overlays: self.overlays,
             safety: self.safety.windowed_at(current.time().tick()),
+            tactical: self.tactical.clone(),
         }
     }
 }

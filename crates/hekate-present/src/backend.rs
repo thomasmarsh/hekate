@@ -76,6 +76,7 @@ mod tests {
     use crate::clock::Speed;
     use crate::safety::SafetyOverlay;
     use crate::scene::{FrameStatus, Overlays, SceneGeometry, Viewport};
+    use crate::tactical::TacticalOverlay;
 
     /// A minimal backend that records what it was asked to draw.
     #[derive(Default)]
@@ -135,6 +136,7 @@ mod tests {
             bodies: Vec::new(),
             overlays: Overlays::default(),
             safety: SafetyOverlay::default(),
+            tactical: TacticalOverlay::default(),
         }
     }
 
