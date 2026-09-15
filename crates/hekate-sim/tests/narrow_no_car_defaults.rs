@@ -283,17 +283,27 @@ fn narrow_fixtures_realize_their_compiled_template_with_no_passenger_car_default
     }
 }
 
-/// The falsification probe: construct a narrow fixture facility whose mode
-/// cannot take the narrow path, so the kernel samples the Phase-1 passenger-car
-/// profile for its agent, and prove the check reports it.
+/// The falsification probe: construct a narrow fixture facility whose agents
+/// carry the Phase-1 passenger-car body instead of their own mode's, and prove
+/// the check reports it.
 ///
 /// The probe mode is a box (`AgentFamily::WheeledBox`), like the Increment 0
-/// passenger car, so `Simulation::agent_narrow_profile` is `None` and the
-/// agent's body and limits come from `scenario.profiles()` — the Phase-1
-/// passenger-car constants. Its authored template numbers differ from those
-/// constants, so any realized value equal to the car profile is a substitution
-/// the check must catch. This is the failure TAS-070 constructs against the
-/// no-mode-branch guard, expressed behaviorally.
+/// passenger car, so `Simulation::agent_narrow_profile` is `None` and no narrow
+/// template drove the agent's body. Its authored template numbers differ from
+/// the car profile's, so any realized value equal to the car profile is a
+/// substitution the check must catch. This is the failure TAS-070 constructs
+/// against the no-mode-branch guard, expressed behaviorally.
+///
+/// The substitution is constructed through the population spawn, which is the
+/// version-1 placement the kernel still reads `scenario.profiles()` for: a
+/// population demand is placed by `Simulation::new` with the body
+/// `CompiledScenario`'s `v2_to_v1_view` materializes from the `passenger_car`
+/// template, whatever the facility's own mode authored. A rate demand can no
+/// longer construct it — since Increment 3 every valid movement demand's mode is
+/// `single_body_wheeled`, so its agent samples its own compiled template — so
+/// the probe places agents whose realized body is the `passenger_car` body
+/// (4.5 m by 1.8 m) on a facility whose only permitted mode authors 1.8 m by
+/// 0.7 m.
 const PROBE: &str = r#"{
   schema_version: 2,
   id: 'narrow_no_car_defaults_probe',
@@ -320,6 +330,23 @@ const PROBE: &str = r#"{
   ],
   mode_templates: [
     {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+        width_m: { min: 1.8, max: 1.8 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 9.0, max: 9.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
       id: 'narrow_probe',
       body: { kind: 'box', length_m: { min: 1.8, max: 1.8 },
         width_m: { min: 0.7, max: 0.7 } },
@@ -339,12 +366,12 @@ const PROBE: &str = r#"{
   ],
   permissions: [],
   demand: [
-    { id: 'inflow', mode: 'narrow_probe',
-      spawn: { rate: {
-        portal: 'entry',
-        rate_per_hour: 240.0,
-        interval_s: { start_s: 0.0, end_s: null },
-        choice: { movements: [ { movement: 'through', weight: 1.0 } ] },
+    { id: 'skeleton', mode: 'narrow_probe',
+      spawn: { population: {
+        path: 'guide',
+        count: 3,
+        speed_mps: 5.0,
+        spacing_m: 30.0,
       } } },
   ],
 }"#;
@@ -360,6 +387,7 @@ fn the_no_car_defaults_check_flags_a_narrow_facility_whose_agent_uses_the_car_pr
         .find(|template| template.id() == "narrow_probe")
         .expect("the probe authors its mode");
     assert_ne!(template.family(), Some(AgentFamily::WheeledCapsule));
+    let (probe_length_m, probe_width_m) = template_body(template);
 
     let mut sim =
         Simulation::new(scenario.clone(), RunConfig::new(SEED)).expect("the probe builds");
@@ -369,13 +397,13 @@ fn the_no_car_defaults_check_flags_a_narrow_facility_whose_agent_uses_the_car_pr
     let snapshot = sim.snapshot(SnapshotDetail::Full);
     assert!(
         !snapshot.agents().is_empty(),
-        "the probe admitted no agent, so it constructs no failure"
+        "the probe placed no agent, so it constructs no failure"
     );
 
-    // The realized values are the Phase-1 passenger-car constants: the kernel
-    // sampled `scenario.profiles()` because the probe's mode is not a narrow
-    // capsule. The fixture authors no `profiles`, so the compiled profile is the
-    // Phase-1 default band.
+    // The realized values are the passenger-car profile's: the population spawn
+    // is the version-1 placement that reads `scenario.profiles()`, which the
+    // probe's `passenger_car` template authors at 4.5 m by 1.8 m, inside the
+    // Phase-1 passenger-car band.
     let car = sim.scenario().profiles();
     assert!(
         car.length_m().min() >= 4.0 && car.length_m().max() <= 5.2,
@@ -399,7 +427,7 @@ fn the_no_car_defaults_check_flags_a_narrow_facility_whose_agent_uses_the_car_pr
         "the reported violation must name the missing narrow template:\n{joined}"
     );
     // Sanity: every realized agent's body really is the car profile band, not
-    // the probe's authored 1.8 m template, so the probe constructs the exact
+    // the facility's authored template, so the probe constructs the exact
     // failure rather than an unrelated one.
     for sample in snapshot.agents() {
         let motion = sample.motion.as_ref().expect("full detail");
@@ -410,8 +438,13 @@ fn the_no_car_defaults_check_flags_a_narrow_facility_whose_agent_uses_the_car_pr
             motion.body_length_m
         );
         assert!(
-            (motion.body_length_m - 1.8).abs() > TOL,
+            (motion.body_length_m - probe_length_m).abs() > TOL,
             "probe agent {} realized the authored template body, not the car profile",
+            sample.id.get()
+        );
+        assert!(
+            (motion.body_width_m - probe_width_m).abs() > TOL,
+            "probe agent {} realized the authored template width, not the car profile",
             sample.id.get()
         );
         assert!(sim.agent_narrow_profile(sample.id).is_none());

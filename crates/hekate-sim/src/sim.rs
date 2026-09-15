@@ -65,8 +65,8 @@ use crate::prediction::{
     predict_crossing_corridor, predict_maneuver_corridor,
 };
 use crate::profile::{
-    PedestrianProfile, VehicleProfile, WheeledLateralLimits, sample_pedestrian_profile,
-    sample_profile, sample_wheeled_lateral_limits,
+    PedestrianProfile, VehicleProfile, WheeledLateralLimits, sample_mode_template_profile,
+    sample_pedestrian_profile, sample_profile, sample_wheeled_lateral_limits,
 };
 use crate::query;
 use crate::rng::{
@@ -3417,9 +3417,9 @@ impl Simulation {
     ///
     /// `mode` is the mode template the source produces, or `None` for a
     /// version-1 source. A capsule template spawns the narrow wheeled family
-    /// (a narrow profile and a capsule body); every other mode, and a version-1
-    /// source, keeps the passenger-car path. The branch is on the compiled
-    /// family, never on a template id.
+    /// (a narrow profile and a capsule body) and a box template spawns its own
+    /// authored body and dynamics; a version-1 source keeps the passenger-car
+    /// path. The branch is on the compiled family, never on a template id.
     fn try_admit(&mut self, movement_id: MovementId, mode: Option<ModeTemplateId>) -> bool {
         let Some((path_id, entry_distance, direction)) =
             self.scenario.movement(movement_id).map(|movement| {
@@ -3440,15 +3440,27 @@ impl Simulation {
         let mut profile_rng = derive_stream(self.config.seed(), STREAM_PROFILE, agent_id.get());
         let mut compliance_rng =
             derive_stream(self.config.seed(), STREAM_COMPLIANCE, agent_id.get());
-        let narrow_profile = match mode.and_then(|id| self.scenario.mode_template(id)) {
+        let mode_template = mode.and_then(|id| self.scenario.mode_template(id));
+        let narrow_profile = match mode_template {
             Some(template) if template.family() == Some(AgentFamily::WheeledCapsule) => Some(
                 sample_narrow_profile(template, &mut profile_rng, &mut compliance_rng),
             ),
             _ => None,
         };
-        let profile = match narrow_profile {
-            Some(narrow) => narrow.vehicle_profile(),
-            None => sample_profile(
+        let profile = match (narrow_profile, mode_template) {
+            // A capsule projects its narrow profile onto the shared longitudinal
+            // profile, so the shared stages stay one code path.
+            (Some(narrow), _) => narrow.vehicle_profile(),
+            // A wheeled box samples its own authored body and dynamics. The
+            // template the version-1 view is derived from is one such box, and
+            // this draws exactly the values the version-1 view would, so its
+            // spawn is unchanged.
+            (None, Some(template)) if template.family() == Some(AgentFamily::WheeledBox) => {
+                sample_mode_template_profile(template, &mut profile_rng, &mut compliance_rng)
+            }
+            // A version-1 source carries no mode template, so it samples the
+            // version-1 passenger-car profile view.
+            (None, _) => sample_profile(
                 self.scenario.profiles(),
                 &mut profile_rng,
                 &mut compliance_rng,
@@ -3461,8 +3473,7 @@ impl Simulation {
         // version-1 source and a box with no `lateral` object carry none.
         let lateral = match narrow_profile {
             Some(narrow) => narrow.lateral_limits(),
-            None => mode
-                .and_then(|id| self.scenario.mode_template(id))
+            None => mode_template
                 .and_then(|template| sample_wheeled_lateral_limits(template, &mut profile_rng)),
         };
         if !self.entry_clear(path_id, entry_distance, profile.length_m) {

@@ -97,8 +97,8 @@ articulated wheeled, `P` pedestrian.
 | `pedestrian` | P | `CC-PED` | `pedestrian_crossing_v1` (existing) | Phase 1 |
 | `bicycle` | N | `CC-NARROW` | `narrow_isolated_straight_v2`, `narrow_isolated_curve_v2` (checked in) | Increment 1 |
 | `scooter` | N | `CC-NARROW` | `narrow_isolated_straight_v2`, `narrow_isolated_curve_v2` (checked in) | Increment 1 |
-| `bus` | M | `CC-HEAVY`, `CC-TRANSIT` | `heavy_isolated_v2`, `transit_low_demand_v2` (planned) | Increments 3, 4 |
-| `rigid_truck` | M | `CC-HEAVY` | `heavy_isolated_v2` (planned) | Increment 3 |
+| `bus` | M | `CC-HEAVY`, `CC-TRANSIT` | `heavy_isolated_v2` (checked in), `transit_low_demand_v2` (planned) | Increments 3, 4 |
+| `rigid_truck` | M | `CC-HEAVY` | `heavy_isolated_v2` (checked in) | Increment 3 |
 | `tractor_semitrailer` | A | `CC-ARTIC` | `articulated_reference_v2` (planned) | Increment 3 |
 
 All seven modes have disposition **supported** for their independent cell. No
@@ -215,10 +215,10 @@ baseline it derives from. None is a golden-file or trace-hash comparison.
 
 ### 7.2 Checked-in fixtures
 
-The Increment 1 narrow-mode fixtures and the Increment 2 `CC-OVERTAKE` and
-`CC-OPPOSE` fixtures. Each path is checked in and loads through the CLI; later
-increments revise this section the same way, moving a planned path here when it
-checks the path in.
+The Increment 1 narrow-mode fixtures, the Increment 2 `CC-OVERTAKE` and
+`CC-OPPOSE` fixtures, and the Increment 3 heavy-mode isolated straight. Each
+path is checked in and loads through the CLI; later increments revise this
+section the same way, moving a planned path here when it checks the path in.
 
 | Id | Path | Covers |
 | --- | --- | --- |
@@ -232,6 +232,7 @@ checks the path in.
 | `motor_passing_narrow_v2` | `scenarios/phase2/inc2/motor_passing_narrow_v2.json5` | motor-over-narrow `CC-OVERTAKE`: a passenger car overtakes a slower bicycle |
 | `motor_lane_change_v2` | `scenarios/phase2/inc2/motor_lane_change_v2.json5` | motor-over-motor `CC-OVERTAKE`: configured change of lane around a slower leader |
 | `narrow_wrong_way_v2` | `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` | contextual wrong-way `CC-OPPOSE`: a permitted opposing choice, a prohibited-but-connected one, a disconnected refusal, and an occupied opposing corridor |
+| `heavy_isolated_v2` | `scenarios/phase2/inc3/heavy_isolated_v2.json5` | heavy `CC-HEAVY` independent cell, `bus` and `rigid_truck` alongside a passenger car: free-flow straight on each mode's own body and envelope |
 
 ### 7.3 Planned fixtures
 
@@ -240,7 +241,6 @@ convention fixes one file per supported `(pair, family)` coordinate.
 
 | Id / pattern | Path | Owned by |
 | --- | --- | --- |
-| `heavy_isolated_v2` | `scenarios/phase2/inc3/heavy_isolated_v2.json5` | Increment 3 |
 | `heavy_following_v2` | `scenarios/phase2/inc3/heavy_following_v2.json5` | Increment 3 |
 | `articulated_reference_v2` | `scenarios/phase2/inc3/articulated_reference_v2.json5` | Increment 3 |
 | `articulated_conflict_v2` | `scenarios/phase2/inc3/articulated_conflict_v2.json5` | Increment 3 |

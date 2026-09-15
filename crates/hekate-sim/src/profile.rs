@@ -8,7 +8,10 @@
 //! stream and its crossing-compliance propensity from the `compliance` stream,
 //! both under its own stable agent id.
 
-use hekate_model::{CompiledModeTemplate, CompiledPedestrianProfile, CompiledProfile};
+use hekate_model::{
+    AgentBody, CompiledModeTemplate, CompiledPedestrianProfile, CompiledProfile, ProfileRange,
+    ProfileRangeSource, ProfileSource,
+};
 use rand_chacha::ChaCha20Rng;
 
 use crate::rng::uniform01;
@@ -146,6 +149,58 @@ pub(crate) fn sample_profile(
     }
 }
 
+/// Draw one wheeled box mode's body and dynamics from its own compiled
+/// template, in [`sample_profile`]'s draw order and from the same two streams.
+///
+/// A wheeled box mode authors its own body and longitudinal envelope, so an
+/// admitted bus or rigid truck samples its own dimensions, desired speed,
+/// following gap, acceleration, and braking rather than the passenger car's.
+/// The six `profile_rng` draws are exactly [`sample_profile`]'s — desired speed,
+/// length, width, time gap, maximum acceleration, comfortable braking — and
+/// compliance comes from `compliance_rng`, so the template the version-1 view is
+/// derived from (`passenger_car`, see `CompiledScenario`'s `v2_to_v1_view`)
+/// samples the values `sample_profile` gives it, while every other wheeled box
+/// samples its own authored values.
+///
+/// A validated wheeled box declares all six parameters and carries a box body,
+/// so the fallbacks below are unreachable for a compiled scenario. Each is a
+/// value the version-1 view uses rather than a new default: the zero range it
+/// substitutes for a body it cannot read a box from, and the default envelope it
+/// compiles when a scenario declares no `passenger_car` template. A template
+/// that somehow lacks one samples its version-1 value instead of aborting an
+/// otherwise valid run.
+pub(crate) fn sample_mode_template_profile(
+    template: &CompiledModeTemplate,
+    profile_rng: &mut ChaCha20Rng,
+    compliance_rng: &mut ChaCha20Rng,
+) -> VehicleProfile {
+    let profile = template.profile();
+    let v1_view = ProfileSource::default();
+    let v1_range = |range: ProfileRangeSource| ProfileRange::new(range.min, range.max);
+    let (length_m, width_m) = match template.body() {
+        AgentBody::Box { length_m, width_m } => (*length_m, *width_m),
+        _ => (ProfileRange::new(0.0, 0.0), ProfileRange::new(0.0, 0.0)),
+    };
+    VehicleProfile {
+        desired_speed_mps: profile.desired_speed_mps().sample(uniform01(profile_rng)),
+        length_m: length_m.sample(uniform01(profile_rng)),
+        width_m: width_m.sample(uniform01(profile_rng)),
+        time_gap_s: profile
+            .time_gap_s()
+            .unwrap_or_else(|| v1_range(v1_view.time_gap_s))
+            .sample(uniform01(profile_rng)),
+        max_accel_mps2: profile
+            .max_accel_mps2()
+            .unwrap_or_else(|| v1_range(v1_view.max_accel_mps2))
+            .sample(uniform01(profile_rng)),
+        comfortable_brake_mps2: profile
+            .comfortable_brake_mps2()
+            .unwrap_or_else(|| v1_range(v1_view.comfortable_brake_mps2))
+            .sample(uniform01(profile_rng)),
+        compliance: profile.compliance().sample(uniform01(compliance_rng)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +253,106 @@ mod tests {
         assert!((profile.comfortable_brake_mps2 - 3.0).abs() < 1e-9);
         // A profile that omits `compliance` defaults to fully compliant.
         assert!((profile.compliance - 1.0).abs() < 1e-9);
+    }
+
+    /// A version-2 scenario whose `passenger_car` template authors ranges wider
+    /// than a point.
+    ///
+    /// A point range samples its own bound whatever the draw, so a fixture whose
+    /// bodies and dynamics are constants cannot observe a draw-order or stream
+    /// change. These ranges make [`sample_mode_template_profile`]'s draw order
+    /// observable, which is the property the version-1 view's derivation needs.
+    const VARIED_CAR: &str = r#"{
+      schema_version: 2, id: 'varied_car',
+      coordinate_system: { x: 'east_m', y: 'north_m' },
+      paths: [], portals: [],
+      mode_templates: [
+        {
+          id: 'passenger_car',
+          body: { kind: 'box', length_m: { min: 4.0, max: 5.0 },
+            width_m: { min: 1.7, max: 2.0 } },
+          motion: 'single_body_wheeled',
+          tactics: [ 'follow', 'stop', 'yield' ],
+          access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+            speed_policy: { limit_mps: null } },
+          occupancy: 'operator_only',
+          profiles: {
+            speed_mps: { min: 9.0, max: 15.0 },
+            max_accel_mps2: { min: 1.2, max: 2.5 },
+            comfortable_brake_mps2: { min: 2.0, max: 3.5 },
+            time_gap_s: { min: 1.0, max: 2.0 },
+            compliance: { min: 0.5, max: 1.0 },
+          },
+        },
+      ],
+    }"#;
+
+    /// A wheeled box sampled from its own template draws exactly what the
+    /// version-1 view draws for the template the view is derived from — the
+    /// same values, from the same two streams, in the same order — so routing
+    /// the `passenger_car` template through it cannot shift the existing
+    /// goldens.
+    #[test]
+    fn a_template_sampled_passenger_car_matches_the_version_1_view() {
+        let source = parse_scenario_source_v2(VARIED_CAR).expect("the document parses");
+        let scenario = CompiledScenario::compile_v2(source).expect("the document compiles");
+        let template = scenario
+            .mode_templates()
+            .iter()
+            .find(|template| template.id() == "passenger_car")
+            .expect("the document authors the car");
+
+        let from_view = sample_profile(
+            scenario.profiles(),
+            &mut derive_stream(5, STREAM_PROFILE, 2),
+            &mut derive_stream(5, STREAM_COMPLIANCE, 2),
+        );
+        let from_template = sample_mode_template_profile(
+            template,
+            &mut derive_stream(5, STREAM_PROFILE, 2),
+            &mut derive_stream(5, STREAM_COMPLIANCE, 2),
+        );
+        assert_eq!(from_view, from_template);
+
+        // The ranges are wider than a point, so the equality is the draw order
+        // and the streams rather than a constant both sides return: every
+        // sampled value lies inside its authored range, and at least one is
+        // strictly inside it.
+        let profile = template.profile();
+        let ranges = [
+            (from_template.desired_speed_mps, profile.desired_speed_mps()),
+            (from_template.length_m, scenario.profiles().length_m()),
+            (from_template.width_m, scenario.profiles().width_m()),
+            (
+                from_template.time_gap_s,
+                profile.time_gap_s().expect("a wheeled box has a time gap"),
+            ),
+            (
+                from_template.max_accel_mps2,
+                profile
+                    .max_accel_mps2()
+                    .expect("a wheeled box has an acceleration"),
+            ),
+            (
+                from_template.comfortable_brake_mps2,
+                profile
+                    .comfortable_brake_mps2()
+                    .expect("a wheeled box has a braking bound"),
+            ),
+        ];
+        assert!(
+            ranges.iter().all(|(value, range)| *value >= range.min()
+                && *value <= range.max()
+                && (range.max() - range.min()) > 1e-9),
+            "every sampled value must lie inside an authored range wider than a point: {ranges:?}"
+        );
+        assert!(
+            ranges
+                .iter()
+                .any(|(value, range)| *value > range.min() + 1e-9 && *value < range.max() - 1e-9),
+            "at least one sampled value must be strictly inside its range, so the draws, not the \
+             point bounds, produced this profile: {ranges:?}"
+        );
     }
 
     /// A lateral box template's three authored lateral parameters sample into

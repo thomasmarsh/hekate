@@ -519,11 +519,13 @@
       "motor_lane_change_v2": "scenarios/phase2/inc2/motor_lane_change_v2.json5",
       "narrow_wrong_way_v2": "scenarios/phase2/inc2/narrow_wrong_way_v2.json5"
     },
+    "checked_in_increment_3": {
+      "heavy_isolated_v2": "scenarios/phase2/inc3/heavy_isolated_v2.json5"
+    },
     "planned_patterns": {
       "pair": "scenarios/phase2/inc5/pair_<a>__<b>__<family>_v2.json5",
       "shared_space": "scenarios/phase2/inc5/shared_space_<a>__<b>_v2.json5",
       "group": "scenarios/phase2/inc5/group_<name>_v2.json5",
-      "heavy_isolated": "scenarios/phase2/inc3/heavy_isolated_v2.json5",
       "heavy_following": "scenarios/phase2/inc3/heavy_following_v2.json5",
       "articulated_reference": "scenarios/phase2/inc3/articulated_reference_v2.json5",
       "articulated_conflict": "scenarios/phase2/inc3/articulated_conflict_v2.json5",

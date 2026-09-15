@@ -1,0 +1,138 @@
+// Increment 3: the heavy-mode isolated straight fixture.
+//
+// `docs/benchmark-matrix.md` fixes `heavy_isolated_v2` as `CC-HEAVY`'s declared
+// reference, an analytic straight over which each heavy mode drives on its own
+// authored body and longitudinal envelope. One straight 600 m guide path
+// carries three modes in a single direction — a passenger car alongside the two
+// heavy modes, so the fixture proves per-template dispatch by contrast rather
+// than by absence:
+//
+// | mode | body length | body width | free speed | max accel | comfortable brake | time gap |
+// |---|---|---|---|---|---|---|
+// | `passenger_car` | 4.5 m | 1.8 m | 12.0 m/s | 1.5 m/s^2 | 2.5 m/s^2 | 1.0 s |
+// | `bus` | 12.0 m | 2.55 m | 9.0 m/s | 0.9 m/s^2 | 1.8 m/s^2 | 1.6 s |
+// | `rigid_truck` | 9.5 m | 2.5 m | 8.0 m/s | 0.8 m/s^2 | 1.6 m/s^2 | 1.8 s |
+//
+// Every body dimension and every behavioural range is constant (`min == max`),
+// so a realized `body_length_m`/`body_width_m` identifies the template that
+// spawned the agent — distinct lengths and distinct widths per template — and
+// the sampled dynamics are the authored values with no sampling slack. The two
+// heavy modes are slower to accelerate, brake less hard, and follow at a larger
+// gap than the car, which is what makes "heavy envelope" observable in a run
+// rather than a claim about a table.
+//
+// The fixture authors no `lateral` object and no lateral tactic, so no mode
+// steers: this is the Increment 3 straight rung, and turning feasibility,
+// authored wheelbase, and articulation are out of its scope. The `bus` fixture
+// pair for `CC-TRANSIT` (`transit_low_demand_v2`) is Increment 4's.
+{
+  schema_version: 2,
+  id: 'heavy_isolated_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'heavy_guide', points: [ { x: 0.0, y: 0.0 }, { x: 600.0, y: 0.0 } ] },
+  ],
+  portals: [
+    { id: 'heavy_entry', path: 'heavy_guide', end: 'start', width_m: 4.0 },
+    { id: 'heavy_exit', path: 'heavy_guide', end: 'end', width_m: 4.0 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 620.0, y: -20.0 },
+      { x: 620.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'heavy_band', points: [
+      { x: 0.0, y: -2.0 }, { x: 600.0, y: -2.0 },
+      { x: 600.0, y: 2.0 }, { x: 0.0, y: 2.0 },
+    ] },
+  ],
+  facilities: [
+    { id: 'heavy_lane', region: 'heavy_band', reference_path: 'heavy_guide',
+      width_m: 4.0, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car', 'bus', 'rigid_truck' ] },
+      lateral_use: 'shared', speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'heavy_through', from: 'heavy_entry', to: 'heavy_exit',
+      path: 'heavy_guide', priority: 0, direction: 'forward' },
+  ],
+  mode_templates: [
+    {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+        width_m: { min: 1.8, max: 1.8 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 12.0, max: 12.0 },
+        max_accel_mps2: { min: 1.5, max: 1.5 },
+        comfortable_brake_mps2: { min: 2.5, max: 2.5 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'bus',
+      body: { kind: 'box', length_m: { min: 12.0, max: 12.0 },
+        width_m: { min: 2.55, max: 2.55 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 9.0, max: 9.0 },
+        max_accel_mps2: { min: 0.9, max: 0.9 },
+        comfortable_brake_mps2: { min: 1.8, max: 1.8 },
+        time_gap_s: { min: 1.6, max: 1.6 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'rigid_truck',
+      body: { kind: 'box', length_m: { min: 9.5, max: 9.5 },
+        width_m: { min: 2.5, max: 2.5 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 8.0, max: 8.0 },
+        max_accel_mps2: { min: 0.8, max: 0.8 },
+        comfortable_brake_mps2: { min: 1.6, max: 1.6 },
+        time_gap_s: { min: 1.8, max: 1.8 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  permissions: [],
+  demand: [
+    { id: 'car_inflow', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'heavy_entry',
+        rate_per_hour: 3600.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'heavy_through', weight: 1.0 } ] },
+      } } },
+    { id: 'bus_inflow', mode: 'bus',
+      spawn: { rate: {
+        portal: 'heavy_entry',
+        rate_per_hour: 1800.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'heavy_through', weight: 1.0 } ] },
+      } } },
+    { id: 'truck_inflow', mode: 'rigid_truck',
+      spawn: { rate: {
+        portal: 'heavy_entry',
+        rate_per_hour: 1200.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'heavy_through', weight: 1.0 } ] },
+      } } },
+  ],
+}

@@ -240,7 +240,11 @@ fn markdown_planned_paths() -> BTreeSet<String> {
 fn json_fixture_paths(json: &Value) -> BTreeSet<String> {
     let fixtures = &json["fixtures"];
     let mut paths: BTreeSet<String> = strings(&fixtures["existing"]).into_iter().collect();
-    for group in ["checked_in_increment_1", "checked_in_increment_2"] {
+    for group in [
+        "checked_in_increment_1",
+        "checked_in_increment_2",
+        "checked_in_increment_3",
+    ] {
         paths.extend(string_pairs(&fixtures[group]).into_values());
     }
     paths.extend(string_pairs(&fixtures["planned_patterns"]).into_values());
@@ -485,6 +489,7 @@ fn the_representations_agree_on_every_fixture_path() {
 
     let mut checked_in = string_pairs(&fixtures["checked_in_increment_1"]);
     checked_in.extend(string_pairs(&fixtures["checked_in_increment_2"]));
+    checked_in.extend(string_pairs(&fixtures["checked_in_increment_3"]));
     assert_eq!(
         checked_in,
         markdown_checked_in(),

@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T20:10:01Z
+updated: 2026-09-15T20:48:30Z
 summary: Increment 3 adds buses, rigid trucks, and a tractor-semitrailer with segment-level swept collision evidence.
-next: "[[tas-6p6tqvwkmq42ckx4cd9h1enx54-add-bus-and-rigid-truck-box-templates-with]]"
+next: "[[tas-09wqf0zqawvh42fegerkhtc3e1-add-authored-wheelbase-and-heavy-turning-limit]]"
 ---
 
 # Outcome
