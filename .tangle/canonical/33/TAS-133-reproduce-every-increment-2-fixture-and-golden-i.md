@@ -118,4 +118,6 @@ Verified: `cargo fmt --all --check` clean; `cargo clippy -p hekate-cli
 --test inc2_determinism` 5 passed, `--test inc2_trace` 4 passed, `--test
 seed_bank` 9 passed, `--test replay` 8 passed, `--test migration_regression` 4
 passed; `./scripts/check-dependency-direction.sh` reports `dependency direction
-OK`; `tangle check` reports `graph check: passed (194 nodes)`.
+OK`; `tangle check` reports `graph check: passed (194 nodes)` on the delivered
+commit and 195 after this session's feedback node under
+[[IDX-002-tangle-feedback]].
