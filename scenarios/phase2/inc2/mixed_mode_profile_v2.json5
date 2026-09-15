@@ -1,0 +1,247 @@
+// TAS-110: the Increment 2 representative mixed-mode performance profile.
+//
+// One two-way artery carries the three Increment 2 wheeled modes — passenger
+// cars, bicycles, and scooters — so every interaction family this increment adds
+// is exercised on one corridor at one declared density, through the kernel's own
+// machinery and nothing else. The artery is two adjacent one-way lanes, each its
+// own 400 m facility: `east_lane` runs east, `west_lane` runs west, and the two
+// meet at `y = 0`, so the counter-flow streams share one corridor and pass each
+// other a few metres apart while each lane's own traffic queues, follows, and
+// displaces within its 7.5 m width.
+//
+// - **Passing** comes from the kernel's lateral eligibility tactic, not from a
+//   scripted speed or position: the car declares `overtake` and the bicycle and
+//   scooter declare `pass`, all three declare a `lateral` policy, and each lane
+//   authors `lateral_policy.passing_side`, so a faster body that catches a
+//   slower leader on the shared width displaces past it. The two slower modes
+//   differ in free speed (4.5 and 3.0 m/s) so the bicycle also passes the
+//   scooter, and the 9.0 m/s car catches both. Both lanes displace to their
+//   own left, which on this corridor is toward `y = 0`: that is what makes the
+//   opposing pairs meet at a measured clearance rather than at opposite kerbs.
+// - **Opposing** comes from the counter-flow lane itself: `west_through` is a
+//   second movement over the same corridor carrying the same three modes in the
+//   opposite direction, so the metrics pass reports the
+//   `movement:east_through|movement:west_through` pair, the safety monitor's
+//   clearance bands observe the oncoming encounters, and the predictor has to
+//   reason about a stream already travelling the other way. The counter-flow is
+//   a second facility rather than a reverse traversal of one, because a body
+//   traversing one facility against its rule direction is a wrong-way *entry*:
+//   that decision needs a tactical leaf's request
+//   (`Simulation::request_wrong_way_entry`) and no production caller supplies
+//   one. `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` is the checked
+//   fixture for that machinery; this workload measures the conflicting
+//   traversal, not the decision about whether to take it.
+//
+// Declared density, arrivals per simulated hour per lane, over the 400 m
+// corridor (each mode's demand is one source per lane, so each lane carries its
+// own direction of all three modes):
+//
+// | mode | arrivals/h per lane | both lanes | free speed | traverse time |
+// |---|---|---|---|---|
+// | passenger_car | 150 | 300 | 9.0 m/s | 44 s |
+// | bicycle | 60 | 120 | 4.5 m/s | 89 s |
+// | scooter | 30 | 60 | 3.0 m/s | 133 s |
+//
+// 240 arrivals per simulated hour per lane, 480 per hour on the corridor, 8 per
+// simulated minute: a lane's live population is its arrival rate times the
+// traverse time, so the declared density is about 1.8 cars, 1.5 bicycles, and
+// 1.1 scooters per lane — roughly 9 live bodies on the corridor, most of them
+// with a slower leader in sight within a maneuver horizon or an oncoming body
+// inside a clearance band, which is what keeps the lateral tactic's candidate
+// scan and the maneuver predictor busy. A body that cannot be admitted while
+// the entry is occupied waits and is admitted at the next opportunity, so the
+// realized population is below the declared sum whenever an entry is not clear.
+//
+// The density is set by the sustained flow this corridor can carry, not by the
+// fixture's first draft. The first draft put **all six modes on one shared
+// 10 m two-way facility** with passenger cars at 300 arrivals/h per direction
+// (960 arrivals/h in total). At that load the facility did not flow: measured on
+// the release binary, 2 000 ticks admitted 28 bodies and released none, the live
+// population grew with the clock, and per-tick wall cost grew superlinearly with
+// it (0.22 s for 500 ticks, 2.12 s for 1 000, 11.6 s for 2 000, 37.2 s for
+// 4 000), 95 % of it inside `Simulation::predict_candidate`, so a one-hour pass
+// was hours rather than minutes. The pathology is recorded in `perf/README.md`
+// as the workload's unsupported density; the supervisor's direction is to
+// reshape the density and topology until bodies complete the corridor, and the
+// per-direction lanes at the table above are that reshape.
+//
+// The fixed seed bank is `scenarios/phase2/inc2/inc2_seed_bank.json`
+// (`seeds: [11, 48, 102]`): the workload reproduces under those seeds, and the
+// release harness itself runs every scenario at its own root seed 0. Every body,
+// speed, and profile entry is constant (`min == max`), so the sampled profile is
+// the authored value with no sampling slack.
+//
+// This is an **evidence workload**, not a benchmark-matrix cell: it is not the
+// final mixed-mode release fixture (`mixed_release_v2`, Increment 7) and no row
+// of `docs/benchmark-matrix.md` names it. Its lateral ablation twin would be the
+// same network, modes, and demand with the lateral capability removed; it is not
+// checked in, so this slice measures the workload as one configuration and
+// records the disabled-versus-enabled comparison as remaining scope.
+{
+  schema_version: 2,
+  id: 'mixed_mode_profile_v2',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'east_lane_guide', points: [ { x: 0.0, y: -3.75 }, { x: 400.0, y: -3.75 } ] },
+    { id: 'west_lane_guide', points: [ { x: 400.0, y: 3.75 }, { x: 0.0, y: 3.75 } ] },
+  ],
+  portals: [
+    { id: 'east_entry', path: 'east_lane_guide', end: 'start', width_m: 7.5 },
+    { id: 'east_exit', path: 'east_lane_guide', end: 'end', width_m: 7.5 },
+    { id: 'west_entry', path: 'west_lane_guide', end: 'start', width_m: 7.5 },
+    { id: 'west_exit', path: 'west_lane_guide', end: 'end', width_m: 7.5 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 420.0, y: -20.0 },
+      { x: 420.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'east_lane_band', points: [
+      { x: 0.0, y: -7.5 }, { x: 400.0, y: -7.5 },
+      { x: 400.0, y: 0.0 }, { x: 0.0, y: 0.0 },
+    ] },
+    { id: 'west_lane_band', points: [
+      { x: 0.0, y: 0.0 }, { x: 400.0, y: 0.0 },
+      { x: 400.0, y: 7.5 }, { x: 0.0, y: 7.5 },
+    ] },
+  ],
+  facilities: [
+    { id: 'east_lane', region: 'east_lane_band', reference_path: 'east_lane_guide',
+      width_m: 7.5, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car', 'bicycle', 'scooter' ] },
+      lateral_use: 'shared',
+      lateral_policy: { passing_side: 'left' },
+      speed_policy: { limit_mps: null } },
+    { id: 'west_lane', region: 'west_lane_band', reference_path: 'west_lane_guide',
+      width_m: 7.5, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car', 'bicycle', 'scooter' ] },
+      lateral_use: 'shared',
+      lateral_policy: { passing_side: 'left' },
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'east_through', from: 'east_entry', to: 'east_exit', path: 'east_lane_guide',
+      priority: 0, direction: 'forward' },
+    { id: 'west_through', from: 'west_entry', to: 'west_exit', path: 'west_lane_guide',
+      priority: 0, direction: 'forward' },
+  ],
+  clearance_bands: [
+    { id: 'narrow_close', threshold_m: 0.5, violation: true,
+      applies_to_modes: [ 'bicycle', 'scooter' ] },
+    { id: 'all_study', threshold_m: 3.0, violation: false },
+  ],
+  maneuver_policy: {
+    commit: { min_predicted_clearance_m: 0.25, hold_timeout_s: 2.0 },
+  },
+  mode_templates: [
+    {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+        width_m: { min: 1.8, max: 1.8 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield', 'overtake' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 9.0, max: 9.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+      lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+    },
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield', 'pass' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 4.5, max: 4.5 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+      lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+    },
+    {
+      id: 'scooter',
+      body: { kind: 'capsule', length_m: { min: 1.2, max: 1.2 },
+        radius_m: { min: 0.28, max: 0.28 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield', 'pass' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 3.0, max: 3.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_accel_max_mps2: { min: 2.0, max: 2.0 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+      lateral: { target_clearance_m: 0.75, horizon_s: 2.0 },
+    },
+  ],
+  demand: [
+    { id: 'car_east', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'east_entry',
+        rate_per_hour: 150.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'east_through', weight: 1.0 } ] },
+      } } },
+    { id: 'car_west', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'west_entry',
+        rate_per_hour: 150.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'west_through', weight: 1.0 } ] },
+      } } },
+    { id: 'bicycle_east', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'east_entry',
+        rate_per_hour: 60.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'east_through', weight: 1.0 } ] },
+      } } },
+    { id: 'bicycle_west', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'west_entry',
+        rate_per_hour: 60.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'west_through', weight: 1.0 } ] },
+      } } },
+    { id: 'scooter_east', mode: 'scooter',
+      spawn: { rate: {
+        portal: 'east_entry',
+        rate_per_hour: 30.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'east_through', weight: 1.0 } ] },
+      } } },
+    { id: 'scooter_west', mode: 'scooter',
+      spawn: { rate: {
+        portal: 'west_entry',
+        rate_per_hour: 30.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'west_through', weight: 1.0 } ] },
+      } } },
+  ],
+}

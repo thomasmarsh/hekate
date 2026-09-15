@@ -65,9 +65,10 @@ struct BenchScenario {
 }
 
 /// The declared sweep: the walking skeleton, one scenario per interaction
-/// family, and the mixed gate fixture the interaction-metrics pass is measured
-/// on. Adding a scenario here adds a row to the next capture.
-const SCENARIOS: [BenchScenario; 6] = [
+/// family, the mixed gate fixture the interaction-metrics pass is measured on,
+/// and the Increment 2 representative mixed-mode profile. Adding a scenario
+/// here adds a row to the next capture.
+const SCENARIOS: [BenchScenario; 7] = [
     BenchScenario {
         path: "scenarios/walking/walking_guide_v1.json5",
         role: "Phase 1 walking skeleton: a static constant-speed population that leaves the 120 m path and is never replaced, so the row is the empty-tick floor (6 agents, 704 agent steps over the hour)",
@@ -91,6 +92,10 @@ const SCENARIOS: [BenchScenario; 6] = [
     BenchScenario {
         path: "scenarios/benchmarks/mixed_interaction_v1.json5",
         role: "two crosswalks, four pedestrian routes: the Increment 3 mixed gate fixture and the scenario the interaction-metrics pass is measured on",
+    },
+    BenchScenario {
+        path: "scenarios/phase2/inc2/mixed_mode_profile_v2.json5",
+        role: "Increment 2 representative mixed-mode profile: passenger cars, bicycles, and scooters sharing one two-way corridor, so the lateral tactics (pass/overtake) and the opposing traversal run together at a declared density (480 arrivals/hour on the corridor, ~9 live bodies) (TAS-110)",
     },
 ];
 

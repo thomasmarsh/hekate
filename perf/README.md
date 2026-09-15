@@ -13,11 +13,15 @@ nothing in this directory replaces or regenerates it.
 
 ## Files
 
-- `release-bench.json` — `apps/hekate-cli/tests/release_benchmark.rs` over six
+- `release-bench.json` — `apps/hekate-cli/tests/release_benchmark.rs` over seven
   scenarios, one simulated hour each: simulated seconds per wall second, agent
   steps per second, canonical trace bytes per simulated hour, and immutable
   run-directory bytes per simulated hour, with every timed pass, the machine,
-  and the method.
+  and the method. The first six rows are the Phase 1 Increment 5 capture; the
+  seventh is the Increment 2 representative mixed-mode profile, documented in
+  its own section below. The six Phase 1 rows are byte-identical to the original
+  capture (only the seventh row was appended), so the file mixes two capture
+  dates: `generated_unix_s` remains the Phase 1 capture's.
 - `tick-phases.json` — `scripts/measure-tick-phases.sh`: the
   interaction-metrics pass against the rest of the tick on
   `scenarios/benchmarks/mixed_interaction_v1.json5`, measured by A/B ablation at
@@ -233,3 +237,199 @@ scripts/bench-release.sh            # perf/release-bench.json
 scripts/measure-tick-phases.sh      # perf/tick-phases.json (builds two kernels in a temp dir)
 scripts/capture-profile.sh          # perf/profiles/* (macOS only)
 ```
+
+## Method: the Increment 2 representative mixed-mode profile
+
+`scenarios/phase2/inc2/mixed_mode_profile_v2.json5` is the Increment 2
+representative mixed-mode **evidence workload** ([[TAS-110]]): the three
+Increment 2 wheeled modes — passenger cars, bicycles, and scooters — share one
+two-way corridor as two adjacent one-way 7.5 m lanes, so the kernel's lateral
+tactics (`overtake` for the car, `pass` for the bicycle and scooter) and the
+opposing traversal run together at one declared density. It is not the final
+mixed-mode release fixture (`mixed_release_v2`, Increment 7) and no row of
+`docs/benchmark-matrix.md` names it. Its seventh row in `release-bench.json` is
+the row this section reads.
+
+### Machine
+
+| | |
+|---|---|
+| OS | macOS 13.7.8 (build 22H730) |
+| CPU | Intel(R) Core(TM) i5-7600K CPU @ 3.80GHz, 4 logical CPUs |
+| RAM | 64 GB |
+| Arch | x86_64 |
+| Toolchain | rustc 1.98.1 (48a229cea 2026-09-01), cargo 1.98.1 (797e8a9bc 2026-08-05) |
+| Build | release profile: no LTO, `debug = false`, the pinned `rust-toolchain.toml` |
+| Captured | 2026-09-15 UTC |
+
+The same host as the Phase 1 capture above, so the comparison below is a
+same-hardware comparison; no cross-hardware equivalence is claimed.
+
+### Method
+
+The seventh row runs the same `release_benchmark` harness as the six rows above:
+one simulated hour (72 000 Standard steps at 0.05 s), a 2 000-tick warm-up, three
+independent timed passes from a fresh `Simulation` each, then one un-timed
+recording pass. `std::time::Instant` brackets the fixed-step loop only, and the
+ratios are derived from the **median** pass.
+
+### Measured (one simulated hour)
+
+| pass | wall s | µs/tick | sim s per wall s |
+|---|---|---|---|
+| 1 | 111.431 | 1 547.65 | 32.307 |
+| 2 | 111.422 | 1 547.53 | 32.309 |
+| 3 | 111.502 | 1 548.64 | 32.286 |
+| **min** | **111.422** | **1 547.53** | **32.309** |
+| **median (headline)** | **111.431** | **1 547.65** | **32.307** |
+
+Companion quantities from the same row: 702 894 agent steps (9.76 live agents on
+average, since agent steps are live agents summed over the run), 6 308 agent
+steps/s, 460 spawned / 449 despawned / 11 remaining (the corridor flows),
+770 144 canonical trace bytes per simulated hour, and 3 033 055 run-directory
+bytes per simulated hour — 2 952 056 of them the sampled `trajectories.parquet`.
+
+### Dominant measured work (headline)
+
+`scripts/capture-profile.sh scenarios/phase2/inc2/mixed_mode_profile_v2.json5 300000 8`
+attached `sample` to 300 000 ticks of the release binary. Of 5 737 tick samples,
+5 491 (**95.7 %**) fall inside `hekate_sim::sim::Simulation::predict_candidate`:
+
+| frame (subtree) | samples | share of tick |
+|---|---|---|
+| `hekate_sim::sim::Simulation::predict_candidate` | 5 491 | 95.7 % |
+| `hekate_sim::metrics::InteractionMetrics::observe` | 106 | 1.8 % |
+| `alloc::vec` (`spec_from_iter_nested`, `hekate_sim::sim`) | 72 | 1.3 % |
+| `hekate_sim::prediction::predict_with_band_bounds` | 30 | 0.5 % |
+| `hekate_sim::safety::SafetyMonitor::observe` | 19 | 0.3 % |
+| `hekate_sim::sim::Simulation::predict_maneuver` | 14 | 0.2 % |
+| interaction-metrics pass (`hekate_sim::metrics::*`) | 107 | 1.9 % |
+| rest of the tick | 5 630 | 98.1 % |
+
+The pass is only 1.9 % here: on this workload the dominant work is the
+predictor's candidate scan, not the metrics pass. Its top self-time frames are
+the per-candidate clearance primitives — `closest_point_on_box` (1 275),
+`body_contact_normal` (1 188), `box_box_least_overlap_axis` (944),
+`body_clearance_m` (828), `sincos_stret` (493) — which is why `predict_candidate`
+scales with the **population**, not with the tick count.
+
+### Cost curve and the unsupported density
+
+Bounded release-mode windows on the same binary (`hekate-cli run <fixture>
+--ticks N --output /dev/null`, min of two passes):
+
+| ticks | simulated minutes | wall s | µs/tick |
+|---|---|---|---|
+| 2 000 | 1.7 | 2.02 | 1 010 |
+| 10 000 | 8.3 | 17.42 | 1 742 |
+| 30 000 | 25.0 | 44.67 | 1 489 |
+| 60 000 | 50.0 | 86.29 | 1 438 |
+| 72 000 (harness hour row) | 60.0 | 111.43 | 1 548 |
+
+The 300 000-tick profiled run took about 8 min 20 s (~500 s, inferred from the
+artifact mtimes), i.e. ~1.67 ms/tick. Within the **flowing** regime the per-tick
+cost is therefore roughly flat at 1.4–1.7 ms: the corridor reaches a bounded
+steady-state population (the hour admits 460 bodies and keeps 11), so cost does
+not grow without bound.
+
+**The pathological, unsupported density is the earlier shared-facility draft.**
+The fixture's first draft put all six modes on one shared 10 m two-way facility
+with passenger cars at 300 arrivals/h per direction (960 arrivals/h in total). At
+that load the facility did not flow — 2 000 ticks admitted 28 bodies and released
+none — the live population grew with the clock, and per-tick cost grew
+**superlinearly** with it, measured on the release binary:
+
+| ticks | wall s | µs/tick |
+|---|---|---|
+| 500 | 0.22 | 440 |
+| 1 000 | 2.12 | 2 120 |
+| 2 000 | 11.6 | 5 800 |
+| 4 000 | 37.2 | 9 300 |
+
+95 % of that cost was inside `Simulation::predict_candidate`. A uniform
+hour-long sweep of that density is therefore **infeasible** — the one-hour pass
+alone would take hours, not the 111 s the reshaped workload takes — which is why
+the workload was reshaped to the per-direction lanes above. The 960 arrivals/h
+shared-facility density is labelled **unsupported**: no completed hour-long run
+backs any performance claim above the flowing density. The reshaped workload
+still exposes the same dominant work, because `predict_candidate` scans the
+candidate population every tick.
+
+### Comparison against the frozen Phase 1 baseline
+
+Same host, same harness, same release profile; the six rows above are the frozen
+Phase 1 Increment 5 capture and the seventh is this Increment 2 row. The new row
+is by far the slowest of the seven:
+
+| quantity | Increment 2 row | Phase 1 rows |
+|---|---|---|
+| µs/tick | 1 547.65 | 0.13–70.43 |
+| sim s per wall s | 32.31 | 710–391 699 |
+| agent steps/s | 6 308 | 76 599–258 081 |
+| trace bytes/hour | 770 144 | 1 321–2 169 350 |
+| run-dir bytes/hour | 3 033 055 | 5 743–2 113 807 |
+
+The new row is 22.8× `car_following_v1` (67.91 µs/tick) and 35.1×
+`mixed_interaction_v1` (44.06 µs/tick) per tick, and its run directory is the
+largest of the seven. The sharper comparison is per live agent: the new row runs
+at 9.76 live agents and ~159 µs per live agent per tick, while
+`mixed_interaction_v1` runs at 10.57 live agents and ~4.2 µs per live agent — a
+~38× per-agent gap, which is the always-on `predict_candidate` scan the lateral
+and opposing machinery adds.
+
+`baselines/phase1/performance.json` is the frozen Increment 0 artifact; it is a
+**debug-profile** 125/250/625-tick walking-skeleton measurement, not a release
+mixed-mode run, so it is not the reference here and is not comparable.
+
+### Profiler and rerun commands
+
+```sh
+scripts/capture-profile.sh scenarios/phase2/inc2/mixed_mode_profile_v2.json5 300000 8
+python3 scripts/profile-symbols.py perf/profiles/mixed_mode_profile_v2-release.sample.txt
+```
+
+The first builds the release binary, runs 300 000 ticks with the trace to
+`/dev/null`, attaches `sample <pid> 8`, and writes the three files below; the
+second folds the capture into the phase table.
+
+```sh
+scripts/bench-release.sh
+cargo test --release -p hekate-cli --test release_benchmark -- --ignored --nocapture
+```
+
+The harness rewrites `release-bench.json` from scratch (506 s wall, exit 0); to
+reproduce this file's mixed provenance, keep the six Phase 1 rows and take only
+the `mixed_mode_profile_v2` row.
+
+### Raw artifacts (SHA-256)
+
+| artifact | SHA-256 |
+|---|---|
+| `perf/release-bench.json` | `a39ab749b3f7892945b363d56e7295ed244584ef2b79ecf3b6ba71be33419bd4` |
+| `perf/profiles/mixed_mode_profile_v2-release.sample.txt` | `61afc13087cd23d6c995cd6d77e8376616f0db907987e5124d3305e14b33f5a7` |
+| `perf/profiles/mixed_mode_profile_v2-release.summary.txt` | `7a2a3913eaec7ad8536549955b318a6f07413154d98f2a9a494a262995ab1550` |
+| `perf/profiles/mixed_mode_profile_v2-release.run.txt` | `7fc1065b93759b25a4a3dc83c9c5f9e124cb8411d4ab9fd4d245be1e33976d05` |
+| `scenarios/phase2/inc2/mixed_mode_profile_v2.json5` | `2ded1590994b0060621855095f3626ddc2eb848531e59345353ccb35ae76eb6a` |
+
+The profiled run's canonical trace hash is
+`9add5358208c42ed1d4a43bbccb71356f41cbb56b03e2b99e0b4867b66f36baa`.
+
+### Limitations
+
+- The capture is `sample` only, on the host described above, unpinned and not
+  repeated under load; the within-capture spread of the three timed passes is
+  tight (0.04 %) but the host is otherwise idle and not quiet.
+- The standalone-window cost curve includes process start-up and scenario load;
+  those are negligible above about 2 000 ticks but are not part of the harness's
+  measured interval.
+- The 300 000-tick profiled run's wall time is inferred from the artifact mtimes,
+  not timed by the harness.
+- The release profile has no debug info and no frame pointers, so the capture is
+  an attribution to frames, not a line-level profile.
+- No disabled-versus-enabled lateral ablation twin is checked in, so the lateral
+  machinery's share is read from the profile rather than isolated by an A/B
+  ablation; the comparison is to the Phase 1 baseline, not to itself without
+  lateral tactics.
+- No presenter frame time was measured: the profiled and benchmarked runs are
+  headless.
+- The profile is one seed (root seed 0, the harness's) and one run per window.

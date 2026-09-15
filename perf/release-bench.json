@@ -326,6 +326,55 @@
           "bytes": 1888502
         }
       ]
+    },
+    {
+      "scenario": "mixed_mode_profile_v2",
+      "source_path": "scenarios/phase2/inc2/mixed_mode_profile_v2.json5",
+      "role": "Increment 2 representative mixed-mode profile: passenger cars, bicycles, and scooters sharing one two-way corridor, so the lateral tactics (pass/overtake) and the opposing traversal run together at a declared density (480 arrivals/hour on the corridor, ~9 live bodies) (TAS-110)",
+      "step_s": 0.05,
+      "ticks": 72000,
+      "simulated_seconds": 3600.0,
+      "wall_seconds": [
+        111.431097441,
+        111.422388739,
+        111.502120478
+      ],
+      "wall_seconds_min": 111.422388739,
+      "wall_seconds_median": 111.431097441,
+      "simulated_seconds_per_wall_second": 32.306959930158726,
+      "microseconds_per_tick": 1547.654131125,
+      "agent_steps": 702894,
+      "agent_steps_per_second": 6307.880081430275,
+      "spawned": 460,
+      "despawned": 449,
+      "remaining": 11,
+      "canonical_trace_bytes": 770144,
+      "canonical_trace_sha256": "429715b018d2cb55c00b955a634e06f944c0011670b175c24b6d9526e5b63685",
+      "canonical_trace_bytes_per_simulated_hour": 770144.0,
+      "run_directory_bytes": 3033055,
+      "run_directory_bytes_per_simulated_hour": 3033055.0,
+      "run_directory_files": [
+        {
+          "name": "events.jsonl.gz",
+          "bytes": 57499
+        },
+        {
+          "name": "manifest.json",
+          "bytes": 1213
+        },
+        {
+          "name": "metrics.json",
+          "bytes": 22039
+        },
+        {
+          "name": "summary.json",
+          "bytes": 248
+        },
+        {
+          "name": "trajectories.parquet",
+          "bytes": 2952056
+        }
+      ]
     }
   ]
 }

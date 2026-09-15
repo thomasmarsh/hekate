@@ -1,0 +1,89 @@
+# release-mode sampled profile phase table
+capture: /Users/thomasmarsh/git/hekate/perf/profiles/mixed_mode_profile_v2-release.sample.txt
+process: hekate-cli [73394]
+date: 2026-09-15 06:01:47.381 -0400
+os: macOS 13.7.8 (22H730)
+tool: /usr/bin/sample (default 1 ms sampling interval)
+thread_samples: 5738
+
+## tick phases: every direct child of Simulation::step
+tick_samples: 5737
+frame                                                                     samples   share
+hekate_sim::sim::Simulation::predict_candidate                               5491   95.7%
+hekate_sim::metrics::InteractionMetrics::observe                              106    1.8%
+alloc::vec::spec_from_iter_nested::Vec::PKtBTIfAD::hekate_sim::sim::Ma         72    1.3%
+hekate_sim::prediction::predict_with_band_bounds                               30    0.5%
+hekate_sim::safety::SafetyMonitor::observe                                     19    0.3%
+hekate_sim::sim::Simulation::predict_maneuver                                  14    0.2%
+hekate_sim::sim::Simulation::stage::PhysicalAdvance::advance_physics            8    0.1%
+hekate_sim::close_pass::ClosePassTracker::observe                               7    0.1%
+hekate_sim::sim::Simulation::stage::RelevantWorldQuery::query_world             6    0.1%
+hekate_sim::index::BroadPhase::rebuild                                          4    0.1%
+hekate_sim::sim::Simulation::stage::MotionControl::command_motion               4    0.1%
+alloc::vec::spec_from_iter_nested::Vec::PKtBTIfAD::hekate_sim::predict          3    0.1%
+nanov2_malloc                                                                   3    0.1%
+hekate_sim::stage::arbitrate_claims                                             3    0.1%
+alloc::raw_vec::RawVecInner::finish_grow::PKtBTIfAD::hekate_sim                 2    0.0%
+hekate_sim::index::SpatialIndex::rebuild                                        2    0.0%
+alloc::raw_vec::RawVecInner::reserve::do_reserve_and_handle::alloc::Gl          1    0.0%
+realloc                                                                         1    0.0%
+malloc_zone_realloc                                                             1    0.0%
+szone_realloc                                                                   1    0.0%
+szone_good_size                                                                 1    0.0%
+alloc::collections::btree::map::entry::Entry::PKtBTIfAD::hekate_sim::m          1    0.0%
+hekate_sim::query::body_clearance_m                                             1    0.0%
+platform_memmove$VARIANT$Haswell                                                1    0.0%
+hekate_sim::metrics::tick_minimum_clearance_m                                   1    0.0%
+hekate_sim::swept::clearance_rate                                               1    0.0%
+hekate_sim::query::body_contact_normal                                          1    0.0%
+hekate_sim::query::box_box_least_overlap_axis                                   1    0.0%
+hekate_sim::sim::Simulation::update_signal_decision                             1    0.0%
+hekate_sim::sim::Simulation::steering_envelope                                  1    0.0%
+malloc                                                                          1    0.0%
+free                                                                            1    0.0%
+free_small                                                                      1    0.0%
+small_free_list_remove_ptr_no_clear                                             1    0.0%
+hekate_sim::safety::SafetyMonitor::begin_tick                                   1    0.0%
+hekate_sim::query::agent_body                                                   1    0.0%
+hekate_sim::close_pass::ClosePassTracker::begin_tick                            1    0.0%
+hekate_sim::wrong_way::OpposingTraversalTracker::observe                        1    0.0%
+alloc::vec::spec_from_iter_nested::Vec::PKtBTIfAD::hekate_sim::event::          1    0.0%
+core::iter::adapters::chain::Chain::map::Map::slice::iter::Iter::PKtBT          1    0.0%
+core::iter::adapters::map::Map::filter::Filter::ops::range::Range::PKt          1    0.0%
+sincos_stret                                                                    1    0.0%
+alloc::raw_vec::RawVec                                                          1    0.0%
+Simulation::step (self: inlined and non-frame work)                           -64   -1.1%
+
+interaction-metrics pass (hekate_sim::metrics::*)                             107    1.9%
+rest of the tick                                                             5630   98.1%
+
+## within-pass frames: what the interaction-metrics pass calls
+pass_samples: 107
+frame (terminal symbol)                                                   samples   share
+candidate_pairs                                                                60   56.1%
+candidates_in_aabb                                                             59   55.1%
+time_to_collision                                                              35   32.7%
+body_clearance_m                                                               24   22.4%
+clearance_rate                                                                 18   16.8%
+tick_minimum_clearance_m                                                       13   12.1%
+body_contact_normal                                                            10    9.3%
+closest_point_on_box                                                            9    8.4%
+box_box_least_overlap_axis                                                      7    6.5%
+sincos_stret                                                                    7    6.5%
+rebuild                                                                         4    3.7%
+hekate_sim                                                                      2    1.9%
+
+## top self-time frames (top of stack)
+frame                                                                     samples
+hekate_sim::query::closest_point_on_box                                      1275
+hekate_sim::query::body_contact_normal                                       1188
+hekate_sim::query::box_box_least_overlap_axis                                 944
+hekate_sim::query::body_clearance_m                                           828
+sincos_stret                                                                  493
+hekate_model::compiled::CompiledReferencePath::project                        157
+atan2                                                                         135
+hekate_model::compiled::CompiledReferencePath::heading_at                     125
+hekate_sim::prediction::predict_with_band_bounds                              111
+hekate_sim::index::BroadPhase::candidates_in_aabb                              82
+hekate_sim::steering::bounded_steering_step                                    74
+hekate_sim::metrics::tick_minimum_clearance_m                                  57
