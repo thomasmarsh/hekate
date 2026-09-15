@@ -337,10 +337,15 @@ fn a_prohibited_road_rejects_the_overtake_as_no_permission() {
 }
 
 /// The tactic is a pure function of the compiled components and the tick-start
-/// geometry: the same scenario and seed produce the same decisions, and the
-/// resolved side is the authored side in the motor's own travel frame.
+/// geometry: a left policy commits to the positive-`d` target and a right policy
+/// to the negative-`d` one, whichever side the motor's own travel frame is.
+/// (The same seed's reproduction of the decisions, and the invariance of the
+/// batch to request order, are asserted at unit level: `sim.rs`
+/// `same_seed_produces_identical_observations`,
+/// `a_batch_is_decided_independently_of_request_order`, and
+/// `the_event_buffer_is_key_ordered_and_invariant_to_request_order`.)
 #[test]
-fn the_overtake_side_is_deterministic_and_follows_the_policy() {
+fn the_overtake_side_follows_the_policy() {
     let run = |side: &str| {
         let scenario = overtaking_scenario(10.0, side, None, false);
         let mut sim = build(&scenario);
@@ -360,19 +365,6 @@ fn the_overtake_side_is_deterministic_and_follows_the_policy() {
         right.committed_target_m[&right_overtaker] < 0.0,
         "a right policy commits to the negative-`d` target: {:?}",
         right.committed_target_m[&right_overtaker]
-    );
-
-    // The same scenario and seed reproduce the same edges and reasons.
-    let left_reasons = left.all_reasons();
-    let repeat = run("left");
-    let repeat_reasons = repeat.all_reasons();
-    assert_eq!(
-        left.edges, repeat.edges,
-        "the same seed reproduces the edges"
-    );
-    assert_eq!(
-        left_reasons, repeat_reasons,
-        "the same seed reproduces the reasons"
     );
 }
 

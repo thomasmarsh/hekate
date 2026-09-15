@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::DVec2;
 use hekate_model::{CompiledScenario, parse_scenario_source_v2};
 use hekate_sim::{
-    AgentId, ManeuverEdge, ManeuverReason, ManeuverState, RunConfig, Simulation, SnapshotDetail,
-    StepOutput,
+    AgentId, Event, ManeuverEdge, ManeuverReason, ManeuverState, PassSide, RunConfig, Simulation,
+    SnapshotDetail, StepOutput,
 };
 
 /// The default 0.05 s step, so a per-step position delta has one bound.
@@ -36,6 +36,10 @@ struct Trace {
     edges: BTreeMap<AgentId, Vec<(ManeuverState, ManeuverState, ManeuverEdge)>>,
     /// Every narrow pass reason observed for an agent over the run.
     reasons: BTreeMap<AgentId, BTreeSet<ManeuverReason>>,
+    /// The side each agent's `Maneuver` events claimed, in the agent's own
+    /// travel frame, so a reversed traversal is told from the reference path's
+    /// own orientation.
+    maneuver_sides: BTreeMap<AgentId, BTreeSet<PassSide>>,
     /// The largest per-step position delta seen across all agents.
     max_step_m: f64,
 }
@@ -78,25 +82,36 @@ impl Trace {
 }
 
 /// Drive the simulation for `ticks` steps, recording maneuver edges, pass
-/// reasons, and per-step world positions.
+/// reasons, claimed maneuver sides, and per-step world positions.
 fn drive(sim: &mut Simulation, ticks: u64) -> Trace {
     let mut trace = Trace {
         edges: BTreeMap::new(),
         reasons: BTreeMap::new(),
+        maneuver_sides: BTreeMap::new(),
         max_step_m: 0.0,
     };
     let mut previous: BTreeMap<AgentId, DVec2> = BTreeMap::new();
     for _ in 0..ticks {
-        let transitions: Vec<(AgentId, ManeuverState, ManeuverState, ManeuverEdge)> = {
+        {
             let output: StepOutput<'_> = sim.step();
-            output
-                .transitions()
-                .iter()
-                .map(|t| (t.agent, t.from, t.to, t.edge))
-                .collect()
-        };
-        for (agent, from, to, edge) in transitions {
-            trace.edges.entry(agent).or_default().push((from, to, edge));
+            for transition in output.transitions() {
+                trace.edges.entry(transition.agent).or_default().push((
+                    transition.from,
+                    transition.to,
+                    transition.edge,
+                ));
+            }
+            // The side every recorded edge claims, read from the public event
+            // payload, which reports it in the agent's own travel frame.
+            for event in output.events() {
+                if let Event::Maneuver { agent, side, .. } = event {
+                    trace
+                        .maneuver_sides
+                        .entry(*agent)
+                        .or_default()
+                        .insert(*side);
+                }
+            }
         }
         let frame = sim.snapshot(SnapshotDetail::Position);
         for sample in frame.agents() {
@@ -295,30 +310,37 @@ fn a_scooter_passes_a_slower_bicycle() {
     );
 }
 
-/// The pass selects the positive-`d` side in the agent's own travel frame
-/// whichever way the facility is travelled: the resolved side never depends on
-/// the reference path's own vertex order.
+/// The pass claims the positive-`d` side in the agent's own travel frame when
+/// the agent travels against the reference path's vertex order, so the resolved
+/// side never depends on which way the reference path was authored. The forward
+/// direction's own pass is `a_bicycle_passes_a_slower_scooter`.
 #[test]
-fn the_pass_side_is_the_travel_frame_side_in_both_directions() {
-    for reverse in [false, true] {
-        let scenario = passing_scenario("scooter", 4.0, "bicycle", 7.0, 6.0, "left", None, reverse);
-        let mut sim = build(&scenario);
-        let trace = drive(&mut sim, TICKS);
-        let passer = trace
-            .passer()
-            .unwrap_or_else(|| panic!("a pass completes (reverse={reverse})"));
-        assert!(
-            trace
-                .reasons
-                .get(&passer)
-                .is_some_and(|reasons| reasons.contains(&ManeuverReason::SlowerLeader)),
-            "the passer selected a slower leader (reverse={reverse})"
-        );
-        assert!(
-            trace.max_step_m <= 7.5 * DT + 1e-6,
-            "no agent teleported (reverse={reverse})"
-        );
-    }
+fn a_reverse_traversal_claims_the_travel_frame_pass_side() {
+    // `reverse` authors the movement against the guide's own vertex order, so a
+    // side read from the reference path's own frame would flip here.
+    let scenario = passing_scenario("scooter", 4.0, "bicycle", 7.0, 6.0, "left", None, true);
+    let mut sim = build(&scenario);
+    let trace = drive(&mut sim, TICKS);
+    let passer = trace
+        .passer()
+        .expect("a pass completes against the reference path's vertex order");
+    assert!(
+        trace
+            .reasons
+            .get(&passer)
+            .is_some_and(|reasons| reasons.contains(&ManeuverReason::SlowerLeader)),
+        "the passer selected a slower leader"
+    );
+    assert!(
+        trace.max_step_m <= 7.5 * DT + 1e-6,
+        "no agent teleported: max step {} m",
+        trace.max_step_m
+    );
+    assert_eq!(
+        trace.maneuver_sides.get(&passer),
+        Some(&BTreeSet::from([PassSide::Left])),
+        "the claimed side is the positive-`d` side of the agent's own travel frame"
+    );
 }
 
 /// A facility too narrow for the pass rejects the eligible candidates with the

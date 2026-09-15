@@ -73,10 +73,15 @@ fn per_step(total: u64, agent_steps: u64) -> f64 {
     }
 }
 
-/// Short window whose counters must be non-zero: by four simulated minutes the
-/// profile has admitted cars that have caught the slower bicycle and scooter
-/// leaders, so the predictor and the broad phase both move.
-const FOCUSED_TICKS: u64 = 2000;
+/// The window whose counters must be non-zero. The broad phase first returns
+/// candidates at tick 68; the predictor first evaluates one at tick 789, when
+/// the first car has caught a slower bicycle or scooter leader. `1000` ticks —
+/// 50 simulated seconds — is the smallest round window above that first
+/// evaluation, and it leaves every assertion in
+/// [`counters_advance_without_changing_the_run`] reading a moving counter (213
+/// predictions over 9 853 broad-phase candidates at tick 1000) rather than the
+/// single evaluation that first crosses zero.
+const FOCUSED_TICKS: u64 = 1000;
 
 /// The shorter fresh window the determinism check compares over.
 const DETERMINISM_TICKS: u64 = 500;

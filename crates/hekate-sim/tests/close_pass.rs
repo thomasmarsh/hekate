@@ -146,17 +146,34 @@ fn passing_scenario(motor_speed_mps: f64, bicycle_speed_mps: f64) -> CompiledSce
     CompiledScenario::compile_v2(source).expect("the scenario compiles")
 }
 
-/// Run the simulation, returning the completed overtaking intervals and the
-/// body kind of every agent the run observed, so a narrow (capsule) body is
-/// distinguishable from a motor (box) body.
-fn run(
-    scenario: CompiledScenario,
-    seed: u64,
-) -> (Vec<OvertakeObservation>, BTreeMap<AgentId, BodyKind>) {
+/// Every piece of evidence one run of the passing fixture records: the
+/// completed overtaking intervals, the body kind the Full frame observed for
+/// every agent, and every `ClosePass` event with the tick that emitted it.
+struct Run {
+    /// The completed overtaking intervals the run closed.
+    overtakes: Vec<OvertakeObservation>,
+    /// The body kind of every agent the run observed, so a narrow (capsule)
+    /// body is distinguishable from a motor (box) body.
+    kinds: BTreeMap<AgentId, BodyKind>,
+    /// Every `ClosePass` event the run emitted, with its emitting tick.
+    events: Vec<(u64, Event)>,
+}
+
+/// Run the simulation once, returning every piece of evidence the assertions
+/// read: the completed overtaking intervals, the observed body kinds, and the
+/// `ClosePass` events with the tick that emitted each.
+fn run(scenario: CompiledScenario, seed: u64) -> Run {
     let mut sim = Simulation::new(scenario, RunConfig::new(seed)).expect("the simulation builds");
     let mut kinds: BTreeMap<AgentId, BodyKind> = BTreeMap::new();
+    let mut events: Vec<(u64, Event)> = Vec::new();
     for _ in 0..TICKS {
-        sim.step();
+        let output = sim.step();
+        let tick = output.time().tick();
+        for event in output.events() {
+            if event.kind() == EventKind::ClosePass {
+                events.push((tick, event.clone()));
+            }
+        }
         let frame = sim.snapshot(SnapshotDetail::Full);
         for sample in frame.agents() {
             if let Some(motion) = &sample.motion {
@@ -164,7 +181,11 @@ fn run(
             }
         }
     }
-    (sim.close_pass_tracker().overtakes().to_vec(), kinds)
+    Run {
+        overtakes: sim.close_pass_tracker().overtakes().to_vec(),
+        kinds,
+        events,
+    }
 }
 
 /// Every observation's bands are a declaration-ordered subsequence of the
@@ -196,11 +217,38 @@ fn assert_declaration_order_and_monotone(observation: &OvertakeObservation) {
     }
 }
 
+/// One 900-tick run of the passing fixture serves every assertion the four
+/// separate cases made: the detected overtaking intervals with their bands and
+/// observed body kinds, the `ClosePass` events with their payload and the
+/// one-event-per-observation count, and — from a second, prefix run that stops
+/// at an existing interval's `end_tick` — the run-end closure of the interval
+/// still alongside. Nextest runs one process per test, so the shared run has to
+/// live in one test rather than in a shared fixture.
+#[test]
+fn a_passing_run_reports_its_bands_events_and_run_end_closure() {
+    let evidence = run(passing_scenario(9.0, 4.0), 7);
+
+    assert_a_car_overtaking_a_bicycle_accumulates_every_band(&evidence.overtakes, &evidence.kinds);
+    assert_a_completed_pass_emits_one_close_pass_event_with_its_evidence(&evidence.events);
+    // Every closed observation becomes exactly one event: the kernel emits one
+    // `ClosePass` per observation it closes, so a pair is never counted twice
+    // and no completed pass is lost.
+    assert_eq!(
+        evidence.events.len(),
+        evidence.overtakes.len(),
+        "one event per closed observation"
+    );
+    assert_the_interval_still_open_at_the_final_tick_closes_with_the_completed_evidence(
+        &evidence.overtakes,
+    );
+}
+
 /// A motor mode overtaking a slower narrow mode is detected, and each declared
 /// band accumulates its own duration with its stable id retained.
-#[test]
-fn a_car_overtaking_a_bicycle_accumulates_every_band() {
-    let (observed, kinds) = run(passing_scenario(9.0, 4.0), 7);
+fn assert_a_car_overtaking_a_bicycle_accumulates_every_band(
+    observed: &[OvertakeObservation],
+    kinds: &BTreeMap<AgentId, BodyKind>,
+) {
     assert!(
         !observed.is_empty(),
         "the faster motor must overtake the slower narrow user at least once"
@@ -209,7 +257,7 @@ fn a_car_overtaking_a_bicycle_accumulates_every_band() {
     // A motor (box) overtaking a narrow (capsule) user is the overtake of
     // interest; two bodies of one mode at one speed never pass each other.
     let mut saw_narrow_pass = false;
-    for observation in &observed {
+    for observation in observed {
         let agent_kind = kinds
             .get(&observation.agent)
             .copied()
@@ -264,8 +312,8 @@ fn a_car_overtaking_a_bicycle_accumulates_every_band() {
 /// ticks produced.
 #[test]
 fn detection_is_deterministic_across_runs() {
-    let first = run(passing_scenario(9.0, 4.0), 7).0;
-    let second = run(passing_scenario(9.0, 4.0), 7).0;
+    let first = run(passing_scenario(9.0, 4.0), 7).overtakes;
+    let second = run(passing_scenario(9.0, 4.0), 7).overtakes;
     assert_eq!(first, second);
 }
 
@@ -273,7 +321,7 @@ fn detection_is_deterministic_across_runs() {
 /// interval is ever detected even though the bodies come alongside.
 #[test]
 fn equal_speeds_yield_no_overtake() {
-    let (observed, _) = run(passing_scenario(4.0, 4.0), 7);
+    let observed = run(passing_scenario(4.0, 4.0), 7).overtakes;
     assert!(
         observed.is_empty(),
         "an abreast convoy is not an overtake: {observed:?}"
@@ -326,10 +374,11 @@ fn a_single_mode_run_records_nothing() {
 /// An overtaking interval still alongside at the run's final tick is closed by
 /// the run-end close boundary as one observation carrying exactly the evidence
 /// the completed interval carried, so a pass in progress at termination is
-/// neither dropped nor counted twice.
-#[test]
-fn an_interval_still_open_at_the_final_tick_closes_with_the_completed_evidence() {
-    let (completed, _) = run(passing_scenario(9.0, 4.0), 7);
+/// neither dropped nor counted twice. It re-runs the fixture for the prefix of
+/// the shared run up to an existing interval's `end_tick`.
+fn assert_the_interval_still_open_at_the_final_tick_closes_with_the_completed_evidence(
+    completed: &[OvertakeObservation],
+) {
     // An interval that stayed alongside for more than one tick was still open on
     // its last observed tick, so a run that stops there leaves it open.
     let full = completed
@@ -381,33 +430,15 @@ fn an_interval_still_open_at_the_final_tick_closes_with_the_completed_evidence()
     );
 }
 
-/// Every `ClosePass` event a run emitted, with the tick that emitted it.
-fn close_pass_events(scenario: CompiledScenario, seed: u64) -> Vec<(u64, Event)> {
-    let mut sim = Simulation::new(scenario, RunConfig::new(seed)).expect("the simulation builds");
-    let mut events = Vec::new();
-    for _ in 0..TICKS {
-        let output = sim.step();
-        let tick = output.time().tick();
-        for event in output.events() {
-            if event.kind() == EventKind::ClosePass {
-                events.push((tick, event.clone()));
-            }
-        }
-    }
-    events
-}
-
 /// A completed overtake emits one `ClosePass` event carrying the passing agent,
 /// the passed body, the facility and side, the exact minimum with its time and
 /// relative speed, and the declaration-ordered bands — the contract's payload.
-#[test]
-fn a_completed_pass_emits_one_close_pass_event_with_its_evidence() {
-    let events = close_pass_events(passing_scenario(9.0, 4.0), 7);
+fn assert_a_completed_pass_emits_one_close_pass_event_with_its_evidence(events: &[(u64, Event)]) {
     assert!(
         !events.is_empty(),
         "the faster motor passing the slower user emits a ClosePass event"
     );
-    for (tick, event) in &events {
+    for (tick, event) in events {
         assert_eq!(event.kind(), EventKind::ClosePass);
         let Event::ClosePass {
             agent,
@@ -464,27 +495,4 @@ fn a_completed_pass_emits_one_close_pass_event_with_its_evidence() {
         let _ = facility.get();
         let _ = side.label();
     }
-}
-
-/// Every closed observation becomes exactly one event: the kernel emits one
-/// `ClosePass` per observation it closes, so a pair is never counted twice and
-/// no completed pass is lost.
-#[test]
-fn every_closed_observation_emits_exactly_one_event() {
-    let mut sim = Simulation::new(passing_scenario(9.0, 4.0), RunConfig::new(7))
-        .expect("the simulation builds");
-    let mut emitted = 0usize;
-    for _ in 0..TICKS {
-        let output = sim.step();
-        emitted += output
-            .events()
-            .iter()
-            .filter(|event| event.kind() == EventKind::ClosePass)
-            .count();
-    }
-    assert_eq!(
-        emitted,
-        sim.close_pass_tracker().overtakes().len(),
-        "one event per closed observation"
-    );
 }

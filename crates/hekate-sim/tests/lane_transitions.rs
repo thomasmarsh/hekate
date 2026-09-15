@@ -2222,7 +2222,9 @@ fn a_body_ahead_on_the_destination_band_slows_the_committed_change_of_lane() {
 /// the rear clearance of the body closing from behind and the side clearance
 /// while it is alongside — never reaches the mode's target, so the ordered
 /// response aborts the maneuver and the handoff never fires. The control is the
-/// same fixture and request with no such body, which crosses.
+/// same fixture and request with no such body: it is the `control` run asserted
+/// in `a_body_ahead_on_the_destination_band_slows_the_committed_change_of_lane`,
+/// which pins the same rider's free-flowing committed approach and crossing.
 #[test]
 fn a_body_closing_from_behind_on_the_destination_band_holds_the_committed_change_of_lane() {
     let mut sim = build(&crossing_constraint_scenario(CrossingConstraint {
@@ -2245,22 +2247,12 @@ fn a_body_closing_from_behind_on_the_destination_band_holds_the_committed_change
         vec![Some(ManeuverAbortReason::ClearanceLost)],
         "the outbound leg aborts on its predicted clearance"
     );
-
-    let mut control = build(&crossing_constraint_scenario(CrossingConstraint::default()));
-    let control_bodies = rider_before_constraints(&mut control, None, &(0.0..=0.0));
-    assert!(request_crossing(&mut control, control_bodies));
-    let control_approach = drive_crossing_approach(&mut control, control_bodies, 600);
-    assert!(
-        control_approach.crossed,
-        "with no body behind it on the destination band the rider crosses"
-    );
     assert!(
         approach.max_step_m <= CONSTRAINT_MAX_SPEED_M * DT + hekate_sim::SETTLE_TOLERANCE_M,
         "no body moved further than the fixture's fastest stream allows: {} m",
         approach.max_step_m
     );
     assert_eq!(sim.emergency_cap_steps(), 0);
-    assert_eq!(control.emergency_cap_steps(), 0);
 }
 
 /// A body behind the rider on the rider's own band stays the rider's follower
