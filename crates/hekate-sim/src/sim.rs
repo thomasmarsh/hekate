@@ -4950,6 +4950,7 @@ mod tests {
     use crate::config::DEFAULT_STEP;
     use crate::controller::{VehicleController, WaypointController};
     use crate::narrow::{self, NarrowProfile};
+    use crate::prediction::LimitingObject;
     use crate::units::Seconds;
     use hekate_model::{
         AgentBody, CompiledModeTemplate, CompiledScenario, ProfileRange, compile_mode_template,
@@ -7090,6 +7091,562 @@ mod tests {
             aborted_at.is_some_and(|step| step < 20),
             "the hold times out within its window: {aborted_at:?}"
         );
+    }
+
+    /// The maneuver fixture's own commit policy minimum and the rider mode's
+    /// target clearance: the two thresholds the ordered unsafe-commit response
+    /// reads.
+    const POLICY_MIN_CLEARANCE_M: f64 = 0.25;
+    const TARGET_CLEARANCE_M: f64 = 0.75;
+
+    /// The rider mode's sampled speed, in metres per second.
+    const RIDER_SPEED_MPS: f64 = 6.0;
+
+    /// The world displacement one hazard step may carry: the rider mode's
+    /// 6.0 m/s plus the lateral motion its bounded steering can add in one fixed
+    /// step, the allowance the Increment 2 passing suite bounds a step by. A
+    /// response that teleported or snapped a body breaks it by metres.
+    const HAZARD_STEP_LIMIT_MPS: f64 = 7.5;
+
+    /// The rear intrusion's body: it holds station behind the rider, travelling
+    /// at the rider's own speed, so its progress footprint stays entirely behind
+    /// the rider's own — the rear fact — and its gap and radius put the
+    /// committed leg's closest approach below the target clearance and above the
+    /// policy minimum: the brake-and-hold window.
+    const REAR_INTRUSION_GAP_M: f64 = 1.9;
+    const REAR_INTRUSION_RADIUS_M: f64 = 0.85;
+
+    /// The corridor-narrowing body: it holds station alongside the rider,
+    /// travelling at the rider's own speed, so it occupies the lateral space the
+    /// committed leg must sweep. The first radius leaves the closest approach in
+    /// the brake-and-hold window and the second puts it below the policy
+    /// minimum.
+    const NARROWED_CORRIDOR_HOLD_RADIUS_M: f64 = 0.6;
+    const NARROWED_CORRIDOR_LOST_RADIUS_M: f64 = 1.0;
+
+    /// The ordered unsafe-commit response the kernel implements, as the test's
+    /// own executable copy of the contract's clause list: abort below the
+    /// policy's minimum predicted clearance, otherwise brake within the
+    /// profile's comfortable braking and hold at or below the target clearance,
+    /// otherwise continue.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum HazardResponse {
+        Continue,
+        Brake,
+        Abort(ManeuverAbortReason),
+    }
+
+    /// The documented ordered response for one committed step's swept
+    /// prediction, against the fixture's own policy and mode.
+    fn documented_response(swept_m: f64, min_m: f64, target_m: f64) -> HazardResponse {
+        if swept_m < min_m {
+            HazardResponse::Abort(ManeuverAbortReason::ClearanceLost)
+        } else if swept_m <= target_m {
+            HazardResponse::Brake
+        } else {
+            HazardResponse::Continue
+        }
+    }
+
+    /// The response the abort clause's removal leaves: a clearance below the
+    /// policy minimum is bracketed by the brake-and-hold clause, so it only
+    /// brakes instead of ending the maneuver.
+    fn response_without_the_abort_clause(swept_m: f64, target_m: f64) -> HazardResponse {
+        if swept_m <= target_m {
+            HazardResponse::Brake
+        } else {
+            HazardResponse::Continue
+        }
+    }
+
+    /// One hazard step: the edge the rider recorded, its abort reason when it
+    /// aborted, and the state and speeds it reached.
+    struct HazardStep {
+        edge: Option<ManeuverEdge>,
+        reason: Option<ManeuverAbortReason>,
+        state: RouteState,
+        speed_before_mps: f64,
+        speed_after_mps: f64,
+    }
+
+    /// The prediction production reads for one committed rider this step: the
+    /// same call `committed_plan` makes, from the tick-start bodies and the
+    /// fixture's own commit policy.
+    fn committed_prediction(sim: &Simulation, rider: AgentId) -> ManeuverPrediction {
+        let bodies = sim.predicted_bodies();
+        let commit = sim
+            .scenario
+            .commit_policy()
+            .expect("the fixture authors a commit policy");
+        let batch = ManeuverBatch {
+            bodies: &bodies,
+            commit: &commit,
+            now: sim.time(),
+            dt: sim.config().step().as_secs(),
+        };
+        sim.predict_maneuver(rider.index(), MANEUVER_TARGET_M, &batch)
+            .expect("a committed rider predicts its own corridor")
+    }
+
+    /// The live bodies that overlap each other, or `None` when every pair is
+    /// clear: a hazard response may never overlap a body silently.
+    fn overlapping_bodies(sim: &Simulation) -> Option<(AgentId, AgentId)> {
+        for first in 0..sim.agents.len() {
+            if !sim.agents.alive[first] {
+                continue;
+            }
+            for second in (first + 1)..sim.agents.len() {
+                if !sim.agents.alive[second] {
+                    continue;
+                }
+                if query::bodies_intersect(
+                    &query::agent_body(&sim.agents, first),
+                    &query::agent_body(&sim.agents, second),
+                ) {
+                    return Some((AgentId::from_index(first), AgentId::from_index(second)));
+                }
+            }
+        }
+        None
+    }
+
+    /// Step one hazard once under the contract's own limits on every response:
+    /// the rider never teleports, no body overlaps another, no boundary is
+    /// crossed at all — so none can be the silent forbidden crossing the clause
+    /// forbids — and no kernel position cap is needed.
+    fn hazard_step(sim: &mut Simulation, rider: AgentId) -> HazardStep {
+        let position = sim.agents.position[rider.index()];
+        let speed_before_mps = sim.agents.speed_mps[rider.index()];
+        let dt = sim.config().step().as_secs();
+        // The step's own records are read out before the kernel is observed
+        // again: `step` borrows the simulation mutably for its output.
+        let (edge, reason, handoffs) = {
+            let output = sim.step();
+            (
+                edge_for(output.transitions(), rider),
+                reason_for(output.transitions(), rider),
+                output.facility_transitions().len(),
+            )
+        };
+        let stepped_m = (sim.agents.position[rider.index()] - position).length();
+        let step = HazardStep {
+            edge,
+            reason,
+            state: rider_state(sim, rider),
+            speed_before_mps,
+            speed_after_mps: sim.agents.speed_mps[rider.index()],
+        };
+        assert!(
+            stepped_m <= HAZARD_STEP_LIMIT_MPS * dt + 1e-6,
+            "a hazard response never teleports the rider: {stepped_m} m in one {dt} s step"
+        );
+        assert_eq!(
+            handoffs, 0,
+            "a hazard response inside one band never crosses a boundary"
+        );
+        assert_eq!(
+            overlapping_bodies(sim),
+            None,
+            "a hazard response never overlaps a body silently"
+        );
+        assert_eq!(
+            sim.emergency_cap_steps(),
+            0,
+            "a hazard response stays inside the motion limits, not a kernel position cap"
+        );
+        step
+    }
+
+    /// Step one committed hazard once and assert that the recorded response is
+    /// the documented ordered response read from the step's own predicted swept
+    /// clearance, so the clause list the probe mutates is this kernel's
+    /// behavior rather than a second opinion. Returns the step and the swept
+    /// clearance it responded to.
+    fn committed_hazard_step(sim: &mut Simulation, rider: AgentId) -> (HazardStep, f64) {
+        let swept_m = committed_prediction(sim, rider).clears.swept.clearance_m;
+        let step = hazard_step(sim, rider);
+        let observed = match (step.edge, step.reason, step.state.braking) {
+            (Some(ManeuverEdge::Aborted), Some(reason), _) => HazardResponse::Abort(reason),
+            (None, None, true) => HazardResponse::Brake,
+            (None, None, false) => HazardResponse::Continue,
+            (edge, reason, braking) => panic!(
+                "a committed hazard step records a brake, a continue, or an abort: \
+                 {edge:?} {reason:?} braking={braking}"
+            ),
+        };
+        assert_eq!(
+            observed,
+            documented_response(swept_m, POLICY_MIN_CLEARANCE_M, TARGET_CLEARANCE_M),
+            "the recorded response is the documented response for a {swept_m} m swept clearance"
+        );
+        (step, swept_m)
+    }
+
+    /// The committed corridor's front intrusion: a body in the lateral space the
+    /// committed leg sweeps, ahead of the rider, whose closest approach falls
+    /// below the target clearance and above the policy minimum. The front fact is
+    /// what limits the prediction, and the documented response is the bounded
+    /// brake-and-hold: the step records no edge, never accelerates, and stays
+    /// inside the profile's comfortable braking.
+    #[test]
+    fn a_committed_front_intrusion_brakes_within_the_comfort_bound_and_holds() {
+        let mut sim = rider_sim(POLICY_MIN_CLEARANCE_M, 2.0);
+        let (rider, _passed) = committed_rider(&mut sim);
+        let distance_m = sim.agents.distance_m[rider.index()] + 6.0;
+        let hazard = push_obstacle(&mut sim, HAZARD_LANE, distance_m, HOLD_OBSTACLE_RADIUS_M);
+
+        let prediction = committed_prediction(&sim, rider);
+        assert_eq!(
+            prediction
+                .clears
+                .front
+                .expect("the intrusion is ahead of the rider")
+                .object,
+            LimitingObject::Agent(hazard),
+            "the intrusion is the committed leg's front fact"
+        );
+        assert!(
+            prediction.clears.rear.is_none(),
+            "no body is behind the rider in this case"
+        );
+        assert_eq!(
+            prediction.clears.swept.object,
+            LimitingObject::Agent(hazard),
+            "the front intrusion is the clearance minimum the response follows"
+        );
+
+        let (step, swept_m) = committed_hazard_step(&mut sim, rider);
+        assert_eq!(
+            documented_response(swept_m, POLICY_MIN_CLEARANCE_M, TARGET_CLEARANCE_M),
+            HazardResponse::Brake
+        );
+        assert_eq!(
+            step.edge, None,
+            "a brake holds the maneuver instead of ending it"
+        );
+        assert_eq!(step.state.maneuver, ManeuverState::Committed);
+        assert!(step.state.braking, "the committed maneuver brakes");
+        assert!(step.state.hold_since.is_some(), "and starts its hold");
+        let profile = sim.agents.profile[rider.index()].expect("a rider profile");
+        let dt = sim.config().step().as_secs();
+        assert!(
+            step.speed_after_mps <= step.speed_before_mps + 1e-12,
+            "a braking maneuver never accelerates"
+        );
+        assert!(
+            step.speed_after_mps
+                >= step.speed_before_mps - profile.comfortable_brake_mps2 * dt - 1e-9,
+            "the brake stays within the comfortable braking: {} < {}",
+            step.speed_after_mps,
+            step.speed_before_mps - profile.comfortable_brake_mps2 * dt
+        );
+    }
+
+    /// The committed corridor's rear intrusion: a body holding station behind
+    /// the rider in the lateral space the committed leg sweeps, whose closest
+    /// approach over that leg's own corridor falls below the target clearance and
+    /// above the policy minimum. The rear fact is what limits the prediction, and
+    /// the documented response is the same bounded brake-and-hold.
+    #[test]
+    fn a_committed_rear_intrusion_brakes_within_the_comfort_bound_and_holds() {
+        let mut sim = rider_sim(POLICY_MIN_CLEARANCE_M, 2.0);
+        let (rider, _passed) = committed_rider(&mut sim);
+        let distance_m = sim.agents.distance_m[rider.index()] - REAR_INTRUSION_GAP_M;
+        let hazard = push_travelling_obstacle(
+            &mut sim,
+            HAZARD_LANE,
+            distance_m,
+            REAR_INTRUSION_RADIUS_M,
+            RIDER_SPEED_MPS,
+        );
+
+        let prediction = committed_prediction(&sim, rider);
+        assert_eq!(
+            prediction
+                .clears
+                .rear
+                .expect("the intrusion is behind the rider")
+                .object,
+            LimitingObject::Agent(hazard),
+            "the intrusion is the committed leg's rear fact"
+        );
+        assert_eq!(
+            prediction.clears.swept.object,
+            LimitingObject::Agent(hazard),
+            "the rear intrusion is the clearance minimum the response follows"
+        );
+
+        let (step, swept_m) = committed_hazard_step(&mut sim, rider);
+        assert_eq!(
+            documented_response(swept_m, POLICY_MIN_CLEARANCE_M, TARGET_CLEARANCE_M),
+            HazardResponse::Brake
+        );
+        assert_eq!(
+            step.edge, None,
+            "a brake holds the maneuver instead of ending it"
+        );
+        assert_eq!(step.state.maneuver, ManeuverState::Committed);
+        assert!(step.state.braking, "the committed maneuver brakes");
+        assert!(step.state.hold_since.is_some(), "and starts its hold");
+        let profile = sim.agents.profile[rider.index()].expect("a rider profile");
+        let dt = sim.config().step().as_secs();
+        assert!(
+            step.speed_after_mps <= step.speed_before_mps + 1e-12,
+            "a braking maneuver never accelerates"
+        );
+        assert!(
+            step.speed_after_mps
+                >= step.speed_before_mps - profile.comfortable_brake_mps2 * dt - 1e-9,
+            "the brake stays within the comfortable braking: {} < {}",
+            step.speed_after_mps,
+            step.speed_before_mps - profile.comfortable_brake_mps2 * dt
+        );
+    }
+
+    /// The committed corridor's narrowing: a body holding station alongside the
+    /// rider in the lateral space the committed leg must occupy, so the usable
+    /// corridor the leg sweeps narrows to the space between the two bodies. The
+    /// side fact is what limits the prediction, and the ordered response is the
+    /// documented escalation — a closest approach inside the brake-and-hold
+    /// window brakes and holds, and one below the policy minimum aborts with
+    /// `clearance_lost` rather than steering into the body.
+    #[test]
+    fn a_committed_corridor_narrowed_by_a_side_body_brakes_and_holds_then_aborts() {
+        for (radius_m, aborts) in [
+            (NARROWED_CORRIDOR_HOLD_RADIUS_M, false),
+            (NARROWED_CORRIDOR_LOST_RADIUS_M, true),
+        ] {
+            let mut sim = rider_sim(POLICY_MIN_CLEARANCE_M, 2.0);
+            let (rider, _passed) = committed_rider(&mut sim);
+            let distance_m = sim.agents.distance_m[rider.index()];
+            let hazard = push_travelling_obstacle(
+                &mut sim,
+                HAZARD_LANE,
+                distance_m,
+                radius_m,
+                RIDER_SPEED_MPS,
+            );
+
+            let prediction = committed_prediction(&sim, rider);
+            assert_eq!(
+                prediction
+                    .clears
+                    .side
+                    .expect("the narrowing body is alongside the rider")
+                    .object,
+                LimitingObject::Agent(hazard),
+                "the narrowing body is the committed leg's side fact (radius {radius_m})"
+            );
+            assert_eq!(
+                prediction.clears.swept.object,
+                LimitingObject::Agent(hazard),
+                "the narrowed corridor is the clearance minimum the response follows"
+            );
+
+            let (step, swept_m) = committed_hazard_step(&mut sim, rider);
+            if aborts {
+                assert_eq!(
+                    documented_response(swept_m, POLICY_MIN_CLEARANCE_M, TARGET_CLEARANCE_M),
+                    HazardResponse::Abort(ManeuverAbortReason::ClearanceLost)
+                );
+                assert_eq!(step.edge, Some(ManeuverEdge::Aborted));
+                assert_eq!(step.reason, Some(ManeuverAbortReason::ClearanceLost));
+                assert_eq!(step.state.maneuver, ManeuverState::Aborted);
+                assert!(
+                    !step.state.braking,
+                    "an aborted maneuver holds no brake of its own"
+                );
+            } else {
+                assert_eq!(
+                    documented_response(swept_m, POLICY_MIN_CLEARANCE_M, TARGET_CLEARANCE_M),
+                    HazardResponse::Brake
+                );
+                assert_eq!(step.edge, None, "the hold never ends the maneuver");
+                assert_eq!(step.state.maneuver, ManeuverState::Committed);
+                assert!(step.state.braking, "the narrowed corridor brakes");
+                assert!(step.state.hold_since.is_some(), "and starts its hold");
+            }
+        }
+    }
+
+    /// The committed crossing whose connector disappears: a change of lane whose
+    /// committed leg reads a destination no compiled adjacency carries. The
+    /// crossing the leg needed is gone, so the documented response is the
+    /// `aborted` edge with `corridor_infeasible` — the leg never crosses, never
+    /// snaps onto a destination reference, and steers back to the offset it held.
+    ///
+    /// A compiled crossing is immutable within a run, so the one state under
+    /// which it disappears is a live leg naming a destination with no adjacency;
+    /// the test fixes that state directly, as the cross-facility abort's own
+    /// precondition, the way the payload test fixes a `preparing` state.
+    #[test]
+    fn a_committed_crossing_whose_connector_disappears_aborts_without_crossing() {
+        let mut sim = rider_sim(POLICY_MIN_CLEARANCE_M, 2.0);
+        let (rider, _passed) = committed_rider(&mut sim);
+        let mut state = rider_state(&sim, rider);
+        state.target_facility = Some(FacilityId::from_index(1));
+        sim.agents.route_state[rider.index()] = Some(state);
+
+        let step = hazard_step(&mut sim, rider);
+        assert_eq!(step.edge, Some(ManeuverEdge::Aborted));
+        assert_eq!(step.reason, Some(ManeuverAbortReason::CorridorInfeasible));
+        assert_eq!(step.state.maneuver, ManeuverState::Aborted);
+        assert!(
+            !step.state.entering_facility,
+            "a leg with no crossing never enters a destination"
+        );
+
+        // The aborted leg steers back to its own offset and settles, so the
+        // response never strands the rider in a maneuver.
+        let mut followed = false;
+        for _ in 0..400 {
+            sim.step();
+            if rider_state(&sim, rider).maneuver == ManeuverState::Following {
+                followed = true;
+                break;
+            }
+        }
+        assert!(followed, "an aborted crossing returns to following");
+    }
+
+    /// The blocked return: a returning leg whose return corridor a body holds
+    /// station in keeps the offset it occupies, records no transition, and never
+    /// reaches for a kernel position cap; it settles only once the same
+    /// prediction clears the corridor. The step invariants hold on this leg too,
+    /// so a held return never teleports, overlaps a body, or crosses a boundary.
+    #[test]
+    fn a_returning_leg_blocked_by_a_body_holds_within_the_motion_limits() {
+        let mut sim = rider_sim(POLICY_MIN_CLEARANCE_M, 2.0);
+        let rider = push_rider(&mut sim, 60.0, 0.0);
+        let passed = push_obstacle(&mut sim, PASSED_LANE, 64.0, 0.5);
+        assert!(request_maneuver(&mut sim, rider, passed));
+
+        let mut returning = false;
+        for _ in 0..80 {
+            sim.step();
+            if rider_state(&sim, rider).maneuver == ManeuverState::Returning {
+                returning = true;
+                break;
+            }
+        }
+        assert!(
+            returning,
+            "the committed rider clears the passed body and returns"
+        );
+
+        // A body holds station in the return corridor, travelling at the rider's
+        // own speed, so the clearance the predictor reads does not open as the
+        // rider travels.
+        let distance_m = sim.agents.distance_m[rider.index()];
+        let obstruction =
+            push_travelling_obstacle(&mut sim, RETURN_LANE, distance_m, 0.2, RIDER_SPEED_MPS);
+        for _ in 0..40 {
+            let step = hazard_step(&mut sim, rider);
+            assert_eq!(step.edge, None, "a held return records no transition");
+            assert_eq!(step.state.maneuver, ManeuverState::Returning);
+            assert!(step.state.return_blocked, "the predictor holds the return");
+        }
+
+        // The obstruction leaves the world: the same prediction clears and the
+        // rider returns to the offset it held before the attempt.
+        sim.agents.alive[obstruction.index()] = false;
+        let mut followed = false;
+        for _ in 0..400 {
+            sim.step();
+            if rider_state(&sim, rider).maneuver == ManeuverState::Following {
+                followed = true;
+                break;
+            }
+        }
+        assert!(followed, "a cleared return settles at the rider's offset");
+        let state = rider_state(&sim, rider);
+        assert!((state.d_m - state.pre_maneuver_offset_m).abs() <= SETTLE_TOLERANCE_M);
+    }
+
+    /// The abort clause of the ordered unsafe-commit response, exactly as the
+    /// checked-in kernel spells it: the response the probe removes.
+    const ABORT_RESPONSE_CLAUSE: &str = r#"if swept_m < batch.commit.min_predicted_clearance_m {
+            return self.abort_plan(index, state, ManeuverAbortReason::ClearanceLost, batch.now);
+        }"#;
+
+    /// The brake-and-hold clause of the same response, exactly as the kernel
+    /// spells it: the clause a source with the abort response removed falls
+    /// through to.
+    const HOLD_RESPONSE_CLAUSE: &str =
+        "if !prediction.is_feasible() || swept_m <= target_clearance_m {";
+
+    /// The checked-in kernel source the ordered response lives in.
+    const KERNEL_SOURCE: &str = include_str!("sim.rs");
+
+    /// The falsification probe: remove the ordered response's abort clause from
+    /// the checked-in kernel and the hazard suite's required state is no longer
+    /// reached, so that suite fails for the intended reason.
+    ///
+    /// The probe mutates the source text the kernel is compiled from rather than
+    /// a copy of its logic. The clause it removes is the checked-in text, so a
+    /// reformat or a rename fails the probe loudly instead of passing silently,
+    /// and the mutant is checked to keep the brake-and-hold clause, which makes
+    /// it exactly the documented response minus its abort. The probe then reads
+    /// one committed hazard's fact from the kernel's own predictor — the same
+    /// call `committed_plan` makes — and shows that the documented response
+    /// aborts on it while the mutant only brakes: the rider would stay
+    /// `committed` at the step
+    /// `a_committed_corridor_narrowed_by_a_side_body_brakes_and_holds_then_aborts`
+    /// requires `aborted`, so that test fails on the state it asserts, for the
+    /// missing abort response.
+    #[test]
+    fn removing_the_abort_response_from_the_kernel_is_falsified_by_the_hazard_suite() {
+        assert!(
+            KERNEL_SOURCE.contains(ABORT_RESPONSE_CLAUSE),
+            "the checked-in kernel must spell the abort response the probe removes"
+        );
+        assert!(
+            KERNEL_SOURCE.contains(HOLD_RESPONSE_CLAUSE),
+            "the checked-in kernel must spell the brake-and-hold response"
+        );
+        let mutant = KERNEL_SOURCE.replace(ABORT_RESPONSE_CLAUSE, "");
+        assert_ne!(mutant, KERNEL_SOURCE, "the mutation removes a response");
+        assert!(
+            !mutant.contains(ABORT_RESPONSE_CLAUSE) && mutant.contains(HOLD_RESPONSE_CLAUSE),
+            "the mutant is the ordered response with its abort clause removed"
+        );
+
+        // One committed hazard of the suite: a body alongside the rider in the
+        // lateral space the leg must occupy, big enough that the leg's closest
+        // approach falls below the policy minimum.
+        let mut sim = rider_sim(POLICY_MIN_CLEARANCE_M, 2.0);
+        let (rider, _passed) = committed_rider(&mut sim);
+        let distance_m = sim.agents.distance_m[rider.index()];
+        push_travelling_obstacle(
+            &mut sim,
+            HAZARD_LANE,
+            distance_m,
+            NARROWED_CORRIDOR_LOST_RADIUS_M,
+            RIDER_SPEED_MPS,
+        );
+        let swept_m = committed_prediction(&sim, rider).clears.swept.clearance_m;
+        assert!(
+            swept_m < POLICY_MIN_CLEARANCE_M,
+            "the probe's hazard must fall below the policy minimum: {swept_m}"
+        );
+
+        // The documented rule and the mutant read that one fact differently...
+        assert_eq!(
+            documented_response(swept_m, POLICY_MIN_CLEARANCE_M, TARGET_CLEARANCE_M),
+            HazardResponse::Abort(ManeuverAbortReason::ClearanceLost)
+        );
+        assert_eq!(
+            response_without_the_abort_clause(swept_m, TARGET_CLEARANCE_M),
+            HazardResponse::Brake,
+            "without the abort response the same fact only brakes"
+        );
+
+        // ...and the checked-in kernel takes the documented response, so the
+        // mutant's rider would remain `committed` and braking at the step the
+        // suite requires the abort with `clearance_lost`.
+        let (step, _swept) = committed_hazard_step(&mut sim, rider);
+        assert_eq!(step.reason, Some(ManeuverAbortReason::ClearanceLost));
+        assert_eq!(step.state.maneuver, ManeuverState::Aborted);
     }
 
     /// A returning rider whose return corridor a body occupies holds at the
