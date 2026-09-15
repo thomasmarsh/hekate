@@ -1016,4 +1016,97 @@ mod tests {
         assert_eq!(PassSide::Left.label(), "left");
         assert_eq!(PassSide::Right.label(), "right");
     }
+
+    /// The six orderings of three claims, so an insertion-order test can feed
+    /// every one of them to the batch.
+    fn permutations(claims: [CorridorClaim; 3]) -> [[CorridorClaim; 3]; 6] {
+        let [first, second, third] = claims;
+        [
+            [first, second, third],
+            [first, third, second],
+            [second, first, third],
+            [second, third, first],
+            [third, first, second],
+            [third, second, first],
+        ]
+    }
+
+    /// Three claims contest one corridor and the batch picks the same winner in
+    /// every insertion order, so the outcome is a pure function of the claims
+    /// rather than of the order they arrive in.
+    #[test]
+    fn three_conflicting_claims_resolve_identically_in_every_insertion_order() {
+        let corridor = corridor(0, (40.0, 60.0), (0.0, 1.5));
+        let near = claim(0, corridor, 1.0, false);
+        let mid = claim(1, corridor, 5.0, false);
+        let far = claim(2, corridor, 9.0, false);
+        let reference = arbitrate_claims(&[near, mid, far]);
+        assert!(outcome(&reference, 0).granted, "the nearest claim wins");
+        assert_eq!(outcome(&reference, 1).lost_to, Some(AgentId::from_index(0)));
+        assert_eq!(outcome(&reference, 2).lost_to, Some(AgentId::from_index(0)));
+        for order in permutations([near, mid, far]) {
+            assert_eq!(
+                arbitrate_claims(&order),
+                reference,
+                "the winner is unchanged by insertion order: {order:?}"
+            );
+        }
+    }
+
+    /// Three claims exactly tied on the committed clause and the entry distance
+    /// are decided by the third: the lower agent id, in every insertion order.
+    /// The tie resolves to the documented stable key, not to a fixed identity.
+    #[test]
+    fn a_three_way_exact_tie_is_won_by_the_lowest_agent_id_in_every_permutation() {
+        let corridor = corridor(0, (40.0, 60.0), (0.0, 1.5));
+        let low = claim(1, corridor, 5.0, false);
+        let mid = claim(2, corridor, 5.0, false);
+        let high = claim(3, corridor, 5.0, false);
+        for order in permutations([low, mid, high]) {
+            let outcomes = arbitrate_claims(&order);
+            assert!(
+                outcome(&outcomes, 1).granted,
+                "the lowest id wins an exact tie in insertion order {order:?}"
+            );
+            assert_eq!(
+                outcome(&outcomes, 2).lost_to,
+                Some(AgentId::from_index(1)),
+                "the middle claim loses to the lowest id"
+            );
+            assert_eq!(
+                outcome(&outcomes, 3).lost_to,
+                Some(AgentId::from_index(1)),
+                "the highest claim loses to the lowest id"
+            );
+        }
+    }
+
+    /// A commitment keeps its corridor against two preparing claims: the
+    /// committed claimant outranks both even when they are nearer, so an
+    /// existing maneuver is never revoked mid-step.
+    #[test]
+    fn a_committed_claim_keeps_its_corridor_against_two_preparing_claims() {
+        let corridor = corridor(0, (40.0, 60.0), (0.0, 1.5));
+        let committed = claim(3, corridor, 20.0, true);
+        let near = claim(0, corridor, 1.0, false);
+        let far = claim(1, corridor, 5.0, false);
+        for order in permutations([committed, near, far]) {
+            let outcomes = arbitrate_claims(&order);
+            assert!(
+                outcome(&outcomes, 3).granted,
+                "the commitment keeps its corridor against both preparing claims"
+            );
+            for loser in [0, 1] {
+                assert!(
+                    !outcome(&outcomes, loser).granted,
+                    "a preparing claim is rejected while the corridor is committed"
+                );
+                assert_eq!(
+                    outcome(&outcomes, loser).lost_to,
+                    Some(AgentId::from_index(3)),
+                    "the loser names the committed claimant"
+                );
+            }
+        }
+    }
 }
