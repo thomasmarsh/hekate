@@ -1,0 +1,173 @@
+// TAS-110: the lateral-disabled ablation twin of the Increment 2 representative
+// mixed-mode performance profile.
+//
+// This is `mixed_mode_profile_v2.json5` with the lateral machinery removed and
+// nothing else changed: the same two one-way 7.5 m lanes, the same three modes
+// at the same declared density, the same fixed seed bank, the same clearance
+// bands, and the same demand. What is gone is exactly the Increment 2 lateral
+// subject — the `overtake`/`pass` tactics, each mode's `lateral` parameters (and
+// the lateral wheeled profile parameters compiled only with them), both
+// facilities' `lateral_policy`, and the scenario `maneuver_policy` the tactics
+// require. A body still follows, stops, and yields, and the opposing stream
+// still runs, but no agent displaces laterally past another.
+//
+// The comparison the profile reads it for is a bounded-window ablation, not a
+// second checked-in workload: at a fixed seed and window it measures the same
+// corridor with and without the lateral subject, so the lateral machinery's
+// cost per tick and per agent-step can be read as a difference. It is not a
+// release fixture and no row of `docs/benchmark-matrix.md` names it.
+{
+  schema_version: 2,
+  id: 'mixed_mode_profile_v2_no_lateral',
+  coordinate_system: { x: 'east_m', y: 'north_m' },
+  paths: [
+    { id: 'east_lane_guide', points: [ { x: 0.0, y: -3.75 }, { x: 400.0, y: -3.75 } ] },
+    { id: 'west_lane_guide', points: [ { x: 400.0, y: 3.75 }, { x: 0.0, y: 3.75 } ] },
+  ],
+  portals: [
+    { id: 'east_entry', path: 'east_lane_guide', end: 'start', width_m: 7.5 },
+    { id: 'east_exit', path: 'east_lane_guide', end: 'end', width_m: 7.5 },
+    { id: 'west_entry', path: 'west_lane_guide', end: 'start', width_m: 7.5 },
+    { id: 'west_exit', path: 'west_lane_guide', end: 'end', width_m: 7.5 },
+  ],
+  boundaries: [
+    { id: 'world', points: [
+      { x: -20.0, y: -20.0 }, { x: 420.0, y: -20.0 },
+      { x: 420.0, y: 20.0 }, { x: -20.0, y: 20.0 },
+    ] },
+  ],
+  regions: [
+    { id: 'east_lane_band', points: [
+      { x: 0.0, y: -7.5 }, { x: 400.0, y: -7.5 },
+      { x: 400.0, y: 0.0 }, { x: 0.0, y: 0.0 },
+    ] },
+    { id: 'west_lane_band', points: [
+      { x: 0.0, y: 0.0 }, { x: 400.0, y: 0.0 },
+      { x: 400.0, y: 7.5 }, { x: 0.0, y: 7.5 },
+    ] },
+  ],
+  facilities: [
+    { id: 'east_lane', region: 'east_lane_band', reference_path: 'east_lane_guide',
+      width_m: 7.5, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car', 'bicycle', 'scooter' ] },
+      lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+    { id: 'west_lane', region: 'west_lane_band', reference_path: 'west_lane_guide',
+      width_m: 7.5, nominal_direction: 'forward',
+      access: { modes: [ 'passenger_car', 'bicycle', 'scooter' ] },
+      lateral_use: 'shared',
+      speed_policy: { limit_mps: null } },
+  ],
+  movements: [
+    { id: 'east_through', from: 'east_entry', to: 'east_exit', path: 'east_lane_guide',
+      priority: 0, direction: 'forward' },
+    { id: 'west_through', from: 'west_entry', to: 'west_exit', path: 'west_lane_guide',
+      priority: 0, direction: 'forward' },
+  ],
+  clearance_bands: [
+    { id: 'narrow_close', threshold_m: 0.5, violation: true,
+      applies_to_modes: [ 'bicycle', 'scooter' ] },
+    { id: 'all_study', threshold_m: 3.0, violation: false },
+  ],
+  mode_templates: [
+    {
+      id: 'passenger_car',
+      body: { kind: 'box', length_m: { min: 4.5, max: 4.5 },
+        width_m: { min: 1.8, max: 1.8 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 9.0, max: 9.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'bicycle',
+      body: { kind: 'capsule', length_m: { min: 1.8, max: 1.8 },
+        radius_m: { min: 0.35, max: 0.35 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 4.5, max: 4.5 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+    {
+      id: 'scooter',
+      body: { kind: 'capsule', length_m: { min: 1.2, max: 1.2 },
+        radius_m: { min: 0.28, max: 0.28 } },
+      motion: 'single_body_wheeled',
+      tactics: [ 'follow', 'stop', 'yield' ],
+      access: { facility_kinds: [ 'facility' ], nominal_direction: 'either',
+        speed_policy: { limit_mps: null } },
+      occupancy: 'operator_only',
+      profiles: {
+        speed_mps: { min: 3.0, max: 3.0 },
+        max_accel_mps2: { min: 1.2, max: 1.2 },
+        comfortable_brake_mps2: { min: 2.0, max: 2.0 },
+        time_gap_s: { min: 1.0, max: 1.0 },
+        steering_rate_max_rad_s: { min: 0.9, max: 0.9 },
+        lateral_clearance_m: { min: 0.3, max: 0.3 },
+        compliance: { min: 1.0, max: 1.0 },
+      },
+    },
+  ],
+  demand: [
+    { id: 'car_east', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'east_entry',
+        rate_per_hour: 150.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'east_through', weight: 1.0 } ] },
+      } } },
+    { id: 'car_west', mode: 'passenger_car',
+      spawn: { rate: {
+        portal: 'west_entry',
+        rate_per_hour: 150.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'west_through', weight: 1.0 } ] },
+      } } },
+    { id: 'bicycle_east', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'east_entry',
+        rate_per_hour: 60.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'east_through', weight: 1.0 } ] },
+      } } },
+    { id: 'bicycle_west', mode: 'bicycle',
+      spawn: { rate: {
+        portal: 'west_entry',
+        rate_per_hour: 60.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'west_through', weight: 1.0 } ] },
+      } } },
+    { id: 'scooter_east', mode: 'scooter',
+      spawn: { rate: {
+        portal: 'east_entry',
+        rate_per_hour: 30.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'east_through', weight: 1.0 } ] },
+      } } },
+    { id: 'scooter_west', mode: 'scooter',
+      spawn: { rate: {
+        portal: 'west_entry',
+        rate_per_hour: 30.0,
+        interval_s: { start_s: 0.0, end_s: null },
+        choice: { movements: [ { movement: 'west_through', weight: 1.0 } ] },
+      } } },
+  ],
+}

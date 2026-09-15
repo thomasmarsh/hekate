@@ -35,6 +35,8 @@
 //! integrated tick, so it reports how close the run came to a conflict without
 //! changing a trajectory.
 
+use std::cell::Cell;
+
 use glam::DVec2;
 use hekate_model::{
     AdjacencySide, AgentFamily, CommitPolicySource, CompiledFacilityAdjacency, CompiledMovement,
@@ -90,6 +92,21 @@ use crate::units::Seconds;
 use crate::wrong_way::{
     self, OpposingTraversalObservation, OpposingTraversalTracker, WrongWayInputs, WrongWayOption,
 };
+
+thread_local! {
+    /// Diagnostic prediction volume on this thread: the number of
+    /// [`Simulation::predict_candidate`] evaluations since the last
+    /// [`Simulation::reset_performance_counters`].
+    ///
+    /// The counter is inert: no decision, event, trace byte, or metric reads it
+    /// and it is never serialized. It exists only to size the representative
+    /// performance profile (`TAS-110`).
+    static PREDICTIONS: Cell<u64> = const { Cell::new(0) };
+    /// Diagnostic prediction volume on this thread: the candidate obstacle
+    /// bodies those predictions considered, summed since the last
+    /// [`Simulation::reset_performance_counters`]. Diagnostic only.
+    static PREDICTION_CANDIDATES: Cell<u64> = const { Cell::new(0) };
+}
 
 /// Extra clearance in metres demanded beyond two bodies' half-lengths when a
 /// portal admits a vehicle.
@@ -258,6 +275,25 @@ impl RunSummary {
     pub fn remaining(&self) -> usize {
         self.remaining
     }
+}
+
+/// Diagnostic counters for the representative performance profile
+/// (`TAS-110`), read through [`Simulation::performance_counters`].
+///
+/// They are instrumentation, not simulation state: no decision, event, trace
+/// byte, or metric reads them, and they are never serialized.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PerformanceCounters {
+    /// Candidate bodies the broad-phase queries returned, summed over the run:
+    /// the spatial index, the interaction-metrics pass, and the safety monitor
+    /// all count here, because they share [`crate::index::BroadPhase`].
+    pub broad_phase_candidates: u64,
+    /// [`Simulation::predict_candidate`] evaluations: the tactical predictor's
+    /// total work per run.
+    pub predictions: u64,
+    /// Candidate obstacle bodies those predictions considered, summed over the
+    /// run: `predictions` times the live population the predictor scans.
+    pub prediction_candidates: u64,
 }
 
 /// The kernel: a compiled scenario plus authoritative clock and agent state.
@@ -633,6 +669,30 @@ impl Simulation {
     /// Number of live agents.
     pub fn agent_count(&self) -> usize {
         self.agents.alive_count()
+    }
+
+    /// Diagnostic performance counters accumulated on this thread since the
+    /// last [`Self::reset_performance_counters`].
+    ///
+    /// These are instrumentation for the representative profile (`TAS-110`),
+    /// not simulation state: no decision, event, trace byte, or metric reads
+    /// them, they are never serialized, and a run's outcome is identical with
+    /// and without them. They are thread-scoped because a `Simulation` is
+    /// stepped on the thread that created it.
+    pub fn performance_counters() -> PerformanceCounters {
+        PerformanceCounters {
+            broad_phase_candidates: index::broad_phase_candidates(),
+            predictions: PREDICTIONS.with(Cell::get),
+            prediction_candidates: PREDICTION_CANDIDATES.with(Cell::get),
+        }
+    }
+
+    /// Zero this thread's diagnostic performance counters. Instrumentation
+    /// only; see [`Self::performance_counters`].
+    pub fn reset_performance_counters() {
+        index::reset_broad_phase_candidates();
+        PREDICTIONS.with(|count| count.set(0));
+        PREDICTION_CANDIDATES.with(|count| count.set(0));
     }
 
     /// Vehicles waiting for safe admission at one demand source.
@@ -2258,6 +2318,11 @@ impl Simulation {
             .copied()
             .filter(|body| body.id != agent)
             .collect();
+        // Diagnostic instrumentation only (`TAS-110`): count this predictor
+        // evaluation and the candidate bodies it scans. Nothing below reads
+        // these counters.
+        PREDICTIONS.with(|count| count.set(count.get() + 1));
+        PREDICTION_CANDIDATES.with(|count| count.set(count.get() + others.len() as u64));
         // The bounded-steering envelope is expressed in the agent's own travel
         // frame, so the body it starts from faces the direction of travel. A
         // reverse traveller's stored heading is its reference tangent, so it

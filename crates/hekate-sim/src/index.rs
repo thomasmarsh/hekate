@@ -45,11 +45,38 @@
 //! its own exact shape test, such as [`crate::query::bodies_intersect`] or
 //! [`circle_overlaps_ring`], to each result.
 
+use std::cell::Cell as Counter;
+
 use glam::DVec2;
 
 use crate::agent::{AgentId, AgentStore};
 use crate::query::{self, Aabb, BodyShape};
 use crate::swept::SweptBody;
+
+thread_local! {
+    /// Diagnostic broad-phase volume on this thread: the number of candidate
+    /// bodies [`BroadPhase::candidates_in_aabb`] returned, summed since the
+    /// last [`reset_broad_phase_candidates`].
+    ///
+    /// The counter is inert: no decision, event, trace byte, or metric reads it
+    /// and it is never serialized. It exists only to size the representative
+    /// performance profile (`TAS-110`). `candidates_overlapping`,
+    /// `candidate_pairs`, and [`SweptBroadPhase`]'s queries all route through
+    /// `candidates_in_aabb`, so their candidate volume is counted here too.
+    static BROAD_PHASE_CANDIDATES: Counter<u64> = const { Counter::new(0) };
+}
+
+/// Candidate bodies the broad phase returned on this thread since the last
+/// [`reset_broad_phase_candidates`]. Diagnostic only; see
+/// [`BroadPhase::candidates_in_aabb`].
+pub(crate) fn broad_phase_candidates() -> u64 {
+    BROAD_PHASE_CANDIDATES.with(Counter::get)
+}
+
+/// Zero this thread's broad-phase candidate counter. Diagnostic only.
+pub(crate) fn reset_broad_phase_candidates() {
+    BROAD_PHASE_CANDIDATES.with(|count| count.set(0));
+}
 
 /// Edge length in metres of one uniform-grid cell.
 ///
@@ -188,6 +215,7 @@ impl BroadPhase {
         // Cells are visited in row-major order, which is not the documented
         // order across cells; the ids within a cell are already ascending.
         out.sort_unstable();
+        BROAD_PHASE_CANDIDATES.with(|count| count.set(count.get() + out.len() as u64));
     }
 
     /// The bodies that may overlap `bounds`, in ascending [`AgentId`] order.

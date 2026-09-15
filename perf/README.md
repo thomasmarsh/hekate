@@ -355,6 +355,107 @@ backs any performance claim above the flowing density. The reshaped workload
 still exposes the same dominant work, because `predict_candidate` scans the
 candidate population every tick.
 
+### Instrumented counters, presenter frame time, and the lateral ablation
+
+The performance counters the profile reads are additive and non-behavioural: the
+kernel gains a broad-phase candidate counter in `crates/hekate-sim/src/index.rs`
+and a prediction counter in `crates/hekate-sim/src/sim.rs`, exposed through
+`Simulation::performance_counters()` and `Simulation::reset_performance_counters()`.
+They are thread-scoped and never serialized; no decision, event, trace byte,
+golden, or metric reads them, so a run is byte-identical with and without them.
+The bounded release measurement runs the profile and its lateral-disabled twin
+for 5 000 ticks at the fixture's seed-bank entry 11 after a 500-tick warm-up,
+three timed passes each:
+
+```sh
+cargo test --release -p hekate-sim --test performance_counters -- --ignored --nocapture
+```
+
+| quantity | enabled | disabled (no lateral) |
+|---|---|---|
+| µs/tick, min / median | 861.4 / 863.8 | 25.4 / 25.5 |
+| µs/tick, three passes | 863.8, 866.1, 861.4 | 25.4, 25.5, 25.8 |
+| agent steps (5 000 ticks) | 39 658 | 43 244 |
+| agent steps / tick | 7.932 | 8.649 |
+| broad-phase candidates | 164 585 | 186 284 |
+| broad-phase candidates / agent-step | 4.150 | 4.308 |
+| `predict_candidate` evaluations (`predictions`) | 7 672 | 0 |
+| predictions / agent-step | 0.193 | 0.000 |
+| prediction candidate bodies | 52 032 | 0 |
+| prediction candidate bodies / agent-step | 1.312 | 0.000 |
+| µs per agent-step | 108.9 | 2.95 |
+
+Reading:
+
+- **Broad-phase candidate volume is population-driven, not lateral-driven.**
+  4.15 candidates per agent-step enabled against 4.31 disabled: the 5 000-tick
+  broad-phase work tracks the live population, not the lateral subject.
+- **Prediction work is the tactical cadence.** The enabled run evaluates the
+  predictor 0.193 times per agent-step — an agent that carries a lateral route
+  state predicts on about one step in five — and scans 1.312 candidate obstacle
+  bodies per agent-step. The disabled twin never evaluates it (0), because no
+  agent declares a lateral tactic.
+- **The lateral machinery is 97.1 % of the bounded per-tick cost** (median
+  863.8 against 25.5 µs/tick; 108.9 against 2.95 µs per agent-step). On this
+  workload the whole Increment 2 lateral subject — tactic selection, the
+  predictor's candidate scan, and commitment — is essentially the tick, which
+  matches the sampled profile's 95.7 % in `predict_candidate`.
+- **The disabled twin admits more agent steps** (43 244 against 39 658) because
+  without passing a car queues behind a slower leader over the whole corridor;
+  the per-tick comparison is at nearly equal live population (8.65 against
+  7.93 agent steps per tick).
+- **This is a bounded-window ablation, not the hour.** The 5 000-tick window is
+  250 simulated seconds of the flowing regime, not the one-hour pass; it measures
+  the same corridor with and without the lateral subject at one fixed seed and
+  window. Only the enabled hour is benchmarked.
+
+End-to-end corroboration, `hekate-cli run` over the same 5 000 ticks and seed 11
+with the trace to `/dev/null`: enabled 3.651 s wall (730 µs/tick including
+scenario load and trace writing), disabled 0.138 s (27.6 µs/tick). Trace hashes
+`5bbf685ef4dcae740ff464d51c75c768910ded57548879227ad18d7349395f9a` (enabled) and
+`a3798fe57441643071bae5ea3e6fdd5457df96965330d23ff93dbd196b6d2dc6` (disabled).
+
+Presenter frame time is headless: no Bevy viewer starts and no backend draws. The
+shared, backend-agnostic projection `PresentationController::project` is timed
+alone over 5 000 distinct populated snapshot pairs of the same 5 000-tick window
+(the snapshots are built outside the timed interval):
+
+```sh
+cargo test --release -p hekate-present --test presenter_frame_time -- --ignored --nocapture
+```
+
+| quantity | measured |
+|---|---|
+| µs/frame | 0.735 |
+| bodies/frame | 7.998 |
+| frames | 5 000 |
+
+The projection costs well under a microsecond per frame at this population —
+four orders of magnitude below the ~16 ms a 60 Hz frame allows — so a viewer's
+frame budget is dominated by rendering, not by this shared layer.
+
+### Increment 2 budgets
+
+Derived from the measured baseline with the documented 5–10 % host spread as the
+margin (ceiling = measured × 1.10), stated per window because the per-tick cost
+is window-specific. These are regression ceilings for later optimization work
+against **this** baseline: a pass below its ceiling is not a target, and no single
+pass is a budget (each row's spread is in the tables above).
+
+| budget | measured baseline | ceiling (+10 %) |
+|---|---|---|
+| per-tick wall, hour window | 1 547.65 µs/tick median (min 1 547.53; pass spread 0.04 %) | ≤ 1 702 µs/tick |
+| per-tick wall, 5 000-tick window | 863.8 µs/tick median (min 861.4; pass spread 0.55 %) | ≤ 950 µs/tick |
+| broad-phase candidates / agent-step | 4.150 | ≤ 4.6 |
+| predictions / agent-step | 0.193 | ≤ 0.21 |
+| prediction candidate bodies / agent-step | 1.312 | ≤ 1.44 |
+| lateral-disabled per-tick floor | 25.5 µs/tick median | ≤ 28 µs/tick |
+| presenter frame | 0.735 µs/frame | ≤ 0.81 µs/frame |
+
+The bounded rows are seed 11 and the hour row is the harness root seed 0; the
+budgets are per named window on this fixture and host and do not transfer to the
+Phase 1 scenarios or to another machine.
+
 ### Comparison against the frozen Phase 1 baseline
 
 Same host, same harness, same release profile; the six rows above are the frozen
@@ -410,6 +511,7 @@ the `mixed_mode_profile_v2` row.
 | `perf/profiles/mixed_mode_profile_v2-release.summary.txt` | `7a2a3913eaec7ad8536549955b318a6f07413154d98f2a9a494a262995ab1550` |
 | `perf/profiles/mixed_mode_profile_v2-release.run.txt` | `7fc1065b93759b25a4a3dc83c9c5f9e124cb8411d4ab9fd4d245be1e33976d05` |
 | `scenarios/phase2/inc2/mixed_mode_profile_v2.json5` | `2ded1590994b0060621855095f3626ddc2eb848531e59345353ccb35ae76eb6a` |
+| `scenarios/phase2/inc2/mixed_mode_profile_v2_no_lateral.json5` | `12aafb1b5bb3f3bdb499d0e2d9ff44940260f365757b13a97465f60361a63d76` |
 
 The profiled run's canonical trace hash is
 `9add5358208c42ed1d4a43bbccb71356f41cbb56b03e2b99e0b4867b66f36baa`.
@@ -426,10 +528,9 @@ The profiled run's canonical trace hash is
   not timed by the harness.
 - The release profile has no debug info and no frame pointers, so the capture is
   an attribution to frames, not a line-level profile.
-- No disabled-versus-enabled lateral ablation twin is checked in, so the lateral
-  machinery's share is read from the profile rather than isolated by an A/B
-  ablation; the comparison is to the Phase 1 baseline, not to itself without
-  lateral tactics.
-- No presenter frame time was measured: the profiled and benchmarked runs are
-  headless.
+- No headed viewer measurement was taken: presenter frame time is the headless
+  shared projection above (0.735 µs/frame), not a Bevy frame.
+- The disabled-versus-enabled lateral comparison is a bounded 5 000-tick
+  ablation twin at seed 11, not an hour-window A/B; only the enabled hour is
+  benchmarked, and the twin's hour cost is not measured.
 - The profile is one seed (root seed 0, the harness's) and one run per window.

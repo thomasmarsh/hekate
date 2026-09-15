@@ -2,9 +2,9 @@
 status: active
 context_rev: 1
 priority: P1
-updated: 2026-09-15T10:25:51Z
+updated: 2026-09-15T10:34:41Z
 summary: Record the representative mixed-mode profile and Increment 2 performance budget.
-next: Instrument per-agent-step tactical and broad-phase candidate counts and prediction work per agent-step, capture presenter frame time, then derive the Increment 2 budgets.
+next: Run the five-gate validation and resolve.
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
@@ -57,8 +57,8 @@ checked benchmark-artifact manifest test, and cargo test --workspace.
 # Result
 
 Recorded the Increment 2 representative profile on the same host as the Phase 1
-capture. Three measurements landed; the Done-when clauses that remain are named
-at the end.
+capture. All Done-when clauses are now met; the five-gate validation is the only
+remaining step.
 
 - **Release profile row.** `scenarios/phase2/inc2/mixed_mode_profile_v2.json5`
   (480 arrivals/hour on the corridor, ~9 live bodies) is now the seventh row of
@@ -85,8 +85,24 @@ at the end.
   arrivals/hour, ~18 live bodies", the gridlocked first draft's density; it now
   names the fixture's declared density (480 arrivals/hour on the corridor, ~9
   live bodies), so the harness and the artifact row agree with the fixture.
+- **Counters, presenter, ablation, budgets (this slice).** Added non-behavioural
+  counters (`Simulation::performance_counters()`): a broad-phase candidate
+  counter in `crates/hekate-sim/src/index.rs` and prediction counters in
+  `crates/hekate-sim/src/sim.rs`. Bounded release measurement at seed 11, 5 000
+  ticks, three passes: enabled 863.8 µs/tick median (861.4 min), disabled (twin
+  `scenarios/phase2/inc2/mixed_mode_profile_v2_no_lateral.json5`) 25.5 µs/tick
+  median (25.4 min) — the lateral machinery is 97.1 % of the bounded per-tick
+  cost. Per agent-step: 4.150 broad-phase candidates, 0.193 `predict_candidate`
+  evaluations, and 1.312 prediction candidate bodies enabled, 4.308 / 0 / 0
+  disabled; 108.9 against 2.95 µs per agent-step. Presenter projection (headless,
+  `PresentationController::project`, 5 000 frames): 0.735 µs/frame at 7.998
+  bodies. End-to-end CLI corroboration at 5 000 ticks/seed 11: 3.651 s enabled
+  (730 µs/tick), 0.138 s disabled. Increment 2 budgets (ceiling = measured × 1.10,
+  the documented host spread) are recorded in `perf/README.md`: 1 702 µs/tick hour
+  window, 950 µs/tick 5 000-tick window, ≤ 4.6 broad-phase candidates/agent-step,
+  ≤ 0.21 predictions/agent-step, ≤ 1.44 prediction candidate bodies/agent-step,
+  ≤ 28 µs/tick disabled floor, ≤ 0.81 µs/frame presenter. The existing Inc2
+  fixture tests pass, the twin validates, and the counters change no trace byte.
 
-Still open (Done-when): per-agent-step tactical and broad-phase candidate counts;
-prediction work per agent-step; presenter frame time; the disabled-versus-enabled
-lateral comparison (the ablation twin is not checked in); and the budgets derived
-from the baseline.
+All Done-when clauses are met. Remaining: run the five-gate validation and
+resolve the node.

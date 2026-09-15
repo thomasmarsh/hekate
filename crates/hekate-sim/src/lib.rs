@@ -93,7 +93,10 @@ pub use query::{
 };
 pub use safety::{NEAR_MISS_THRESHOLD_M, QUEUE_STOP_SPEED_MPS};
 pub use signal::PedestrianSignalColor;
-pub use sim::{CONNECTOR_CONTINUITY_TOLERANCE_M, InitError, RunSummary, Simulation, StepOutput};
+pub use sim::{
+    CONNECTOR_CONTINUITY_TOLERANCE_M, InitError, PerformanceCounters, RunSummary, Simulation,
+    StepOutput,
+};
 pub use snapshot::{
     AgentSample, BodySegmentSample, MotionSample, RouteStateSample, Snapshot, SnapshotDetail,
 };
