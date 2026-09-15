@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 
 use glam::DVec2;
 use hekate_model::{
-    CompiledScenario, CrossingId, MovementDirection, NominalDirection, PermissionEffect,
-    parse_scenario_source_v2,
+    CompiledScenario, CrossingId, FacilityId, MovementDirection, MovementId, NominalDirection,
+    PathId, PermissionEffect, parse_scenario_source_v2,
 };
 use hekate_sim::{
     AgentId, AgentMode, DespawnReason, Event, FacilityTransitionRecord, ManeuverState,
@@ -2226,4 +2226,529 @@ fn an_interval_open_at_the_run_end_closes_at_the_final_simulation_time() {
         "the close time is the run's final simulation time"
     );
     assert_eq!(intervals[0].duration_s(), 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// TAS-132: declaration-order invariance of the checked-in wrong-way fixture
+// ---------------------------------------------------------------------------
+//
+// `scenarios/phase2/inc2/narrow_wrong_way_v2.json5` is the Increment 2
+// `CC-OPPOSE` reference TAS-131 checks in. Compilation maps authored objects to
+// dense arrays in declaration order, so reversing the fixture's `paths` and
+// `facilities` declarations permutes every dense path and facility index. This
+// suite proves that permutation never reaches the physical outcome: the same
+// agents spawn on the same schedules, turn on the same wrong-way decision,
+// travel the same world poses, meet the same bodies, and despawn at the same
+// ticks, once every record is read back through its stable name.
+//
+// The proof is a test-level variant of the TAS-131 scenario rather than a second
+// checked-in file: `inc2_scenario(true)` parses the fixture's own source and
+// reverses only its `paths` and `facilities` arrays. No other declaration moves,
+// so the demand order that fixes agent-id allocation is unchanged, and every
+// random stream is keyed by a demand-source index or an agent id rather than by
+// a path or facility index. The reversed compile therefore allocates the same
+// ids and draws the same values; only the dense path and facility indices
+// permute.
+//
+// ## What the reversal does move, and why it is not the physical outcome
+//
+// Every physical quantity is bit-identical under the reversal: agent-id
+// allocation, spawn and despawn ticks, facility handoffs, the collision scan's
+// bands, the entered and refused decisions, and every agent's world pose and
+// route state at every step. The one thing the reversal moves is the
+// *within-tick emission order* of two same-agent `Event::OpposingTraversal`
+// records: at tick 1083 agent 9's `a` close and `a_left` open swap places, and
+// at tick 1170 agent 10's `b` close and `b_left` open swap places.
+//
+// That order is not a physical quantity. `crates/hekate-sim/src/event.rs`'s
+// `order_key` sorts same-agent, same-kind records by `facility_key`, which is
+// the optional facility's *dense* array index plus one (`facility_key`'s own
+// doc: "A dense index is an array position"). The scenario's declaration order
+// legitimately controls that index, so `canonicalize` sorts each tick's
+// boundaries by their stable names before the comparison: the tick's set of
+// records is what must be invariant, and it is. This suite never edits
+// `event.rs` and never widens a tolerance; it records the ordering swap here so
+// a later reader does not rediscover it as a defect.
+
+/// The checked-in Increment 2 wrong-way fixture, read from the same path the
+/// CLI and `docs/benchmark-matrix.md` name.
+const INC2_WRONG_WAY_FIXTURE: &str =
+    include_str!("../../../scenarios/phase2/inc2/narrow_wrong_way_v2.json5");
+
+/// The four guide paths the fixture authors, in its `a`, `b`, `c`, `d` order.
+const INC2_CORRIDORS: [&str; 4] = ["guide_a", "guide_b", "guide_c", "guide_d"];
+
+/// The steps the comparison run takes. The fixture's latest admission is the
+/// disconnected corridor's rider at tick 3674, which completes its nominal
+/// route well inside this horizon.
+const INC2_STEPS: u64 = 6000;
+
+/// Compile the checked-in fixture with its `paths` and `facilities` arrays in
+/// the authored order, or reversed so every dense path and facility index
+/// permutes while every stable identifier stays.
+fn inc2_scenario(reversed: bool) -> CompiledScenario {
+    let mut source = parse_scenario_source_v2(INC2_WRONG_WAY_FIXTURE)
+        .expect("the checked-in wrong-way fixture is a version-2 document");
+    if reversed {
+        source.paths.reverse();
+        source.facilities.reverse();
+    }
+    CompiledScenario::compile_v2(source).expect("the wrong-way fixture compiles")
+}
+
+/// The dense index of the fixture's guide path named `name`.
+fn inc2_path(scenario: &CompiledScenario, name: &str) -> usize {
+    scenario
+        .paths()
+        .iter()
+        .position(|path| path.name() == name)
+        .unwrap_or_else(|| panic!("the fixture authors a guide path named '{name}'"))
+}
+
+/// The authored name of the compiled path `id`.
+fn path_name(scenario: &CompiledScenario, id: PathId) -> String {
+    scenario
+        .path(id)
+        .expect("the compiled path exists")
+        .name()
+        .to_owned()
+}
+
+/// The authored name of the compiled facility `id`.
+fn facility_name(scenario: &CompiledScenario, id: FacilityId) -> String {
+    scenario
+        .facility(id)
+        .expect("the compiled facility exists")
+        .name()
+        .to_owned()
+}
+
+/// The authored name of the compiled movement `id`.
+fn movement_name(scenario: &CompiledScenario, id: MovementId) -> String {
+    scenario
+        .movement(id)
+        .expect("the compiled movement exists")
+        .name()
+        .to_owned()
+}
+
+/// The bodies riding `path`, as `(id, arc length, body length)`, sorted by arc
+/// length so adjacent pairs are consecutive.
+fn bodies_on_path(sim: &Simulation, path: usize) -> Vec<(AgentId, f64, f64)> {
+    let mut bodies: Vec<(AgentId, f64, f64)> = sim
+        .snapshot(SnapshotDetail::Full)
+        .agents()
+        .iter()
+        .filter_map(|sample| {
+            let motion = sample.motion.as_ref()?;
+            (motion.path.index() == path).then_some((
+                sample.id,
+                motion.path_distance_m,
+                motion.body_length_m,
+            ))
+        })
+        .collect();
+    bodies.sort_by(|first, second| first.1.total_cmp(&second.1));
+    bodies
+}
+
+/// The single body on `path` when the corridor holds exactly one, if its arc
+/// length lies in `window`.
+///
+/// Requiring exactly one body on the path is the TAS-131 driver's own
+/// condition: it keeps a corridor's transient pair from standing in for the
+/// lone rider the case turns.
+fn lone_rider_on_corridor(
+    sim: &Simulation,
+    path: usize,
+    window: std::ops::RangeInclusive<f64>,
+) -> Option<AgentId> {
+    match bodies_on_path(sim, path)[..] {
+        [(id, s_m, _)] if window.contains(&s_m) => Some(id),
+        _ => None,
+    }
+}
+
+/// The leading body of the first adjacent pair on `path` whose leader lies in
+/// `lead_window` and whose bumper gap lies in `gap_window`.
+fn adjacent_lead_on(
+    sim: &Simulation,
+    path: usize,
+    lead_window: std::ops::RangeInclusive<f64>,
+    gap_window: std::ops::RangeInclusive<f64>,
+) -> Option<AgentId> {
+    let bodies = bodies_on_path(sim, path);
+    for pair in bodies.windows(2) {
+        let (occupancy, lead) = (pair[0], pair[1]);
+        let gap_m = (lead.1 - occupancy.1).abs() - (lead.2 + occupancy.2) * 0.5;
+        if lead_window.contains(&lead.1) && gap_window.contains(&gap_m) {
+            return Some(lead.0);
+        }
+    }
+    None
+}
+
+/// One live agent's physical state, with every compiled index replaced by its
+/// stable name so a declaration permutation cannot enter the comparison.
+#[derive(Debug, PartialEq)]
+struct AgentState {
+    agent: u32,
+    x: f64,
+    y: f64,
+    heading_rad: f64,
+    path: String,
+    path_distance_m: f64,
+    route: Option<String>,
+    route_state: Option<RouteState>,
+}
+
+/// The route-relative tactical state of one agent, again with names where the
+/// snapshot carries an index.
+#[derive(Debug, PartialEq)]
+struct RouteState {
+    s_m: f64,
+    d_m: f64,
+    maneuver_state: ManeuverState,
+    target_facility: Option<String>,
+    perceived_rule: Option<PermissionEffect>,
+    opposing_direction: Option<MovementDirection>,
+}
+
+/// One normalized wrong-way interval boundary.
+///
+/// The records are compared in a canonical stable-name order rather than the
+/// stream's emission order, because emission order follows the dense facility
+/// index (`event.rs`'s `facility_key`); see the module comment.
+#[derive(Debug, PartialEq)]
+struct Boundary {
+    tick: u64,
+    agent: u32,
+    facility: String,
+    movement: Option<String>,
+    direction: MovementDirection,
+    nominal_direction: NominalDirection,
+    perceived_rule: Option<PermissionEffect>,
+    reason: WrongWayReason,
+    violating: bool,
+    entering: bool,
+}
+
+/// One normalized facility handoff.
+#[derive(Debug, PartialEq)]
+struct Handoff {
+    tick: u64,
+    agent: u32,
+    from: String,
+    to: String,
+    from_direction: MovementDirection,
+    to_direction: MovementDirection,
+    via: TransitionKind,
+}
+
+/// The physical outcome one run of the fixture produced, read entirely through
+/// stable names: every agent's world pose and route-relative state at every
+/// step, plus the spawns, despawns, handoffs, opposing-traversal boundaries, and
+/// the ordinary collision scan's bands.
+#[derive(Debug, Default, PartialEq)]
+struct PhysicalOutcome {
+    steps: Vec<Vec<AgentState>>,
+    spawns: Vec<(u64, u32, String, f64)>,
+    despawns: Vec<(u64, u32, String, DespawnReason)>,
+    handoffs: Vec<Handoff>,
+    boundaries: Vec<Boundary>,
+    collisions: Vec<(u64, u32, u32, bool, f64)>,
+    near_misses: Vec<(u64, u32, u32, bool, f64)>,
+    entered: Vec<(String, u32, bool)>,
+}
+
+impl PhysicalOutcome {
+    /// Order each tick's boundary records by their stable names. The stream's
+    /// own within-tick order is a function of the dense facility index, which
+    /// the declaration order controls; the outcome this suite compares is the
+    /// tick's set of records, not the order the index gives them.
+    fn canonicalize(&mut self) {
+        self.boundaries.sort_by(|first, second| {
+            (
+                first.tick,
+                first.agent,
+                &first.facility,
+                &first.movement,
+                first.entering,
+            )
+                .cmp(&(
+                    second.tick,
+                    second.agent,
+                    &second.facility,
+                    &second.movement,
+                    second.entering,
+                ))
+        });
+    }
+
+    /// Read one step's events and the live agents' physical state, naming every
+    /// compiled index through the scenario it came from so the comparison holds
+    /// only stable identifiers.
+    fn record(&mut self, sim: &Simulation, tick: u64, events: &[Event]) {
+        let scenario = sim.scenario();
+        for event in events {
+            match event {
+                Event::Spawned {
+                    agent,
+                    path,
+                    distance_m,
+                    ..
+                } => self
+                    .spawns
+                    .push((tick, agent.get(), path_name(scenario, *path), *distance_m)),
+                Event::Despawned {
+                    agent,
+                    path,
+                    reason,
+                } => self
+                    .despawns
+                    .push((tick, agent.get(), path_name(scenario, *path), *reason)),
+                Event::FacilityTransition {
+                    agent,
+                    from_facility,
+                    to_facility,
+                    from_direction,
+                    to_direction,
+                    via,
+                    ..
+                } => self.handoffs.push(Handoff {
+                    tick,
+                    agent: agent.get(),
+                    from: facility_name(scenario, *from_facility),
+                    to: facility_name(scenario, *to_facility),
+                    from_direction: *from_direction,
+                    to_direction: *to_direction,
+                    via: *via,
+                }),
+                Event::OpposingTraversal {
+                    agent,
+                    facility,
+                    movement,
+                    direction,
+                    nominal_direction,
+                    perceived_rule,
+                    reason,
+                    violating,
+                    entering,
+                } => self.boundaries.push(Boundary {
+                    tick,
+                    agent: agent.get(),
+                    facility: facility_name(scenario, *facility),
+                    movement: movement.map(|id| movement_name(scenario, id)),
+                    direction: *direction,
+                    nominal_direction: *nominal_direction,
+                    perceived_rule: *perceived_rule,
+                    reason: *reason,
+                    violating: *violating,
+                    entering: *entering,
+                }),
+                Event::Collision {
+                    agent,
+                    other,
+                    clearance_m,
+                    contacting,
+                } => self.collisions.push((
+                    tick,
+                    agent.get(),
+                    other.get(),
+                    *contacting,
+                    *clearance_m,
+                )),
+                Event::NearMiss {
+                    agent,
+                    other,
+                    clearance_m,
+                    entering,
+                } => {
+                    self.near_misses
+                        .push((tick, agent.get(), other.get(), *entering, *clearance_m))
+                }
+                _ => {}
+            }
+        }
+
+        let mut states: Vec<AgentState> = sim
+            .snapshot(SnapshotDetail::Full)
+            .agents()
+            .iter()
+            .map(|sample| {
+                let motion = sample.motion.as_ref();
+                AgentState {
+                    agent: sample.id.get(),
+                    x: sample.position.x,
+                    y: sample.position.y,
+                    heading_rad: sample.heading_rad,
+                    path: motion
+                        .map_or_else(String::new, |motion| path_name(scenario, motion.path)),
+                    path_distance_m: motion.map_or(0.0, |motion| motion.path_distance_m),
+                    route: motion
+                        .and_then(|motion| motion.route)
+                        .map(|id| movement_name(scenario, id)),
+                    route_state: motion.and_then(|motion| motion.route_state).map(|state| {
+                        RouteState {
+                            s_m: state.s_m,
+                            d_m: state.d_m,
+                            maneuver_state: state.maneuver_state,
+                            target_facility: state
+                                .target_facility
+                                .map(|id| facility_name(scenario, id)),
+                            perceived_rule: state.perceived_rule,
+                            opposing_direction: state.opposing_direction,
+                        }
+                    }),
+                }
+            })
+            .collect();
+        states.sort_by_key(|state| state.agent);
+        self.steps.push(states);
+    }
+}
+
+/// Drive one run of the fixture through the wrong-way decision on every
+/// corridor, exactly as the TAS-131 suite drives each case: the three muted
+/// corridors turn their lone rider once it reaches the authored window, and the
+/// occupied corridor turns the leading body of its first adjacent pair inside
+/// the stopping windows. The driver reads only stable corridor identity and
+/// physical state, so the identical logic runs both compiles.
+fn drive_inc2(reversed: bool) -> PhysicalOutcome {
+    let scenario = inc2_scenario(reversed);
+    let corridors: Vec<usize> = INC2_CORRIDORS
+        .iter()
+        .map(|name| inc2_path(&scenario, name))
+        .collect();
+    let mut sim = Simulation::new(scenario, RunConfig::new(0)).expect("the fixture builds");
+
+    let mut outcome = PhysicalOutcome::default();
+    let mut turned: [Option<AgentId>; 4] = [None; 4];
+    for _ in 0..INC2_STEPS {
+        let output = sim.step();
+        let tick = output.time().tick();
+        let events = output.events().to_vec();
+        outcome.record(&sim, tick, &events);
+
+        for corridor in 0..3 {
+            if turned[corridor].is_some() {
+                continue;
+            }
+            if let Some(id) = lone_rider_on_corridor(&sim, corridors[corridor], 5.0..=20.0) {
+                let accepted = sim.request_wrong_way_entry(id);
+                outcome
+                    .entered
+                    .push((INC2_CORRIDORS[corridor].to_owned(), id.get(), accepted));
+                turned[corridor] = Some(id);
+            }
+        }
+        if turned[3].is_none()
+            && let Some(id) = adjacent_lead_on(&sim, corridors[3], 25.0..=48.0, 8.0..=18.0)
+        {
+            let accepted = sim.request_wrong_way_entry(id);
+            outcome
+                .entered
+                .push((INC2_CORRIDORS[3].to_owned(), id.get(), accepted));
+            turned[3] = Some(id);
+        }
+    }
+    outcome.canonicalize();
+    outcome
+}
+
+/// The fixture's facility declarations, in the order it authors them.
+fn facility_names(scenario: &CompiledScenario) -> Vec<String> {
+    scenario
+        .facilities()
+        .iter()
+        .map(|facility| facility.name().to_owned())
+        .collect()
+}
+
+/// The fixture's guide-path declarations, in the order it authors them.
+fn path_names(scenario: &CompiledScenario) -> Vec<String> {
+    scenario
+        .paths()
+        .iter()
+        .map(|path| path.name().to_owned())
+        .collect()
+}
+
+/// Reversing the fixture's `facility` and reference (`paths`) declarations
+/// permutes every dense path and facility index but must not touch the physical
+/// outcome: the same agents spawn on the same schedules, turn on the same
+/// wrong-way decision, travel the same world poses, meet the same bodies, and
+/// despawn at the same ticks, once every record is read back through its stable
+/// name.
+#[test]
+fn reversing_facility_and_reference_declarations_preserves_the_wrong_way_outcome() {
+    let authored = inc2_scenario(false);
+    let reversed = inc2_scenario(true);
+
+    // The variant is real: the reversal permutes the declarations the physical
+    // outcome must not depend on, while the stable identifiers are identical.
+    let mut expected_facilities = facility_names(&authored);
+    expected_facilities.reverse();
+    assert_eq!(
+        facility_names(&reversed),
+        expected_facilities,
+        "the reversed compile declares its facilities in reverse"
+    );
+    let mut expected_paths = path_names(&authored);
+    expected_paths.reverse();
+    assert_eq!(
+        path_names(&reversed),
+        expected_paths,
+        "the reversed compile declares its reference paths in reverse"
+    );
+    assert_ne!(
+        inc2_path(&authored, INC2_CORRIDORS[0]),
+        inc2_path(&reversed, INC2_CORRIDORS[0]),
+        "the reversal moves the dense index of at least one corridor"
+    );
+
+    let authored_outcome = drive_inc2(false);
+    let reversed_outcome = drive_inc2(true);
+
+    // The comparison is not vacuous: all four corridors reach the decision and
+    // the occupied corridor reaches its encounter.
+    assert_eq!(
+        authored_outcome.entered.len(),
+        4,
+        "every corridor drives its own entry: {:?}",
+        authored_outcome.entered
+    );
+    assert!(
+        !authored_outcome.boundaries.is_empty(),
+        "the run records opposing-traversal boundaries"
+    );
+    assert!(
+        !authored_outcome.collisions.is_empty(),
+        "the occupied corridor reaches its contact"
+    );
+
+    compare_outcomes(&authored_outcome, &reversed_outcome);
+}
+
+/// Compare two physical outcomes field by field, so a divergence names the
+/// record that moved rather than dumping the whole run.
+fn compare_outcomes(authored: &PhysicalOutcome, reversed: &PhysicalOutcome) {
+    assert_eq!(authored.entered, reversed.entered, "the driven entries");
+    assert_eq!(authored.spawns, reversed.spawns, "the spawns");
+    assert_eq!(authored.despawns, reversed.despawns, "the despawns");
+    assert_eq!(authored.handoffs, reversed.handoffs, "the handoffs");
+    assert_eq!(authored.collisions, reversed.collisions, "the collisions");
+    assert_eq!(
+        authored.near_misses, reversed.near_misses,
+        "the near misses"
+    );
+    assert_eq!(
+        authored.steps.len(),
+        reversed.steps.len(),
+        "the same number of steps"
+    );
+    for (index, (left, right)) in authored.steps.iter().zip(&reversed.steps).enumerate() {
+        assert_eq!(left, right, "step {index}");
+    }
+    assert_eq!(authored.boundaries, reversed.boundaries, "the boundaries");
 }
