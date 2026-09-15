@@ -112,6 +112,12 @@ goldens, scenarios, schemas, and `Cargo.lock` are never candidates, and
 re-running it is a no-op once the tree is clean. It relies on `find`'s default
 `-P`, so a symlinked target directory is not followed.
 
+The old crate names cannot creep back either: `scripts/check-no-legacy-tangle.sh`
+fails on any tracked file that names a pre-rename `tangle-*` crate, a
+`tangle_*` identifier, or a `libtangle*` artifact (CI runs it next to the
+dependency-direction check), and `scripts/check-no-legacy-tangle.sh --self-test`
+proves it rejects a planted token.
+
 What it costs: deleting the `tangle*`/`libtangle*` artifacts is free, because no
 `hekate-*` fingerprint references them, so the next build reuses every
 `hekate-*` artifact it keeps and neither invalidates nor relinks them. Deleting

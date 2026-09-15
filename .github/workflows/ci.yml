@@ -64,6 +64,11 @@ jobs:
       - name: Enforce dependency direction
         run: ./scripts/check-dependency-direction.sh
 
+      - name: Reject pre-rename tangle naming
+        run: |
+          ./scripts/check-no-legacy-tangle.sh
+          ./scripts/check-no-legacy-tangle.sh --self-test
+
   commits:
     name: conventional commit messages
     runs-on: ubuntu-latest
