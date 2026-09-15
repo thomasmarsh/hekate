@@ -57,6 +57,11 @@ Rules that make hand-offs consistent:
   `outputSchema`; do not parse their prose.
 - **The build agent owns builds; the implementer owns edits; the reviewer owns
   the verdict.** Do not blur these.
+- **Every dispatched stage proves it ran.** Each gate stage asserts its own
+  completion and prints a unique sentinel; the runner fails when a dispatched
+  stage reports no result, so a script interpolation bug is a hard error rather
+  than a silent skip. Pass a stage's command as one value; do not re-derive it
+  by string surgery.
 - Keep long output out of chat: the build agent writes a report file and
   returns a bounded summary plus its path.
 
@@ -91,8 +96,15 @@ and errors, nothing else.
   commit would omit it. Before review, the build agent must surface untracked
   files (`git add -N .` or an explicit list) in the evidence; a review must not
   `BLOCK` solely because new files are untracked when the commit step will
-  stage them. The commit must `git add` new files and preserve their mode
-  (`100755` for scripts invoked as `./x.sh`).
+  stage them. `git add -N` records intent-to-add entries whose blobs are empty,
+  so a plain `git commit` without `git add -A` (or `git add` of each new path)
+  commits empty files; the commit step must fully stage every new path and
+  preserve its mode (`100755` for scripts invoked as `./x.sh`).
+- **A provider/account failure is not a timeout.** A lane that dies mid-session
+  (`Insufficient Balance`, an auth error) leaves a partial diff; treat it like a
+  timed-out worker — inspect the diff, run the touched crate's tests, then
+  accept, finish, or revert. Check a lane's provider account before dispatch so
+  a known-dead lane is never dispatched to.
 - **Captured output flushes at the end.** A long `bash` command prints nothing
   until it finishes; minutes of silence are normal. Do not interrupt on the
   watchdog alone — inspect the run's transcript and status first.
@@ -114,7 +126,18 @@ and errors, nothing else.
   parent's `next` advance belongs to the resolving worker when its write set
   names the parent (or its `next` line); otherwise it is a declared pending
   advance (`tangle check --allow-pending-advance PARENT`). The parent's
-  resolving edit is the coordinator's alone.
+  resolving edit is the coordinator's alone, and resolving a coordinating parent
+  is never a gate worker's write set: only the coordinator does it, or the brief
+  names the parent explicitly in the write set.
+- A slice expected to exceed the default 900 s claim lease renews its claim
+  (`tangle claim <node> <agent> --base-hash …`) after each build/fix round, so
+  `release` reports `released`, not `expired`, and stays a trusted completion
+  signal.
+- When reconnaissance must precede the deliverable, hash and claim the node for
+  the recon, renew the lease after the measurement, and record the base hash of
+  the pre-edit node the first claim saw. `tangle hash` after a node edit is a
+  different digest from the claim base hash; do not read that difference as a
+  mismatch.
 - Every implementing commit references its node (`Refs <node>`, `Closes
   <node>`), and `tangle check` runs before every graph commit and hand-off.
 - The coordinator records one `FBK` node per orchestrated session for friction

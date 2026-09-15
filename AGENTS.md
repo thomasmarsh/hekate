@@ -6,9 +6,11 @@ Work whose conclusion or executable state must outlive the session is tracked
 as Tangle nodes in the stationary store `.tangle/canonical/`; work finished and
 committed within one session needs no node — Git is its durable record. Before
 planning or changing tracked work you MUST load the full Tangle skill
-(`SKILL.md`; `/skill:tangle` in pi) and follow it; its summary alone is not
-sufficient. Do not plan or track multi-step work from chat memory, and do not
-add ad-hoc TODO lists or plan documents.
+from its installed path `~/.pi/agent/skills/tangle/SKILL.md` (or `/skill:tangle`
+in pi) and follow it; its summary alone is not sufficient. Never search `.` or
+`/` recursively for it — the path is known — and locate a known node with
+`find .tangle -name '<ID>-*'`. Do not plan or track multi-step work from chat
+memory, and do not add ad-hoc TODO lists or plan documents.
 
 The vault root is the repository root. The installed `tangle` command fronts
 the skill, so run tooling from the repository root.
@@ -37,7 +39,10 @@ session, not the session to the node.
   nodes before starting when it bundles outcomes with independent acceptance or
   verification boundaries; only a split that adds an outcome the request did not
   ask for needs the user's agreement. Session duration, file count, subsystem
-  count, and anticipated commits are sizing guidance, never split evidence.
+  count, and anticipated commits are sizing guidance, never split evidence. A
+  `# Done when` that names a release-mode benchmark, profiled capture, or other
+  long measurement names that run's wall-clock cost, and the long run is its own
+  slice rather than bundled with the artifact's authoring.
 - If a node's `# Done when` cannot be met in one session, do not expand the
   session to meet it. Deliver the smallest coherent slice that clears its blocker
   or completes one deliverable, record the exact remaining scope and evidence in
@@ -127,8 +132,9 @@ When asked to run an orchestrated, resumable, multi-slice, or subagent-driven
 session, read `docs/orchestrated-sessions.md` first. It records the roles
 (scout, implementer, build/test, reviewer, commit), the consistent hand-off
 protocol, the build-warmup trade-off, and the known pitfalls (the `git diff`
-untracked-file blind spot, cargo-lock serialization, noisy wall time). Keep this
-file free of that detail.
+untracked-file blind spot and the `git add -N` empty-blob trap, cargo-lock
+serialization, noisy wall time, mid-session lane failure). Keep this file free
+of that detail.
 
 ## Commits
 
