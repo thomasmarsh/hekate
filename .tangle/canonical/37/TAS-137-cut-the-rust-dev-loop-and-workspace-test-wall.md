@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P3
-updated: 2026-09-15T14:20:37Z
+updated: 2026-09-15T14:54:32Z
 summary: Cut the Rust dev-loop and workspace test wall time
-next: "[[tas-6t9972esz0d36es0cm7mzffdkf-make-cargo-nextest-the-worker-loop-and]]"
+next: "[[tas-10p2xa87xh5vfetphxmcgp67y7-prune-non-load-bearing-workspace-test-work]]"
 ---
 
 Area [[IDX-001-hekate]].
