@@ -1,10 +1,9 @@
 ---
-status: active
+status: resolved
 context_rev: 1
 priority: P1
-updated: 2026-09-15T06:42:15Z
+updated: 2026-09-15T06:51:58Z
 summary: Reproduce every Increment 2 fixture and golden its transitions.
-next: Run `cargo test --workspace`, `./scripts/check-dependency-direction.sh`, and `tangle check` on this commit, then resolve TAS-133.
 ---
 
 Parent [[TAS-108-prove-increment-2-reproducibility-and-stream-isolation]].
@@ -121,3 +120,35 @@ passed; `./scripts/check-dependency-direction.sh` reports `dependency direction
 OK`; `tangle check` reports `graph check: passed (194 nodes)` on the delivered
 commit and 195 after this session's feedback node under
 [[IDX-002-tangle-feedback]].
+
+## Gate evidence
+
+Full five-gate run on the delivered commit (`f6e50f3`), gate worker `gate133`:
+
+| gate | command | exit | wall | result |
+| --- | --- | --- | --- | --- |
+| fmt | `cargo fmt --all --check` | 0 | 1 s | clean |
+| clippy | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | 3 s | clean (`Finished dev profile`, no warnings) |
+| test | `cargo test --workspace --all-features` | 0 | 316 s | 1014 passed, 0 failed, 1 ignored across 90 suites |
+| deps | `./scripts/check-dependency-direction.sh` | 0 | 1 s | `dependency direction OK` |
+| graph | `tangle check` | 0 | 1 s | `graph check: passed (195 nodes)` |
+
+Done-when disposition:
+
+- Clause 1 (fixed-seed reproduction at required presets, declared seed bank,
+  per-seed batch artifacts, replay-verified event streams) is **met** by
+  `apps/hekate-cli/tests/{inc2_determinism,inc2_trace}.rs`:
+  `the_inc2_seed_bank_batch_reproduces_every_per_seed_hash_and_event_stream`,
+  `every_inc2_fixture_reproduces_its_trace_hash_at_both_required_presets`, and
+  `the_cli_run_and_replay_reproduce_the_standard_goldens_of_the_autonomous_fixtures`
+  (which runs `replay --verify` and compares the reproduced stream to the
+  checked-in golden bytes).
+- Clause 2 (goldens cover every maneuver transition and the wrong-way interval
+  lifecycle, including stable simultaneous-claim ordering): the golden coverage
+  is **met** by the twelve checked-in trace goldens; the **simultaneous-claim
+  ordering sub-clause is delegated** to [[TAS-127-prove-deterministic-simultaneous-claim-resolutio]]
+  (resolved: unit tests across all insertion permutations plus a fixed-seed
+  integration test), not to a golden. No checked-in Inc 2 fixture records two
+  agents maneuvering on one tick, and
+  `no_inc2_golden_records_two_agents_maneuvering_on_one_tick` asserts that
+  negative.

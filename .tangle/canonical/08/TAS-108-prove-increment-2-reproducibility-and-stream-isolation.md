@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P1
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T06:51:58Z
 summary: Prove Increment 2 trace reproducibility and maneuver-stream isolation.
-next: [[TAS-133-reproduce-every-increment-2-fixture-and-golden-i]]
+next: [[TAS-134-prove-stream-isolation-and-preserve-the-phase-1]]
 ---
 
 Parent [[TAS-103-increment-2-acceptance-evidence-and-presenters]].
