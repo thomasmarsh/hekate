@@ -2,9 +2,9 @@
 status: proposed
 context_rev: 1
 priority: P3
-updated: 2026-09-15T01:22:43Z
+updated: 2026-09-15T14:20:37Z
 summary: Cut the Rust dev-loop and workspace test wall time
-next: Adopt cargo-nextest for the worker loop and prune target/, then re-measure the touched-binary and workspace gates.
+next: "[[tas-6t9972esz0d36es0cm7mzffdkf-make-cargo-nextest-the-worker-loop-and]]"
 ---
 
 Area [[IDX-001-hekate]].
