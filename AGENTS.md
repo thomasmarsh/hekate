@@ -2,22 +2,27 @@
 
 ## Tangle is the work ledger (mandatory)
 
-Non-trivial engineering work in this repo is tracked as Tangle nodes under
-`.tangle/`. Before planning or changing tracked work you MUST load the full
-Tangle skill (`SKILL.md`; `/skill:tangle` in pi) and follow it; its
-summary alone is not sufficient. Do not plan or track multi-step work from chat
-memory, and do not add ad-hoc TODO lists or plan documents.
+Work whose conclusion or executable state must outlive the session is tracked
+as Tangle nodes in the stationary store `.tangle/canonical/`; work finished and
+committed within one session needs no node — Git is its durable record. Before
+planning or changing tracked work you MUST load the full Tangle skill
+(`SKILL.md`; `/skill:tangle` in pi) and follow it; its summary alone is not
+sufficient. Do not plan or track multi-step work from chat memory, and do not
+add ad-hoc TODO lists or plan documents.
 
 The vault root is the repository root. The installed `tangle` command fronts
 the skill, so run tooling from the repository root.
 
 Repo-specific conventions layered on the skill:
 
-- Run tooling as `tangle …`, for example `tangle check` to validate
-  the graph and `tangle index` to rebuild the optional sidecar index.
-- Every commit that implements tracked work references its node in the body:
-  `Refs TAS-XXX` while the work continues, `Closes TAS-XXX` once the node's
-  outcome is complete. Untracked commits are rejected in review.
+- Run tooling as `tangle …`, for example `tangle check` to validate the graph.
+  The derived index maintains itself on every interaction; run `tangle index`
+  only to repair or rebuild it from Markdown.
+- Every commit that implements tracked work names its node in the body —
+  `Refs <node-id>` while the work continues, `Closes <node-id>` once the node's
+  outcome is complete. The id is the actual node basename, for example
+  `tas-5syjgmtr…` or a legacy `TAS-101`. Untracked commits are rejected in
+  review.
 - Run `tangle check` before every handoff and before committing graph
   changes; a failing check blocks the commit. Fix the graph, not the checker.
 
@@ -82,8 +87,11 @@ Whenever planning, implementation, or analysis work that uses the Tangle
 skill struggles, capture the friction before handoff so it accumulates into
 later meta-analysis:
 
-- Record one `FBK` feedback node per session with `tangle feedback record`,
-  routed under `IDX-002-tangle-feedback`:
+- One orchestration session records one `FBK` feedback node, owned by the
+  coordinator. A worker that hits friction reports the attempted action,
+  friction, and improvement in its run report and creates the node only when
+  the coordinator grants it. Use `tangle feedback record`, routed under
+  `IDX-002-tangle-feedback`:
 
   ```sh
   tangle feedback record \
@@ -91,15 +99,18 @@ later meta-analysis:
     --attempted '…' --friction '…' --improvement '…'
   ```
 
-  The command allocates the next `FBK` id, stamps `tangle_revision` from the
-  installed record, and writes `.tangle/proposed/FBK-<n>-<slug>.md`. Pass
-  `--route` explicitly: without it the command routes to the vault's root hub,
-  not the feedback hub. Record findings; do not edit the installed skill or the
-  sidecar in the same session.
+  The command generates a lowercase 128-bit `fbk-` id from cryptographic
+  entropy, stamps `tangle_revision` from the installed record, and writes the
+  node to the stationary store at
+  `.tangle/canonical/<suffix>/fbk-<id>-<slug>.md`. Pass `--route` explicitly:
+  without it the command routes to the vault's root hub, not the feedback hub.
+  Record findings; do not edit the installed skill or the local coordination
+  state in the same session.
 - Treat as friction: a rule the skill leaves unclear, a `tangle` result that
   surprises you, a check that fails for a reason the skill does not explain, and
-  a judgment call that exposes a gap. A fresh-sidecar `tangle allocate`
-  returning an ID that already exists in `.tangle/` is a concrete example.
+  a judgment call that exposes a gap. A `tangle allocate` for a legacy numeric
+  prefix returning an id that already exists in `.tangle/` is a concrete
+  example.
 - Put what happened, the exact command and observed output, the expected
   behavior, and a proposed change to `SKILL.md` or the tooling into the node's
   `--friction` and `--improvement` text. Extend the generated node by hand when

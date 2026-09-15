@@ -110,9 +110,12 @@ and errors, nothing else.
 ## Tangle integration
 
 - Decompose before dispatch; one node per durable outcome, executed as slices.
-- Working children update only their own node; the parent owns graph edits,
-  node resolution, and advancing the coordinating parent's `next`.
+- Working children update only their own node and status. A coordinating
+  parent's `next` advance belongs to the resolving worker when its write set
+  names the parent (or its `next` line); otherwise it is a declared pending
+  advance (`tangle check --allow-pending-advance PARENT`). The parent's
+  resolving edit is the coordinator's alone.
 - Every implementing commit references its node (`Refs <node>`, `Closes
   <node>`), and `tangle check` runs before every graph commit and hand-off.
-- Record one `FBK` node per orchestrated session for friction that touches the
-  Tangle workflow.
+- The coordinator records one `FBK` node per orchestrated session for friction
+  that touches the Tangle workflow.
